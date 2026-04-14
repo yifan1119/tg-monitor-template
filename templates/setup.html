@@ -1,0 +1,1009 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>{{ '首次设置' if mode == 'setup' else '系统设置' }} · TG 监控</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --neon-cyan: #00e5ff;
+    --neon-magenta: #ff3df0;
+    --neon-purple: #8a5cff;
+    --neon-green: #00ff88;
+    --neon-red: #ff3d60;
+    --neon-yellow: #ffc947;
+    --bg-0: #05070d;
+    --bg-1: #0a0f1c;
+    --bg-2: #111826;
+    --text: #d4e4ff;
+    --text-dim: #6a7a96;
+    --text-bright: #ffffff;
+    --border: rgba(0, 229, 255, 0.2);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    background: var(--bg-0);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 40px 16px;
+    -webkit-font-smoothing: antialiased;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* ===== 背景:动态渐层 + 网格 ===== */
+  body::before {
+    content: "";
+    position: fixed; inset: 0; z-index: 0;
+    background:
+      radial-gradient(circle at 15% 20%, rgba(138,92,255,0.28), transparent 50%),
+      radial-gradient(circle at 85% 80%, rgba(0,229,255,0.22), transparent 55%),
+      radial-gradient(circle at 50% 50%, rgba(255,61,240,0.10), transparent 60%),
+      linear-gradient(135deg, #05070d 0%, #0a0f1c 50%, #050811 100%);
+    animation: bgShift 18s ease-in-out infinite;
+  }
+  body::after {
+    content: "";
+    position: fixed; inset: 0; z-index: 0;
+    background:
+      linear-gradient(rgba(0,229,255,0.04) 1px, transparent 1px) 0 0 / 40px 40px,
+      linear-gradient(90deg, rgba(0,229,255,0.04) 1px, transparent 1px) 0 0 / 40px 40px;
+    mask-image: radial-gradient(ellipse at center, black 40%, transparent 90%);
+    -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 90%);
+    pointer-events: none;
+  }
+  @keyframes bgShift {
+    0%, 100% { filter: hue-rotate(0deg) brightness(1); }
+    50%      { filter: hue-rotate(25deg) brightness(1.15); }
+  }
+
+  /* 扫描线 */
+  .scanline {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: linear-gradient(to bottom, transparent 0%, rgba(0,229,255,0.10) 50%, transparent 100%);
+    height: 2px; width: 100%;
+    animation: scan 10s linear infinite;
+  }
+  @keyframes scan {
+    0%   { transform: translateY(-10vh); }
+    100% { transform: translateY(110vh); }
+  }
+
+  /* ===== 主容器 ===== */
+  .container {
+    position: relative; z-index: 10;
+    max-width: 860px; margin: 0 auto;
+    background: rgba(10, 15, 28, 0.72);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgba(0, 229, 255, 0.22);
+    border-radius: 20px;
+    padding: 48px 44px;
+    box-shadow:
+      0 0 60px rgba(0, 229, 255, 0.10),
+      0 0 120px rgba(138, 92, 255, 0.06),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+  .container::before {
+    content: "";
+    position: absolute; inset: -1px;
+    border-radius: 20px;
+    padding: 1px;
+    background: linear-gradient(135deg,
+      rgba(0,229,255,0.6), transparent 30%,
+      transparent 70%, rgba(255,61,240,0.6));
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: borderShine 5s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes borderShine {
+    0%, 100% { opacity: 0.4; }
+    50%      { opacity: 1; }
+  }
+
+  /* ===== 顶部导航 ===== */
+  .top-nav {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 24px;
+    padding-bottom: 18px;
+    border-bottom: 1px dashed rgba(0,229,255,0.15);
+  }
+  .top-nav a {
+    color: var(--neon-cyan);
+    text-decoration: none;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    transition: text-shadow 0.2s;
+  }
+  .top-nav a:hover { text-shadow: 0 0 12px var(--neon-cyan); }
+
+  /* ===== 标题区 ===== */
+  .header-icon {
+    width: 60px; height: 60px;
+    background: linear-gradient(135deg, #00e5ff, #8a5cff, #ff3df0);
+    background-size: 200% 200%;
+    border-radius: 16px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 24px; font-weight: 900;
+    font-family: "Orbitron", sans-serif;
+    color: #fff;
+    margin-bottom: 20px;
+    box-shadow: 0 0 25px rgba(0, 229, 255, 0.4), 0 0 50px rgba(138, 92, 255, 0.25);
+    animation: iconPulse 3s ease-in-out infinite, gradientMove 5s ease infinite;
+  }
+  @keyframes iconPulse {
+    0%, 100% { transform: scale(1);    box-shadow: 0 0 25px rgba(0,229,255,0.4), 0 0 50px rgba(138,92,255,0.25); }
+    50%      { transform: scale(1.05); box-shadow: 0 0 40px rgba(0,229,255,0.7), 0 0 80px rgba(138,92,255,0.4); }
+  }
+  @keyframes gradientMove {
+    0%, 100% { background-position: 0% 50%; }
+    50%      { background-position: 100% 50%; }
+  }
+
+  h1 {
+    font-family: "Orbitron", sans-serif;
+    font-size: 32px;
+    font-weight: 900;
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+    background: linear-gradient(90deg, #00e5ff, #8a5cff, #ff3df0, #8a5cff, #00e5ff);
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: textFlow 4s ease infinite, textFlicker 3.5s infinite;
+    text-shadow: 0 0 30px rgba(0, 229, 255, 0.3);
+  }
+  @keyframes textFlow {
+    0%   { background-position: 0% 50%; }
+    100% { background-position: 300% 50%; }
+  }
+  @keyframes textFlicker {
+    0%, 100% { opacity: 1; }
+    3%       { opacity: 0.85; }
+    6%       { opacity: 1; }
+    48%      { opacity: 1; }
+    50%      { opacity: 0.92; }
+    52%      { opacity: 1; }
+  }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 32px;
+  }
+  .subtitle::before { content: "// "; color: var(--neon-magenta); }
+
+  .note {
+    background: rgba(255, 201, 71, 0.08);
+    border: 1px solid rgba(255, 201, 71, 0.25);
+    border-left: 3px solid var(--neon-yellow);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 22px;
+    font-size: 12px;
+    color: var(--neon-yellow);
+    letter-spacing: 1px;
+  }
+  .note code {
+    background: rgba(255, 201, 71, 0.15);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: #ffd57b;
+    font-family: "JetBrains Mono", monospace;
+  }
+
+  /* ===== 分区块 ===== */
+  .section {
+    background: rgba(5, 7, 13, 0.5);
+    border: 1px solid rgba(0, 229, 255, 0.12);
+    border-left: 3px solid var(--neon-cyan);
+    border-radius: 12px;
+    padding: 22px 24px;
+    margin-bottom: 20px;
+    transition: all 0.3s ease;
+  }
+  .section:hover {
+    border-color: rgba(0, 229, 255, 0.3);
+    box-shadow: 0 0 30px rgba(0, 229, 255, 0.08);
+  }
+  .section-title {
+    font-family: "Orbitron", sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--text-bright);
+    margin-bottom: 18px;
+    display: flex; align-items: center; gap: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed rgba(0, 229, 255, 0.15);
+  }
+  .section-title::before {
+    content: "▸";
+    color: var(--neon-cyan);
+    text-shadow: 0 0 8px var(--neon-cyan);
+    animation: caret 1.2s ease-in-out infinite;
+  }
+  @keyframes caret {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+  }
+
+  /* ===== 字段 ===== */
+  .field { margin-bottom: 16px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label {
+    display: block;
+    font-size: 11px;
+    color: var(--neon-cyan);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+  .field label .req { color: var(--neon-magenta); }
+  .field .hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 6px;
+    letter-spacing: 0.5px;
+  }
+  .field .hint code {
+    background: rgba(0,229,255,0.1);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--neon-cyan);
+    font-family: "JetBrains Mono", monospace;
+  }
+  .field .hint b { color: var(--text); }
+
+  .field input[type="text"], .field input[type="password"],
+  .field input[type="number"], .field textarea {
+    width: 100%;
+    padding: 11px 14px;
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 8px;
+    background: rgba(5, 7, 13, 0.7);
+    color: var(--text-bright);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    outline: none;
+    transition: all 0.25s ease;
+  }
+  .field input:focus, .field textarea:focus {
+    border-color: var(--neon-cyan);
+    box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.12), 0 0 20px rgba(0, 229, 255, 0.2);
+    background: rgba(5, 7, 13, 0.9);
+  }
+  .field input[readonly] {
+    background: rgba(5, 7, 13, 0.9);
+    color: var(--text-dim);
+    cursor: not-allowed;
+  }
+  .field input::placeholder { color: var(--text-dim); letter-spacing: 0; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 680px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* ===== 测试按钮 ===== */
+  .test-btn {
+    background: rgba(0, 229, 255, 0.08);
+    color: var(--neon-cyan);
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    cursor: pointer;
+    margin-top: 10px;
+    transition: all 0.2s;
+  }
+  .test-btn:hover:not(:disabled) {
+    background: rgba(0, 229, 255, 0.18);
+    box-shadow: 0 0 15px rgba(0, 229, 255, 0.35);
+  }
+  .test-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .test-result {
+    display: inline-block;
+    margin-left: 12px;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+  }
+  .test-result.ok  { color: var(--neon-green); text-shadow: 0 0 8px rgba(0,255,136,0.5); }
+  .test-result.err { color: var(--neon-red);   text-shadow: 0 0 8px rgba(255,61,96,0.5); }
+
+  /* ===== 文件上传 ===== */
+  .file-input-wrap {
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px;
+    background: rgba(5, 7, 13, 0.5);
+    border: 2px dashed rgba(0, 229, 255, 0.3);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.25s;
+  }
+  .file-input-wrap:hover {
+    border-color: var(--neon-cyan);
+    background: rgba(0, 229, 255, 0.05);
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.15);
+  }
+  .file-input-wrap input { display: none; }
+  .file-icon {
+    font-size: 24px;
+    color: var(--neon-cyan);
+    text-shadow: 0 0 10px var(--neon-cyan);
+  }
+  .file-status {
+    color: var(--neon-green);
+    font-size: 12px;
+    letter-spacing: 1px;
+    margin-top: 3px;
+    text-shadow: 0 0 8px rgba(0,255,136,0.4);
+  }
+  .file-status.pending {
+    color: var(--text-dim);
+    text-shadow: none;
+  }
+  .file-text {
+    color: var(--text-bright);
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+
+  /* ===== 提交按钮 ===== */
+  .submit-btn {
+    width: 100%;
+    padding: 16px;
+    background: linear-gradient(135deg, #00e5ff 0%, #8a5cff 50%, #ff3df0 100%);
+    background-size: 200% 200%;
+    color: #fff;
+    font-family: "Orbitron", sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    margin-top: 28px;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 25px rgba(0, 229, 255, 0.35);
+  }
+  .submit-btn:hover:not(:disabled) {
+    background-position: 100% 100%;
+    box-shadow: 0 6px 40px rgba(0, 229, 255, 0.55), 0 0 60px rgba(255, 61, 240, 0.35);
+    transform: translateY(-1px);
+  }
+  .submit-btn:active { transform: translateY(0); }
+  .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .submit-btn::after {
+    content: "";
+    position: absolute; top: 0; left: -100%;
+    width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+    transition: left 0.6s ease;
+  }
+  .submit-btn:hover:not(:disabled)::after { left: 100%; }
+
+  /* ===== 进度台 ===== */
+  #progress {
+    margin-top: 22px;
+    padding: 18px;
+    background: rgba(5, 7, 13, 0.8);
+    border: 1px solid rgba(0, 229, 255, 0.15);
+    border-radius: 10px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    line-height: 1.9;
+    display: none;
+    max-height: 320px;
+    overflow-y: auto;
+    color: var(--text);
+  }
+  #progress .ok  { color: var(--neon-green); text-shadow: 0 0 6px rgba(0,255,136,0.4); }
+  #progress .err { color: var(--neon-red);   text-shadow: 0 0 6px rgba(255,61,96,0.4); }
+  #progress::-webkit-scrollbar { width: 6px; }
+  #progress::-webkit-scrollbar-thumb { background: rgba(0,229,255,0.3); border-radius: 3px; }
+
+  /* ===== 帮助说明折叠块 ===== */
+  details.howto {
+    margin-top: 10px;
+    background: rgba(138, 92, 255, 0.06);
+    border: 1px solid rgba(138, 92, 255, 0.25);
+    border-radius: 8px;
+    padding: 0;
+    overflow: hidden;
+    transition: all 0.25s;
+  }
+  details.howto[open] {
+    background: rgba(138, 92, 255, 0.1);
+    box-shadow: 0 0 20px rgba(138, 92, 255, 0.15);
+  }
+  details.howto summary {
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--neon-purple);
+    font-weight: 600;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: color 0.2s;
+    user-select: none;
+  }
+  details.howto summary::-webkit-details-marker { display: none; }
+  details.howto summary::after {
+    content: "＋";
+    color: var(--neon-purple);
+    font-size: 16px;
+    transition: transform 0.25s;
+  }
+  details.howto[open] summary::after {
+    content: "−";
+    transform: rotate(180deg);
+  }
+  details.howto summary:hover { color: #b08dff; text-shadow: 0 0 10px rgba(138,92,255,0.5); }
+  details.howto .howto-body {
+    padding: 14px 16px 16px;
+    border-top: 1px dashed rgba(138, 92, 255, 0.25);
+    font-size: 12px;
+    line-height: 1.9;
+    color: var(--text);
+    letter-spacing: 0.3px;
+  }
+  details.howto .howto-body b { color: var(--neon-cyan); font-weight: 600; }
+  details.howto .howto-body code {
+    background: rgba(0, 229, 255, 0.1);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--neon-cyan);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+  }
+  details.howto .howto-body a {
+    color: var(--neon-cyan);
+    text-decoration: none;
+    border-bottom: 1px dashed rgba(0, 229, 255, 0.5);
+    transition: text-shadow 0.2s;
+  }
+  details.howto .howto-body a:hover { text-shadow: 0 0 8px var(--neon-cyan); }
+  details.howto .howto-body ol, details.howto .howto-body ul {
+    padding-left: 18px;
+    margin: 6px 0;
+  }
+  details.howto .howto-body li { margin: 3px 0; }
+  details.howto .howto-body .step-label {
+    color: var(--neon-magenta);
+    font-weight: 700;
+    margin-right: 4px;
+  }
+
+  /* Footer */
+  .sys-status {
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 1px dashed rgba(0, 229, 255, 0.12);
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .sys-status .led {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--neon-green);
+    box-shadow: 0 0 8px var(--neon-green);
+    margin-right: 6px;
+    animation: ledBlink 2s ease-in-out infinite;
+  }
+  @keyframes ledBlink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+  }
+</style>
+</head>
+<body>
+<div class="scanline"></div>
+<div class="container">
+  {% if mode == 'settings' %}
+  <div class="top-nav">
+    <a href="/">◂ 返回账号管理</a>
+    <a href="/logout">登出 ▸</a>
+  </div>
+  {% endif %}
+
+  <div class="header-icon">TG</div>
+  <h1>{% if mode == 'setup' %}首次部署向导{% else %}系统设置{% endif %}</h1>
+  <p class="subtitle">
+    {% if mode == 'setup' %}填完以下模块即可启动监控服务{% elif d.is_admin %}修改运行参数 — 保存后自动重启监控{% else %}个人面板 — 你只能修改自己的密码{% endif %}
+  </p>
+
+  {% if mode == 'settings' and d.is_admin %}
+  <div class="note">
+    ⚠ 修改 <code>COMPANY_NAME</code> 需手动 <code>docker compose up -d --build</code> 重建容器;其他字段保存后自动生效。
+  </div>
+  {% endif %}
+
+  {% if mode == 'settings' and not d.is_admin %}
+  <div class="note" style="background:rgba(0,229,255,0.08);border-left-color:var(--neon-cyan);color:var(--neon-cyan);">
+    ▸ 当前账号 <code>{{ d.me }}</code> 为普通成员,只能修改自己的密码。系统配置请联系管理员或主帐号。
+  </div>
+  {% endif %}
+  {% if mode == 'settings' and d.is_admin and not d.is_super %}
+  <div class="note" style="background:rgba(138,92,255,0.08);border-left-color:var(--neon-purple);color:#c5b3ff;">
+    ▸ 当前账号 <code>{{ d.me }}</code> 为管理员,可修改系统配置。新增/移除账号权限仅限<b>主帐号</b>。
+  </div>
+  {% endif %}
+
+  {# 仅 setup 模式或管理员可见主配置表单 #}
+  {% if mode == 'setup' or d.is_admin %}
+  <form id="setupForm" enctype="multipart/form-data">
+
+    <div class="section">
+      <div class="section-title">01 · 部门资讯</div>
+      <div class="two-col">
+        <div class="field">
+          <label>部门名称 (英文/拼音) <span class="req">*</span></label>
+          <input type="text" name="company_name" value="{{ d.company_name }}"
+                 placeholder="例如: yueda, dingfeng" required
+                 {% if mode == 'settings' %}readonly{% endif %}>
+          <div class="hint">用作容器名后缀。{% if mode == 'setup' %}设定后不建议修改。{% else %}修改需重建容器。{% endif %}</div>
+        </div>
+        <div class="field">
+          <label>显示名称 (可中文)</label>
+          <input type="text" name="company_display" value="{{ d.company_display }}"
+                 placeholder="例如: 悦达">
+          <div class="hint">登入页与预警消息显示用</div>
+        </div>
+      </div>
+      {% if mode == 'setup' %}
+      <div class="two-col">
+        <div class="field">
+          <label>主帐号 <span class="req">*</span></label>
+          <input type="text" name="admin_username" value="admin"
+                 placeholder="admin" required pattern="[A-Za-z0-9_-]+"
+                 title="只允许字母、数字、下划线、横线">
+          <div class="hint">首次设置的即为<b>主帐号</b>(最高权限),设置完成后可自行新增其他管理员或普通成员</div>
+        </div>
+        <div class="field">
+          <label>主帐号密码 <span class="req">*</span></label>
+          <input type="password" name="admin_password" placeholder="至少 6 位" required minlength="6">
+          <div class="hint">登入后台用的密码</div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <div class="section-title">02 · Telegram Bot</div>
+      <div class="field">
+        <label>Bot Token <span class="req">*</span></label>
+        <input type="text" name="bot_token" id="bot_token" value="{{ d.bot_token }}"
+               placeholder="8778xxxxxx:AAEfEK..." required>
+        <div class="hint">@BotFather 取得,要先把 Bot 加进预警群并设为<b>群管理员</b></div>
+        <details class="howto">
+          <summary>▸ 如何获取 Bot Token &amp; 预警群 ID</summary>
+          <div class="howto-body">
+            <b>一、创建 Bot 获取 Token</b>
+            <ol>
+              <li><span class="step-label">01</span> 打开 Telegram 搜索 <a href="https://t.me/BotFather" target="_blank">@BotFather</a> → 发送 <code>/newbot</code></li>
+              <li><span class="step-label">02</span> 按提示输入机器人名称(中英文皆可)和用户名(必须 <code>_bot</code> 结尾)</li>
+              <li><span class="step-label">03</span> BotFather 会返回一串 <code>123456:ABC-DEF...</code> 格式的 Token,复制填入上方</li>
+            </ol>
+            <b>二、把 Bot 加入预警群并设为管理员</b>
+            <ol>
+              <li><span class="step-label">01</span> 在 Telegram 建一个预警群(或用现有群)</li>
+              <li><span class="step-label">02</span> 邀请你刚建的 Bot 加入群</li>
+              <li><span class="step-label">03</span> 群设置 → 管理员 → 添加管理员 → 选中 Bot(<b>必须步骤</b>,否则收不到预警)</li>
+            </ol>
+            <b>三、获取群 Chat ID</b>
+            <ol>
+              <li><span class="step-label">01</span> 在该群里发一条消息</li>
+              <li><span class="step-label">02</span> 浏览器打开(替换 <code>TOKEN</code>): <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code></li>
+              <li><span class="step-label">03</span> 返回的 JSON 找 <code>"chat":{"id": -1003789...}</code>,这串负数就是 Chat ID</li>
+            </ol>
+            或用 <a href="https://t.me/RawDataBot" target="_blank">@RawDataBot</a> / <a href="https://t.me/getidsbot" target="_blank">@getidsbot</a> 更快获取。
+          </div>
+        </details>
+      </div>
+      <div class="field">
+        <label>预警群 Chat ID <span class="req">*</span></label>
+        <input type="text" name="alert_group_id" id="alert_group_id" value="{{ d.alert_group_id }}"
+               placeholder="-1003789623248 (通常是负数)" required>
+        <button type="button" class="test-btn" id="testBotBtn">▸ 测试 Bot 连线</button>
+        <span class="test-result" id="testBotResult"></span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">03 · Google Sheets</div>
+      <div class="field">
+        <label>Sheet ID <span class="req">*</span></label>
+        <input type="text" name="sheet_id" id="sheet_id" value="{{ d.sheet_id }}"
+               placeholder="1TDN11dCf1HTOKyYH3clfZ9HBh43lwxrGbVkV810VObg" required>
+        <div class="hint">URL <code>docs.google.com/spreadsheets/d/<b>[SHEET_ID]</b>/edit</code></div>
+        <details class="howto">
+          <summary>▸ 如何获取 Sheet ID</summary>
+          <div class="howto-body">
+            <ol>
+              <li><span class="step-label">01</span> 打开 <a href="https://sheets.google.com" target="_blank">Google Sheets</a> → 新建一个表格(或使用现有表格)</li>
+              <li><span class="step-label">02</span> 复制浏览器地址栏的 URL,格式类似:<br>
+                  <code>https://docs.google.com/spreadsheets/d/<b>1TDN11dCf1HTOKyYH3clfZ9HBh43lwxrGbVkV810VObg</b>/edit#gid=0</code></li>
+              <li><span class="step-label">03</span> 中间 <code>/d/</code> 和 <code>/edit</code> 之间那串长字符就是 <b>Sheet ID</b>,复制填入上方</li>
+              <li><span class="step-label">04</span> 右上角「共享」→ 把下方 Service Account 的 <code>client_email</code> 邮箱加为<b>编辑者</b>(必做)</li>
+            </ol>
+          </div>
+        </details>
+      </div>
+      <div class="field">
+        <label>Service Account 凭证 {% if mode == 'setup' %}<span class="req">*</span>{% endif %}</label>
+        <label class="file-input-wrap" for="sa_file">
+          <span class="file-icon">▣</span>
+          <div>
+            <div class="file-text">选择 service-account.json</div>
+            <div class="file-status {% if not d.sa_uploaded %}pending{% endif %}" id="saStatus">
+              {% if d.sa_uploaded %}✓ 已有凭证文件(重新上传可覆盖){% else %}// 尚未上传{% endif %}
+            </div>
+          </div>
+          <input type="file" id="sa_file" name="service_account" accept=".json">
+        </label>
+        <div class="hint">记得把凭证里 <code>client_email</code> 的邮箱加为 Sheet 的<b>编辑者</b></div>
+        <details class="howto">
+          <summary>▸ 如何申请 Service Account 并获取 JSON 凭证</summary>
+          <div class="howto-body">
+            <b>一、创建 Google Cloud 项目</b>
+            <ol>
+              <li><span class="step-label">01</span> 打开 <a href="https://console.cloud.google.com" target="_blank">Google Cloud Console</a>(需登录 Google 账号)</li>
+              <li><span class="step-label">02</span> 顶部选择器 → <b>新建项目</b> → 输入项目名(例如 <code>tg-monitor</code>)→ 创建</li>
+            </ol>
+            <b>二、启用 API</b>
+            <ol>
+              <li><span class="step-label">01</span> 左侧菜单 → <b>API 和服务 → 已启用的 API 和服务</b></li>
+              <li><span class="step-label">02</span> 点 <b>+ 启用 API 和服务</b> → 搜 <code>Google Sheets API</code> → 启用</li>
+              <li><span class="step-label">03</span> 再搜 <code>Google Drive API</code> → 启用(两个都需要)</li>
+            </ol>
+            <b>三、创建 Service Account</b>
+            <ol>
+              <li><span class="step-label">01</span> 左侧 <b>IAM 和管理 → 服务账号</b> → <b>+ 创建服务账号</b></li>
+              <li><span class="step-label">02</span> 填名称(如 <code>tg-monitor-sa</code>)→ 创建并继续 → 跳过授权步骤 → 完成</li>
+              <li><span class="step-label">03</span> 点击刚建的服务账号 → <b>密钥</b>标签 → <b>添加密钥 → 创建新密钥</b></li>
+              <li><span class="step-label">04</span> 选 <b>JSON</b> 格式 → 创建,浏览器会自动下载一个 <code>.json</code> 文件</li>
+              <li><span class="step-label">05</span> 把这个 JSON 文件上传到上方文件框</li>
+            </ol>
+            <b>四、授权 Sheet 访问</b>
+            <ol>
+              <li><span class="step-label">01</span> 打开 JSON 文件,找 <code>"client_email": "xxx@xxx.iam.gserviceaccount.com"</code> 这行</li>
+              <li><span class="step-label">02</span> 回到你的 Google Sheet → 右上角<b>共享</b> → 把这个邮箱加为<b>编辑者</b></li>
+            </ol>
+          </div>
+        </details>
+        <button type="button" class="test-btn" id="testSheetsBtn">▸ 测试 Sheet 访问</button>
+        <span class="test-result" id="testSheetsResult"></span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">04 · 业务设置 (可留预设)</div>
+      <div class="field">
+        <label>监控关键词 (逗号分隔)</label>
+        <input type="text" name="keywords" value="{{ d.keywords }}" placeholder="到期,续费,暂停,下架,上架,地址,打款,欠费">
+        <div class="hint">消息命中任一词立即推送预警</div>
+      </div>
+      <div class="two-col">
+        <div class="field">
+          <label>未回复预警阈值 (分钟)</label>
+          <input type="number" name="no_reply_minutes" value="{{ d.no_reply_minutes }}" min="5" max="300">
+          <div class="hint">按工作时段累计,休息不计入</div>
+        </div>
+        <div class="field">
+          <label>Telegram API ID</label>
+          <input type="text" name="api_id" value="{{ d.api_id }}">
+          <div class="hint">所有部门共用预设值,极少需要改</div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Telegram API Hash</label>
+        <input type="text" name="api_hash" value="{{ d.api_hash }}">
+        <details class="howto">
+          <summary>▸ 如何自行申请 Telegram API ID / Hash (进阶)</summary>
+          <div class="howto-body">
+            默认已填入共用值,一般部门无需修改。若要自建:
+            <ol>
+              <li><span class="step-label">01</span> 打开 <a href="https://my.telegram.org/auth" target="_blank">my.telegram.org</a> → 输入手机号登录(需收验证码)</li>
+              <li><span class="step-label">02</span> 进入 <b>API development tools</b></li>
+              <li><span class="step-label">03</span> 首次使用需填表创建 App:<br>
+                  - <b>App title</b>:应用名(例如 <code>TG Monitor</code>)<br>
+                  - <b>Short name</b>:简称(例如 <code>tgmonitor</code>)<br>
+                  - <b>Platform</b>:选 <code>Other</code> 或 <code>Desktop</code></li>
+              <li><span class="step-label">04</span> 创建后会显示 <b>App api_id</b>(数字)和 <b>App api_hash</b>(32 字符),分别填上方</li>
+            </ol>
+            <b>注意</b>:API ID / Hash 绑定账号,<b>泄露有风险</b>,别公开贴到 GitHub。
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <button type="submit" class="submit-btn" id="submitBtn">
+      {% if mode == 'setup' %}▸ 部署并启动监控{% else %}▸ 保存并重载{% endif %}
+    </button>
+
+    <div id="progress"></div>
+  </form>
+  {% endif %}
+
+  {# ========== 账号管理区(settings 模式) ========== #}
+  {% if mode == 'settings' %}
+  <div class="section" style="margin-top:24px;border-left-color:var(--neon-purple);">
+    <div class="section-title" style="color:var(--neon-purple);">
+      {% if d.is_super %}05 · 账号管理{% else %}修改我的密码{% endif %}
+    </div>
+
+    {% if d.is_super %}
+    <div class="field">
+      <label>现有账号列表</label>
+      <div id="userList" style="font-size:12px;line-height:2;">加载中...</div>
+    </div>
+
+    <div class="field" style="margin-top:18px;padding-top:14px;border-top:1px dashed rgba(138,92,255,0.2);">
+      <label>新增登入账号</label>
+      <div class="two-col" style="margin-top:6px;">
+        <input type="text" id="newUsername" placeholder="新账号(字母/数字/_/-)" pattern="[A-Za-z0-9_-]+">
+        <input type="password" id="newPassword" placeholder="密码(至少 6 位)" minlength="6">
+      </div>
+      <div style="margin-top:10px;display:flex;gap:20px;font-size:12px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--text);letter-spacing:1px;text-transform:none;">
+          <input type="radio" name="newRole" value="user" checked style="accent-color:var(--neon-cyan);">
+          普通成员 <span style="color:var(--text-dim);font-size:10px;">(仅能改自己密码)</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--text);letter-spacing:1px;text-transform:none;">
+          <input type="radio" name="newRole" value="admin" style="accent-color:var(--neon-magenta);">
+          管理员 <span style="color:var(--text-dim);font-size:10px;">(可改系统配置)</span>
+        </label>
+      </div>
+      <button type="button" class="test-btn" id="addUserBtn" style="margin-top:10px;">▸ 添加账号</button>
+      <span class="test-result" id="addUserResult"></span>
+    </div>
+    {% endif %}
+
+    <div class="field" style="margin-top:18px;padding-top:14px;border-top:1px dashed rgba(138,92,255,0.2);">
+      <label>修改密码 <span style="color:var(--text-dim);font-weight:400;">(当前账号: {{ d.me }})</span></label>
+      <div class="two-col" style="margin-top:6px;">
+        <input type="password" id="oldPassword" placeholder="旧密码">
+        <input type="password" id="newMyPassword" placeholder="新密码(至少 6 位)" minlength="6">
+      </div>
+      <button type="button" class="test-btn" id="changePwdBtn" style="margin-top:10px;">▸ 更新密码</button>
+      <span class="test-result" id="changePwdResult"></span>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="sys-status">
+    <span><span class="led"></span>系统在线</span>
+    <span>TG 监控 · v2.6</span>
+  </div>
+</div>
+
+<script>
+const byId = id => document.getElementById(id);
+const progress = byId('progress');
+function log(msg, cls) {
+  if (!progress) return;
+  progress.style.display = 'block';
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  progress.appendChild(line);
+  progress.scrollTop = progress.scrollHeight;
+}
+
+// ======= 主配置表单(setup 模式 或 admin settings 模式) =======
+const saFile = byId('sa_file');
+if (saFile) {
+  saFile.addEventListener('change', e => {
+    if (e.target.files[0]) {
+      byId('saStatus').textContent = '▸ ' + e.target.files[0].name;
+      byId('saStatus').classList.remove('pending');
+    }
+  });
+}
+
+const testBotBtn = byId('testBotBtn');
+if (testBotBtn) {
+  testBotBtn.addEventListener('click', async () => {
+    const btn = byId('testBotBtn'), res = byId('testBotResult');
+    btn.disabled = true; res.textContent = '测试中...'; res.className = 'test-result';
+    const resp = await fetch('/api/test-bot', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        bot_token: byId('bot_token').value,
+        alert_group_id: byId('alert_group_id').value,
+      }),
+    });
+    const data = await resp.json();
+    res.textContent = (data.ok ? '✓ ' : '✗ ') + data.msg;
+    res.className = 'test-result ' + (data.ok ? 'ok' : 'err');
+    btn.disabled = false;
+  });
+}
+
+const testSheetsBtn = byId('testSheetsBtn');
+if (testSheetsBtn) {
+  testSheetsBtn.addEventListener('click', async () => {
+    const btn = byId('testSheetsBtn'), res = byId('testSheetsResult');
+    btn.disabled = true; res.textContent = '测试中...'; res.className = 'test-result';
+    const fd = new FormData();
+    fd.append('sheet_id', byId('sheet_id').value);
+    const f = byId('sa_file').files[0];
+    if (f) fd.append('service_account', f);
+    const resp = await fetch('/api/test-sheets', {method: 'POST', body: fd});
+    const data = await resp.json();
+    res.textContent = (data.ok ? '✓ ' : '✗ ') + data.msg;
+    res.className = 'test-result ' + (data.ok ? 'ok' : 'err');
+    btn.disabled = false;
+  });
+}
+
+const setupForm = byId('setupForm');
+if (setupForm) {
+  setupForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = byId('submitBtn');
+    btn.disabled = true;
+    progress.innerHTML = '';
+    log('[系统] 正在提交配置...');
+    const fd = new FormData(e.target);
+    const endpoint = '{{ "/api/setup" if mode == "setup" else "/api/update-settings" }}';
+    try {
+      const resp = await fetch(endpoint, {method: 'POST', body: fd});
+      const data = await resp.json();
+      if (data.ok) {
+        log('[成功] ' + data.msg, 'ok');
+        if (data.docker_msg) log('[容器] ' + data.docker_msg, data.docker_ok ? 'ok' : 'err');
+        {% if mode == 'setup' %}
+        log('[完成] 3 秒后跳转到登入页...', 'ok');
+        setTimeout(() => location.href = data.redirect || '/login', 3000);
+        {% else %}
+        log('[完成] 配置已重载', 'ok');
+        setTimeout(() => btn.disabled = false, 1500);
+        {% endif %}
+      } else {
+        log('[错误] ' + data.msg, 'err');
+        btn.disabled = false;
+      }
+    } catch (err) {
+      log('[错误] 网络异常: ' + err.message, 'err');
+      btn.disabled = false;
+    }
+  });
+}
+
+// ======= 账号管理(settings 模式) =======
+{% if mode == 'settings' %}
+async function loadUsers() {
+  const list = byId('userList');
+  if (!list) return;
+  try {
+    const resp = await fetch('/api/users/list');
+    const data = await resp.json();
+    if (!data.users || !data.users.length) {
+      list.innerHTML = '<span style="color:var(--text-dim);">(无账号)</span>';
+      return;
+    }
+    list.innerHTML = data.users.map(u => {
+      const isMe = u.username === data.me;
+      let badge;
+      if (u.is_super) {
+        badge = '<span style="color:#ffd54a;font-size:10px;letter-spacing:1.5px;margin-left:8px;text-shadow:0 0 6px rgba(255,213,74,0.5);">[主帐号]</span>';
+      } else if (u.is_admin) {
+        badge = '<span style="color:var(--neon-magenta);font-size:10px;letter-spacing:1.5px;margin-left:8px;">[管理员]</span>';
+      } else {
+        badge = '<span style="color:var(--text-dim);font-size:10px;letter-spacing:1.5px;margin-left:8px;">[普通成员]</span>';
+      }
+      const meTag = isMe ? ' <span style="color:var(--neon-cyan);font-size:10px;">(当前登录)</span>' : '';
+      // 主帐号永不可被删,其他账号只有主帐号登录时能删
+      const delBtn = (data.is_super && !u.is_super)
+        ? `<button type="button" class="test-btn" style="padding:3px 10px;font-size:10px;margin-left:10px;" onclick="removeUser('${u.username}')">移除</button>`
+        : '';
+      return `<div style="display:flex;align-items:center;padding:6px 10px;background:rgba(5,7,13,0.5);border:1px solid rgba(138,92,255,0.15);border-radius:6px;margin-bottom:6px;">
+        <span style="flex:1;color:var(--text-bright);font-weight:600;">▸ ${u.username}${badge}${meTag}</span>${delBtn}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<span style="color:var(--neon-red);">加载失败: ' + e.message + '</span>';
+  }
+}
+
+async function removeUser(username) {
+  if (!confirm('确定移除账号「' + username + '」?')) return;
+  const resp = await fetch('/api/users/remove', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({username}),
+  });
+  const data = await resp.json();
+  alert(data.msg);
+  if (data.ok) loadUsers();
+}
+
+const addUserBtn = byId('addUserBtn');
+if (addUserBtn) {
+  addUserBtn.addEventListener('click', async () => {
+    const u = byId('newUsername').value.trim();
+    const p = byId('newPassword').value;
+    const res = byId('addUserResult');
+    if (!u || !p) { res.textContent = '✗ 账号和密码都不能为空'; res.className = 'test-result err'; return; }
+    const role = document.querySelector('input[name="newRole"]:checked').value;
+    addUserBtn.disabled = true;
+    res.textContent = '添加中...'; res.className = 'test-result';
+    const resp = await fetch('/api/users/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: u, password: p, is_admin: role === 'admin'}),
+    });
+    const data = await resp.json();
+    res.textContent = (data.ok ? '✓ ' : '✗ ') + data.msg;
+    res.className = 'test-result ' + (data.ok ? 'ok' : 'err');
+    addUserBtn.disabled = false;
+    if (data.ok) {
+      byId('newUsername').value = '';
+      byId('newPassword').value = '';
+      loadUsers();
+    }
+  });
+}
+
+const changePwdBtn = byId('changePwdBtn');
+if (changePwdBtn) {
+  changePwdBtn.addEventListener('click', async () => {
+    const oldp = byId('oldPassword').value;
+    const newp = byId('newMyPassword').value;
+    const res = byId('changePwdResult');
+    if (!oldp || !newp) { res.textContent = '✗ 两个字段都不能为空'; res.className = 'test-result err'; return; }
+    changePwdBtn.disabled = true;
+    res.textContent = '更新中...'; res.className = 'test-result';
+    const resp = await fetch('/api/users/change-password', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({old_password: oldp, new_password: newp}),
+    });
+    const data = await resp.json();
+    res.textContent = (data.ok ? '✓ ' : '✗ ') + data.msg;
+    res.className = 'test-result ' + (data.ok ? 'ok' : 'err');
+    changePwdBtn.disabled = false;
+    if (data.ok) {
+      byId('oldPassword').value = '';
+      byId('newMyPassword').value = '';
+    }
+  });
+}
+
+loadUsers();
+{% endif %}
+</script>
+</body>
+</html>

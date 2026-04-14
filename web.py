@@ -1,6 +1,10 @@
-"""Web 登录管理介面 — 账号登录 + 启用/停用"""
+"""Web 登录管理介面 — 账号登录 + 启用/停用 + 首次设置 + 设置修改"""
 import asyncio
+import json
 import threading
+import tempfile
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from telethon import TelegramClient
@@ -14,6 +18,308 @@ import config
 import database as db
 import gspread
 from google.oauth2.service_account import Credentials
+from werkzeug.security import generate_password_hash, check_password_hash
+
+# ============ 设置文件读写 ============
+ENV_PATH = config.BASE_DIR / ".env"
+SA_PATH = config.BASE_DIR / "service-account.json"
+USERS_PATH = config.DATA_DIR / "users.json"
+
+
+# ============ 多用户账号系统 + 三层角色 ============
+# users.json 格式: {username: {"password_hash": str, "is_admin": bool, "is_super": bool}}
+# 角色体系:
+#   主帐号 (is_super=True)   — 首次 setup 创建,唯一可新增/移除账号,不可被任何人删除
+#   管理员 (is_admin=True)   — 可改系统配置,不能碰账号管理
+#   普通成员 (两者皆 False) — 仅能改自己密码
+# 兼容旧格式 {username: "password_hash_str"} — 旧数据视为主帐号(is_super + is_admin)
+def load_users():
+    if not USERS_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(USERS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    normalized = {}
+    for u, v in raw.items():
+        if isinstance(v, str):
+            normalized[u] = {"password_hash": v, "is_admin": True, "is_super": True}
+        elif isinstance(v, dict):
+            is_super = bool(v.get("is_super", False))
+            normalized[u] = {
+                "password_hash": v.get("password_hash", ""),
+                "is_admin": bool(v.get("is_admin", False)) or is_super,  # super 必定也是 admin
+                "is_super": is_super,
+            }
+    return normalized
+
+
+def save_users(users):
+    USERS_PATH.parent.mkdir(exist_ok=True)
+    USERS_PATH.write_text(json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def verify_user(username, password):
+    users = load_users()
+    u = users.get(username)
+    if not u:
+        return False
+    return check_password_hash(u["password_hash"], password)
+
+
+def is_admin(username):
+    """管理员或主帐号都视为 admin"""
+    users = load_users()
+    u = users.get(username, {})
+    return bool(u.get("is_admin", False) or u.get("is_super", False))
+
+
+def is_super(username):
+    """是否是主帐号"""
+    users = load_users()
+    return bool(users.get(username, {}).get("is_super", False))
+
+
+def migrate_legacy_password():
+    """旧部署只有 WEB_PASSWORD 没 users.json — 自动迁移:主帐号 = WEB_PASSWORD"""
+    if load_users():
+        ensure_super_exists()
+        return
+    env = read_env()
+    pwd = env.get("WEB_PASSWORD", "") or os.environ.get("WEB_PASSWORD", "")
+    if pwd:
+        save_users({"admin": {
+            "password_hash": generate_password_hash(pwd),
+            "is_admin": True,
+            "is_super": True,
+        }})
+        print("🔄 旧 WEB_PASSWORD 已迁移到 users.json (账号: admin, 角色: 主帐号)")
+
+
+def ensure_super_exists():
+    """确保至少有一个主帐号 — 若 users.json 里没人是 is_super
+    (RBAC 升级前建的 admin 账号),把第一个 is_admin 升级为主帐号"""
+    users = load_users()
+    if not users:
+        return
+    if any(u.get("is_super") for u in users.values()):
+        return
+    # 没主帐号 → 找第一个 admin 或第一个账号升级
+    target = None
+    for name, data in users.items():
+        if data.get("is_admin"):
+            target = name
+            break
+    if not target:
+        target = next(iter(users))
+    users[target]["is_super"] = True
+    users[target]["is_admin"] = True
+    save_users(users)
+    print(f"🔄 账号「{target}」升级为主帐号(无主帐号自动修复)")
+
+
+# ============ 防暴力破解 ============
+# 规则：10 分钟内失败 5 次 → IP 锁定 15 分钟
+import time as _time
+_login_fails = {}   # {ip: [ts1, ts2, ...]}
+_lockouts = {}      # {ip: lockout_until_ts}
+BRUTE_WINDOW = 600        # 10 分钟观察窗口
+BRUTE_THRESHOLD = 5       # 5 次失败触发锁定
+BRUTE_LOCKOUT = 900       # 锁定 15 分钟
+
+
+def _lockout_remaining(ip):
+    """返回该 IP 还要锁多久（秒）；0 表示没锁定"""
+    now = _time.time()
+    until = _lockouts.get(ip, 0)
+    if until > now:
+        return int(until - now)
+    if until:
+        _lockouts.pop(ip, None)
+    return 0
+
+
+def _record_login_attempt(ip, success):
+    now = _time.time()
+    if success:
+        _login_fails.pop(ip, None)
+        _lockouts.pop(ip, None)
+        return
+    fails = [t for t in _login_fails.get(ip, []) if now - t < BRUTE_WINDOW]
+    fails.append(now)
+    _login_fails[ip] = fails
+    if len(fails) >= BRUTE_THRESHOLD:
+        _lockouts[ip] = now + BRUTE_LOCKOUT
+        _login_fails.pop(ip, None)
+        print(f"🔒 IP {ip} 连续 {BRUTE_THRESHOLD} 次登录失败,锁定 {BRUTE_LOCKOUT//60} 分钟")
+
+
+def _client_ip():
+    """获取客户端 IP,优先 X-Forwarded-For(Tunnel / Nginx 场景)"""
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+# 共用预设（所有部门通用）
+DEFAULT_API_ID = "31462192"
+DEFAULT_API_HASH = "ab9a38defa8c7421ac9afc9e1a7f00f4"
+DEFAULT_KEYWORDS = "到期,续费,暂停,下架,上架,地址,打款,欠费"
+DEFAULT_WEB_PASSWORD = "tg@monitor2026"
+DEFAULT_NO_REPLY_MINUTES = "30"
+DEFAULT_PATROL_DAYS = "7"
+DEFAULT_HISTORY_DAYS = "2"
+DEFAULT_SHEETS_FLUSH_INTERVAL = "5"
+DEFAULT_PATROL_INTERVAL = "60"
+
+
+def read_env():
+    """读 .env 到 dict，保留原顺序"""
+    env = {}
+    if not ENV_PATH.exists():
+        return env
+    for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        env[k.strip()] = v.strip()
+    return env
+
+
+def write_env(updates):
+    """合并 updates 到 .env（保留已有的其他字段）"""
+    existing = read_env()
+    existing.update({k: str(v) for k, v in updates.items()})
+    # 固定顺序，读起来舒服
+    order = [
+        "API_ID", "API_HASH",
+        "COMPANY_NAME", "COMPANY_DISPLAY",
+        "SHEET_ID", "BOT_TOKEN", "ALERT_GROUP_ID",
+        "WEB_PORT", "WEB_PASSWORD",
+        "KEYWORDS", "NO_REPLY_MINUTES",
+        "WORK_HOUR_START", "WORK_HOUR_END",
+        "PATROL_DAYS", "HISTORY_DAYS",
+        "SHEETS_FLUSH_INTERVAL", "PATROL_INTERVAL",
+        "SETUP_COMPLETE",
+    ]
+    lines = []
+    seen = set()
+    for k in order:
+        if k in existing:
+            lines.append(f"{k}={existing[k]}")
+            seen.add(k)
+    for k, v in existing.items():
+        if k not in seen:
+            lines.append(f"{k}={v}")
+    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def is_setup_complete():
+    """是否已完成首次设置。条件：关键字段都有值 + SETUP_COMPLETE=true + service-account.json 存在 + 至少 1 个用户"""
+    env = read_env()
+    required = ["COMPANY_NAME", "SHEET_ID", "BOT_TOKEN", "ALERT_GROUP_ID"]
+    for k in required:
+        if not env.get(k) or env.get(k) in ("__pending__", "0"):
+            return False
+    if env.get("SETUP_COMPLETE", "false").lower() != "true":
+        return False
+    if not SA_PATH.exists() or SA_PATH.stat().st_size < 100:
+        return False
+    # 旧部署自动迁移
+    migrate_legacy_password()
+    if not load_users():
+        return False
+    return True
+
+
+def _test_bot_api(token, group_id):
+    """用 Bot API 发一则测试消息，验证 token 有效 + bot 在群里 + 是管理员"""
+    token = (token or "").strip()
+    group_id = (group_id or "").strip()
+    if not token or ":" not in token:
+        return False, "Bot Token 格式错误"
+    if not group_id:
+        return False, "群 ID 不能为空"
+    try:
+        data = urllib.parse.urlencode({
+            "chat_id": group_id,
+            "text": "✅ TG 监控 — 连线测试成功！设置完成后将开始接收预警。",
+        }).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=data,
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+        if result.get("ok"):
+            return True, "Bot 已发送测试消息到群组"
+        return False, result.get("description", "未知错误")
+    except Exception as e:
+        return False, str(e)
+
+
+def _test_sheets_access(sheet_id, sa_json_bytes):
+    """验证 Google Sheets 访问权限。sa_json_bytes 是上传的服务账号 json 原始字节"""
+    sheet_id = (sheet_id or "").strip()
+    if not sheet_id:
+        return False, "Sheet ID 不能为空"
+    try:
+        sa_data = json.loads(sa_json_bytes)
+        if "client_email" not in sa_data or "private_key" not in sa_data:
+            return False, "service-account.json 不是有效的服务账号凭证"
+    except Exception:
+        return False, "service-account.json 不是合法的 JSON"
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
+    try:
+        json.dump(sa_data, tmp)
+        tmp.close()
+        creds = Credentials.from_service_account_file(
+            tmp.name,
+            scopes=["https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive"],
+        )
+        gc = gspread.authorize(creds)
+        sp = gc.open_by_key(sheet_id)
+        return True, f"成功访问 Sheet: {sp.title}（服务账号 {sa_data['client_email']}）"
+    except gspread.exceptions.SpreadsheetNotFound:
+        return False, (f"Sheet ID「{sheet_id}」找不到或没访问权限。"
+                       f"请确认：① ID 正确；② service account「{sa_data.get('client_email','?')}」已加为该 Sheet 的编辑者")
+    except gspread.exceptions.APIError as e:
+        body = getattr(e, "args", [""])[0] or str(e) or repr(e)
+        return False, f"Sheet API 错误: {body}"
+    except Exception as e:
+        err = str(e) or repr(e) or type(e).__name__
+        return False, f"{type(e).__name__}: {err}"
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+
+
+def _start_tg_monitor():
+    """通过 docker API 重启 tg-monitor 容器（install.sh 已建好，只需 restart 就会读新 .env）"""
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        company = read_env().get("COMPANY_NAME", "")
+        if not company:
+            return False, "COMPANY_NAME 未设置"
+        container_name = f"tg-monitor-{company}"
+        try:
+            c = client.containers.get(container_name)
+            c.restart(timeout=10)
+            return True, f"{container_name} 已重启，开始读取新配置"
+        except docker_sdk.errors.NotFound:
+            # 找旧名字（首次设置时 container_name 可能是 default）
+            for c in client.containers.list(all=True):
+                if c.name.startswith("tg-monitor-"):
+                    c.restart(timeout=10)
+                    return True, f"{c.name} 已重启（建议之后手动 docker compose up -d --build 重命名为 {container_name}）"
+            return False, f"找不到 tg-monitor 容器，请手动 docker compose up -d --build"
+    except Exception as e:
+        return False, str(e)
 
 
 def _get_spreadsheet():
@@ -128,6 +434,38 @@ def login_required(f):
     def decorated(*args, **kwargs):
         if not flask_session.get("authed"):
             return redirect(url_for("login_page"))
+        # 旧 session 没 username(RBAC 上线前登入的) → 强制重新登入
+        if not flask_session.get("username"):
+            flask_session.clear()
+            return redirect(url_for("login_page"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+def admin_required(f):
+    """仅管理员/主帐号可访问;非管理员访问 API 回 403,访问页面导回 /settings"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not flask_session.get("authed"):
+            return redirect(url_for("login_page"))
+        if not is_admin(flask_session.get("username", "")):
+            if request.path.startswith("/api/"):
+                return jsonify({"ok": False, "msg": "需要管理员权限"}), 403
+            return redirect(url_for("settings_page"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+def super_required(f):
+    """仅主帐号可访问 — 新增/移除账号专用"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not flask_session.get("authed"):
+            return redirect(url_for("login_page"))
+        if not is_super(flask_session.get("username", "")):
+            if request.path.startswith("/api/"):
+                return jsonify({"ok": False, "msg": "仅主帐号可执行此操作"}), 403
+            return redirect(url_for("settings_page"))
         return f(*args, **kwargs)
     return decorated
 
@@ -251,20 +589,326 @@ def get_sessions():
     return sessions
 
 
+# ============ 首次设置与设置修改 ============
+
+@app.before_request
+def _redirect_to_setup_if_needed():
+    """未完成首次设置的话，把所有请求导到 /setup（除了静态资源和 setup 自身）"""
+    path = request.path
+    if path.startswith("/setup") or path.startswith("/api/setup") or path.startswith("/api/test-") or path.startswith("/static"):
+        return None
+    if not is_setup_complete():
+        return redirect(url_for("setup_page"))
+
+
+@app.route("/setup", methods=["GET"])
+def setup_page():
+    """首次设置页。若已完成则导回首页"""
+    if is_setup_complete():
+        return redirect(url_for("index"))
+    env = read_env()
+    # 预设值填进去
+    defaults = {
+        "company_name": env.get("COMPANY_NAME", ""),
+        "company_display": env.get("COMPANY_DISPLAY", ""),
+        "bot_token": env.get("BOT_TOKEN", ""),
+        "alert_group_id": env.get("ALERT_GROUP_ID", ""),
+        "sheet_id": env.get("SHEET_ID", ""),
+        "web_password": env.get("WEB_PASSWORD", DEFAULT_WEB_PASSWORD),
+        "keywords": env.get("KEYWORDS", DEFAULT_KEYWORDS),
+        "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
+        "api_id": env.get("API_ID", DEFAULT_API_ID),
+        "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
+        "sa_uploaded": SA_PATH.exists() and SA_PATH.stat().st_size > 100,
+    }
+    return render_template("setup.html", d=defaults, mode="setup")
+
+
+@app.route("/settings", methods=["GET"])
+@login_required
+def settings_page():
+    """登入后修改设置 — 管理员看全部,普通用户只能改自己密码"""
+    env = read_env()
+    me = flask_session.get("username", "")
+    current = {
+        "company_name": env.get("COMPANY_NAME", ""),
+        "company_display": env.get("COMPANY_DISPLAY", ""),
+        "bot_token": env.get("BOT_TOKEN", ""),
+        "alert_group_id": env.get("ALERT_GROUP_ID", ""),
+        "sheet_id": env.get("SHEET_ID", ""),
+        "keywords": env.get("KEYWORDS", DEFAULT_KEYWORDS),
+        "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
+        "api_id": env.get("API_ID", DEFAULT_API_ID),
+        "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
+        "sa_uploaded": SA_PATH.exists() and SA_PATH.stat().st_size > 100,
+        "is_admin": is_admin(me),
+        "is_super": is_super(me),
+        "me": me,
+    }
+    return render_template("setup.html", d=current, mode="settings")
+
+
+@app.route("/api/test-bot", methods=["POST"])
+def api_test_bot():
+    """测试 Bot Token + 预警群（发一则测试消息）"""
+    data = request.get_json(silent=True) or request.form
+    ok, msg = _test_bot_api(data.get("bot_token"), data.get("alert_group_id"))
+    return jsonify({"ok": ok, "msg": msg})
+
+
+@app.route("/api/test-sheets", methods=["POST"])
+def api_test_sheets():
+    """测试 Sheet ID + service-account.json"""
+    sheet_id = request.form.get("sheet_id", "")
+    sa_file = request.files.get("service_account")
+    if sa_file:
+        sa_bytes = sa_file.read()
+    elif SA_PATH.exists():
+        sa_bytes = SA_PATH.read_bytes()
+    else:
+        return jsonify({"ok": False, "msg": "请先上传 service-account.json"})
+    ok, msg = _test_sheets_access(sheet_id, sa_bytes)
+    return jsonify({"ok": ok, "msg": msg})
+
+
+@app.route("/api/setup", methods=["POST"])
+def api_setup():
+    """首次设置提交"""
+    if is_setup_complete():
+        return jsonify({"ok": False, "msg": "已完成首次设置，请到设置页修改"})
+    return _save_settings(is_first=True)
+
+
+@app.route("/api/update-settings", methods=["POST"])
+@admin_required
+def api_update_settings():
+    """后续修改设置（仅管理员）"""
+    return _save_settings(is_first=False)
+
+
+def _save_settings(is_first):
+    """共用的保存逻辑"""
+    form = request.form
+    company_name = (form.get("company_name") or "").strip()
+    bot_token = (form.get("bot_token") or "").strip()
+    alert_group_id = (form.get("alert_group_id") or "").strip()
+    sheet_id = (form.get("sheet_id") or "").strip()
+
+    # 必填验证
+    if not company_name or not bot_token or not alert_group_id or not sheet_id:
+        return jsonify({"ok": False, "msg": "部门名称、Bot Token、预警群 ID、Sheet ID 都必填"})
+
+    # 首次设置：必须提供管理员账号+密码
+    if is_first:
+        admin_user = (form.get("admin_username") or "admin").strip()
+        admin_pwd = (form.get("admin_password") or "").strip()
+        if not admin_user or not admin_pwd:
+            return jsonify({"ok": False, "msg": "管理员账号和密码都不能为空"})
+        if len(admin_pwd) < 6:
+            return jsonify({"ok": False, "msg": "密码至少 6 位"})
+
+    # service-account.json：首次必须上传；修改时如果上传了就覆盖，没上传就保留
+    sa_file = request.files.get("service_account")
+    if sa_file and sa_file.filename:
+        sa_bytes = sa_file.read()
+        # 先验证再写入
+        ok, msg = _test_sheets_access(sheet_id, sa_bytes)
+        if not ok:
+            return jsonify({"ok": False, "msg": f"Sheet 验证失败：{msg}"})
+        SA_PATH.write_bytes(sa_bytes)
+    elif is_first and not SA_PATH.exists():
+        return jsonify({"ok": False, "msg": "首次设置必须上传 service-account.json"})
+    else:
+        # 用现有凭证验证 sheet_id
+        sa_bytes = SA_PATH.read_bytes()
+        ok, msg = _test_sheets_access(sheet_id, sa_bytes)
+        if not ok:
+            return jsonify({"ok": False, "msg": f"Sheet 验证失败：{msg}"})
+
+    # 验证 Bot
+    ok, msg = _test_bot_api(bot_token, alert_group_id)
+    if not ok:
+        return jsonify({"ok": False, "msg": f"Bot 验证失败：{msg}"})
+
+    # 首次:建立主帐号(is_super=True,is_admin=True)
+    if is_first:
+        save_users({admin_user: {
+            "password_hash": generate_password_hash(admin_pwd),
+            "is_admin": True,
+            "is_super": True,
+        }})
+
+    # 写 .env
+    updates = {
+        "COMPANY_NAME": company_name,
+        "COMPANY_DISPLAY": form.get("company_display", "").strip() or company_name,
+        "BOT_TOKEN": bot_token,
+        "ALERT_GROUP_ID": alert_group_id,
+        "SHEET_ID": sheet_id,
+        "KEYWORDS": form.get("keywords", DEFAULT_KEYWORDS),
+        "NO_REPLY_MINUTES": form.get("no_reply_minutes", DEFAULT_NO_REPLY_MINUTES),
+        "API_ID": form.get("api_id", DEFAULT_API_ID),
+        "API_HASH": form.get("api_hash", DEFAULT_API_HASH),
+        "SETUP_COMPLETE": "true",
+    }
+    if is_first:
+        updates["WEB_PORT"] = read_env().get("WEB_PORT", "5001")
+    write_env(updates)
+
+    # 启动/重启 tg-monitor
+    ok, msg_docker = _start_tg_monitor()
+    return jsonify({
+        "ok": True,
+        "msg": "设置已保存" + ("并启动监控服务" if is_first else "并重启监控服务"),
+        "docker_ok": ok,
+        "docker_msg": msg_docker,
+        "redirect": url_for("login_page"),
+    })
+
+
+# ============ 用户账号管理 API ============
+@app.route("/api/users/list", methods=["GET"])
+@login_required
+def api_users_list():
+    """主帐号看全部,其他人只能看自己"""
+    me = flask_session.get("username", "")
+    users = load_users()
+    me_is_super = is_super(me)
+    if not me_is_super:
+        my_data = users.get(me, {})
+        return jsonify({
+            "users": [{
+                "username": me,
+                "is_admin": bool(my_data.get("is_admin", False) or my_data.get("is_super", False)),
+                "is_super": bool(my_data.get("is_super", False)),
+            }],
+            "me": me,
+            "is_admin": is_admin(me),
+            "is_super": False,
+        })
+    user_list = [
+        {
+            "username": u,
+            "is_admin": bool(data.get("is_admin", False) or data.get("is_super", False)),
+            "is_super": bool(data.get("is_super", False)),
+        }
+        for u, data in sorted(users.items())
+    ]
+    return jsonify({"users": user_list, "me": me, "is_admin": True, "is_super": True})
+
+
+@app.route("/api/users/add", methods=["POST"])
+@super_required
+def api_users_add():
+    """新增账号(仅主帐号)— 可指定是管理员还是普通成员"""
+    data = request.get_json(silent=True) or request.form
+    u = (data.get("username") or "").strip()
+    p = (data.get("password") or "").strip()
+    role_is_admin = bool(data.get("is_admin", False))
+    if not u or not p:
+        return jsonify({"ok": False, "msg": "账号和密码都不能为空"})
+    if len(p) < 6:
+        return jsonify({"ok": False, "msg": "密码至少 6 位"})
+    if not u.replace("_", "").replace("-", "").isalnum():
+        return jsonify({"ok": False, "msg": "账号只能包含字母、数字、下划线、横线"})
+    users = load_users()
+    if u in users:
+        return jsonify({"ok": False, "msg": f"账号「{u}」已存在"})
+    users[u] = {
+        "password_hash": generate_password_hash(p),
+        "is_admin": role_is_admin,
+        "is_super": False,  # 新增的账号永不是主帐号
+    }
+    save_users(users)
+    role_label = "管理员" if role_is_admin else "普通成员"
+    return jsonify({"ok": True, "msg": f"账号「{u}」已添加({role_label})"})
+
+
+@app.route("/api/users/remove", methods=["POST"])
+@super_required
+def api_users_remove():
+    """移除账号(仅主帐号)— 主帐号不能被删除"""
+    data = request.get_json(silent=True) or request.form
+    u = (data.get("username") or "").strip()
+    users = load_users()
+    if u not in users:
+        return jsonify({"ok": False, "msg": "账号不存在"})
+    if users[u].get("is_super"):
+        return jsonify({"ok": False, "msg": "主帐号不可被移除"})
+    del users[u]
+    save_users(users)
+    return jsonify({"ok": True, "msg": f"账号「{u}」已移除"})
+
+
+@app.route("/api/users/change-password", methods=["POST"])
+@login_required
+def api_users_change_password():
+    """改自己的密码(所有用户)"""
+    data = request.get_json(silent=True) or request.form
+    old = (data.get("old_password") or "").strip()
+    new = (data.get("new_password") or "").strip()
+    me = flask_session.get("username", "")
+    if not me:
+        return jsonify({"ok": False, "msg": "未登录"})
+    if not verify_user(me, old):
+        return jsonify({"ok": False, "msg": "旧密码错误"})
+    if len(new) < 6:
+        return jsonify({"ok": False, "msg": "新密码至少 6 位"})
+    users = load_users()
+    if me not in users:
+        return jsonify({"ok": False, "msg": "账号不存在"})
+    users[me]["password_hash"] = generate_password_hash(new)
+    save_users(users)
+    return jsonify({"ok": True, "msg": "密码已更新"})
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login_page():
+    ip = _client_ip()
     if request.method == "POST":
+        # 防暴力破解：先查锁定
+        locked = _lockout_remaining(ip)
+        if locked > 0:
+            mins = (locked + 59) // 60
+            return render_template("login.html",
+                                   error=f"此 IP 因多次失败已被锁定,请 {mins} 分钟后再试",
+                                   company=config.COMPANY_DISPLAY)
+        username = (request.form.get("username") or "").strip()
         pwd = request.form.get("password", "")
-        if pwd == WEB_PASSWORD:
+        if not username or not pwd:
+            _record_login_attempt(ip, False)
+            return render_template("login.html", error="账号和密码都必填",
+                                   company=config.COMPANY_DISPLAY)
+        if verify_user(username, pwd):
+            _record_login_attempt(ip, True)
             flask_session["authed"] = True
+            flask_session["username"] = username
             return redirect(url_for("index"))
-        return render_template("login.html", error="密码错误", company=config.COMPANY_DISPLAY)
+        _record_login_attempt(ip, False)
+        remaining_fails = BRUTE_THRESHOLD - len(_login_fails.get(ip, []))
+        if remaining_fails <= 0:
+            locked = _lockout_remaining(ip)
+            mins = (locked + 59) // 60
+            msg = f"失败次数过多,IP 已锁定 {mins} 分钟"
+        elif remaining_fails <= 2:
+            msg = f"账号或密码错误(再错 {remaining_fails} 次将锁定此 IP 15 分钟)"
+        else:
+            msg = "账号或密码错误"
+        return render_template("login.html", error=msg, company=config.COMPANY_DISPLAY)
+    # GET
+    locked = _lockout_remaining(ip)
+    if locked > 0:
+        mins = (locked + 59) // 60
+        return render_template("login.html",
+                               error=f"此 IP 已被锁定,请 {mins} 分钟后再试",
+                               company=config.COMPANY_DISPLAY)
     return render_template("login.html", error=None, company=config.COMPANY_DISPLAY)
 
 
 @app.route("/logout")
 def logout():
     flask_session.pop("authed", None)
+    flask_session.pop("username", None)
     return redirect(url_for("login_page"))
 
 
