@@ -568,14 +568,14 @@
       <div class="two-col">
         <div class="field">
           <label>部门名称 (英文/拼音) <span class="req">*</span></label>
-          <input type="text" name="company_name" value="{{ d.company_name }}"
+          <input type="text" name="company_name" value="{% if mode == 'settings' %}{{ d.company_name }}{% endif %}"
                  placeholder="例如: yueda, dingfeng" required
                  {% if mode == 'settings' %}readonly{% endif %}>
           <div class="hint">用作容器名后缀。{% if mode == 'setup' %}设定后不建议修改。{% else %}修改需重建容器。{% endif %}</div>
         </div>
         <div class="field">
           <label>显示名称 (可中文)</label>
-          <input type="text" name="company_display" value="{{ d.company_display }}"
+          <input type="text" name="company_display" value="{% if mode == 'settings' %}{{ d.company_display }}{% endif %}"
                  placeholder="例如: 悦达">
           <div class="hint">登入页与预警消息显示用</div>
         </div>
@@ -584,8 +584,8 @@
       <div class="two-col">
         <div class="field">
           <label>主帐号 <span class="req">*</span></label>
-          <input type="text" name="admin_username" value="admin"
-                 placeholder="admin" required pattern="[A-Za-z0-9_-]+"
+          <input type="text" name="admin_username" value=""
+                 placeholder="自定义,建议英文数字" required pattern="[A-Za-z0-9_-]+"
                  title="只允许字母、数字、下划线、横线">
           <div class="hint">首次设置的即为<b>主帐号</b>(最高权限),设置完成后可自行新增其他管理员或普通成员</div>
         </div>

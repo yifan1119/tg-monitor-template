@@ -162,8 +162,9 @@ def _client_ip():
     return request.remote_addr or "unknown"
 
 # 共用预设（所有部门通用）
-DEFAULT_API_ID = "31462192"
-DEFAULT_API_HASH = "ab9a38defa8c7421ac9afc9e1a7f00f4"
+# API_ID / API_HASH 必须客户自己申请 — 不在 repo 里预填,避免 public 仓库暴露私钥
+DEFAULT_API_ID = ""
+DEFAULT_API_HASH = ""
 DEFAULT_KEYWORDS = "到期,续费,暂停,下架,上架,地址,打款,欠费"
 DEFAULT_WEB_PASSWORD = "tg@monitor2026"
 DEFAULT_NO_REPLY_MINUTES = "30"
@@ -700,12 +701,20 @@ def _save_settings(is_first):
 
     # 首次设置：必须提供管理员账号+密码
     if is_first:
-        admin_user = (form.get("admin_username") or "admin").strip()
+        admin_user = (form.get("admin_username") or "").strip()
         admin_pwd = (form.get("admin_password") or "").strip()
         if not admin_user or not admin_pwd:
-            return jsonify({"ok": False, "msg": "管理员账号和密码都不能为空"})
+            return jsonify({"ok": False, "msg": "主帐号和密码都不能为空"})
         if len(admin_pwd) < 6:
             return jsonify({"ok": False, "msg": "密码至少 6 位"})
+
+    # API_ID / API_HASH 必填(默认空,客户必须自己去 my.telegram.org 申请)
+    api_id_val = (form.get("api_id") or "").strip()
+    api_hash_val = (form.get("api_hash") or "").strip()
+    if not api_id_val or not api_hash_val:
+        return jsonify({"ok": False, "msg": "Telegram API ID 和 API Hash 都不能为空,请到 my.telegram.org 申请"})
+    if not api_id_val.isdigit():
+        return jsonify({"ok": False, "msg": "API ID 应为纯数字"})
 
     # service-account.json：首次必须上传；修改时如果上传了就覆盖，没上传就保留
     sa_file = request.files.get("service_account")

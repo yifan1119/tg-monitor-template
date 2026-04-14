@@ -115,9 +115,9 @@ if [ ! -f ".env" ]; then
 # ========== ${COMPANY_NAME} ==========
 # 首次设置未完成 — 请打开 http://<VPS>:${WEB_PORT}/setup 完成设置精灵
 
-# Telegram API（所有部门共用预设，可在设置页修改）
-API_ID=31462192
-API_HASH=ab9a38defa8c7421ac9afc9e1a7f00f4
+# Telegram API（每个部门自己去 my.telegram.org 申请,设置页填入）
+API_ID=
+API_HASH=
 
 # 部门标识
 COMPANY_NAME=${COMPANY_NAME}
