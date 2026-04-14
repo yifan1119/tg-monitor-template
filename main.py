@@ -4,6 +4,7 @@ TG 监听系统 — 主入口
 """
 import asyncio
 import logging
+import os
 import signal
 import sys
 
@@ -27,6 +28,14 @@ async def main():
     logger.info("=" * 40)
     logger.info("TG 监听系统 启动中...")
     logger.info("=" * 40)
+
+    # 0. 首次设置未完成 → 进入待机模式
+    if not config.SETUP_COMPLETE:
+        logger.warning("SETUP_COMPLETE=false → 等待首次设置完成 (请打开 Web 后台 :%s/setup)",
+                       os.environ.get("WEB_PORT", "5001"))
+        # 每分钟重新检查 .env；设置完成后 web 会通过 docker API 重启本容器
+        while True:
+            await asyncio.sleep(60)
 
     # 1. 初始化数据库
     logger.info("初始化数据库...")

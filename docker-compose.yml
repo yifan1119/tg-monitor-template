@@ -30,11 +30,14 @@ services:
       - ./.env:/app/.env
       - ./service-account.json:/app/service-account.json
       - /var/run/docker.sock:/var/run/docker.sock
+      - .:/app/repo:ro   # 让 web 容器能调 docker compose 启动 tg-monitor
+    working_dir: /app
     environment:
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1
+      - WEB_PORT=${WEB_PORT:-5001}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/"]
+      test: ["CMD", "curl", "-f", "http://localhost:5001/setup"]
       interval: 30s
       timeout: 5s
       retries: 3

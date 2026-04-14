@@ -4,15 +4,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).parent
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
-# Telegram API
-API_ID = int(os.environ["API_ID"])
-API_HASH = os.environ["API_HASH"]
+# Telegram API (有共用预设，但可改)
+API_ID = int(os.environ.get("API_ID", "0") or "0")
+API_HASH = os.environ.get("API_HASH", "")
 
 # Google Sheets
-SHEET_ID = os.environ["SHEET_ID"]
+SHEET_ID = os.environ.get("SHEET_ID", "")
 SERVICE_ACCOUNT_FILE = BASE_DIR / "service-account.json"
+
+# 首次设置完成标志：true 才会让 tg-monitor 正常启动
+SETUP_COMPLETE = os.environ.get("SETUP_COMPLETE", "false").lower() == "true"
 
 # TG Bot
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
