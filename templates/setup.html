@@ -7,19 +7,19 @@
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --accent-red: #ff3860;
-    --accent-ember: #ff6b3d;
-    --accent-deep: #c81e3a;
-    --accent-lime: #7dd88a;
-    --accent-danger: #ff3860;
-    --accent-warn: #ffb020;
-    --bg-0: #0a0406;
-    --bg-1: #120a0c;
-    --bg-2: #181010;
-    --text: #e8d5d5;
-    --text-dim: #8a6a6a;
+    --accent-red: #2aabee;
+    --accent-ember: #64abde;
+    --accent-deep: #3390ec;
+    --accent-lime: #4fae4f;
+    --accent-danger: #2aabee;
+    --accent-warn: #f5a623;
+    --bg-0: #050505;
+    --bg-1: #0d0d0d;
+    --bg-2: #1a1a1a;
+    --text: #ffffff;
+    --text-dim: #6d7f8f;
     --text-bright: #ffffff;
-    --border: rgba(255, 56, 96, 0.2);
+    --border: rgba(42, 171, 238, 0.2);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { min-height: 100%; }
@@ -39,18 +39,18 @@
     content: "";
     position: fixed; inset: 0; z-index: 0;
     background:
-      radial-gradient(circle at 15% 20%, rgba(200,30,58,0.28), transparent 50%),
-      radial-gradient(circle at 85% 80%, rgba(255,56,96,0.22), transparent 55%),
-      radial-gradient(circle at 50% 50%, rgba(255,107,61,0.10), transparent 60%),
-      linear-gradient(135deg, #0a0406 0%, #120a0c 50%, #0d0507 100%);
+      radial-gradient(circle at 15% 20%, rgba(51,144,236,0.28), transparent 50%),
+      radial-gradient(circle at 85% 80%, rgba(42,171,238,0.22), transparent 55%),
+      radial-gradient(circle at 50% 50%, rgba(100,171,222,0.10), transparent 60%),
+      linear-gradient(135deg, #050505 0%, #0d0d0d 50%, #050505 100%);
     animation: bgShift 30s ease-in-out infinite;
   }
   body::after {
     content: "";
     position: fixed; inset: 0; z-index: 0;
     background:
-      linear-gradient(rgba(255,56,96,0.04) 1px, transparent 1px) 0 0 / 40px 40px,
-      linear-gradient(90deg, rgba(255,56,96,0.04) 1px, transparent 1px) 0 0 / 40px 40px;
+      linear-gradient(rgba(42,171,238,0.04) 1px, transparent 1px) 0 0 / 40px 40px,
+      linear-gradient(90deg, rgba(42,171,238,0.04) 1px, transparent 1px) 0 0 / 40px 40px;
     mask-image: radial-gradient(ellipse at center, black 40%, transparent 90%);
     -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 90%);
     pointer-events: none;
@@ -63,7 +63,7 @@
   /* 扫描线 */
   .scanline {
     position: fixed; inset: 0; z-index: 1; pointer-events: none;
-    background: linear-gradient(to bottom, transparent 0%, rgba(255,56,96,0.10) 50%, transparent 100%);
+    background: linear-gradient(to bottom, transparent 0%, rgba(42,171,238,0.10) 50%, transparent 100%);
     height: 2px; width: 100%;
     animation: scan 10s linear infinite;
   }
@@ -76,15 +76,15 @@
   .container {
     position: relative; z-index: 10;
     max-width: 860px; margin: 0 auto;
-    background: rgba(10, 15, 28, 0.72);
+    background: rgba(13, 13, 13, 0.72);
     backdrop-filter: blur(20px) saturate(150%);
     -webkit-backdrop-filter: blur(20px) saturate(150%);
-    border: 1px solid rgba(255, 56, 96, 0.22);
+    border: 1px solid rgba(42, 171, 238, 0.22);
     border-radius: 20px;
     padding: 48px 44px;
     box-shadow:
-      0 0 60px rgba(255, 56, 96, 0.10),
-      0 0 120px rgba(200, 30, 58, 0.06),
+      0 0 60px rgba(42, 171, 238, 0.10),
+      0 0 120px rgba(51, 144, 236, 0.06),
       inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
   .container::before {
@@ -93,8 +93,8 @@
     border-radius: 20px;
     padding: 1px;
     background: linear-gradient(135deg,
-      rgba(255,56,96,0.6), transparent 30%,
-      transparent 70%, rgba(255,107,61,0.6));
+      rgba(42,171,238,0.6), transparent 30%,
+      transparent 70%, rgba(100,171,222,0.6));
     -webkit-mask:
       linear-gradient(#000 0 0) content-box,
       linear-gradient(#000 0 0);
@@ -113,7 +113,7 @@
     display: flex; justify-content: space-between; align-items: center;
     margin-bottom: 24px;
     padding-bottom: 18px;
-    border-bottom: 1px dashed rgba(255,56,96,0.15);
+    border-bottom: 1px dashed rgba(42,171,238,0.15);
   }
   .top-nav a {
     color: var(--accent-red);
@@ -128,7 +128,7 @@
   /* ===== 标题区 ===== */
   .header-icon {
     width: 60px; height: 60px;
-    background: linear-gradient(135deg, #ff3860, #c81e3a, #ff6b3d);
+    background: linear-gradient(135deg, #2aabee, #3390ec, #64abde);
     background-size: 200% 200%;
     border-radius: 16px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -136,12 +136,12 @@
     font-family: "Orbitron", sans-serif;
     color: #fff;
     margin-bottom: 20px;
-    box-shadow: 0 0 25px rgba(255, 56, 96, 0.4), 0 0 50px rgba(200, 30, 58, 0.25);
+    box-shadow: 0 0 25px rgba(42, 171, 238, 0.4), 0 0 50px rgba(51, 144, 236, 0.25);
     animation: iconPulse 6s ease-in-out infinite, gradientMove 18s ease infinite;
   }
   @keyframes iconPulse {
-    0%, 100% { transform: scale(1);    box-shadow: 0 0 25px rgba(255,56,96,0.4), 0 0 50px rgba(200,30,58,0.25); }
-    50%      { transform: scale(1.05); box-shadow: 0 0 40px rgba(255,56,96,0.7), 0 0 80px rgba(200,30,58,0.4); }
+    0%, 100% { transform: scale(1);    box-shadow: 0 0 25px rgba(42,171,238,0.4), 0 0 50px rgba(51,144,236,0.25); }
+    50%      { transform: scale(1.05); box-shadow: 0 0 40px rgba(42,171,238,0.7), 0 0 80px rgba(51,144,236,0.4); }
   }
   @keyframes gradientMove {
     0%, 100% { background-position: 0% 50%; }
@@ -154,13 +154,13 @@
     font-weight: 900;
     letter-spacing: 2px;
     margin-bottom: 8px;
-    background: linear-gradient(90deg, #ff3860, #c81e3a, #ff6b3d, #c81e3a, #ff3860);
+    background: linear-gradient(90deg, #2aabee, #3390ec, #64abde, #3390ec, #2aabee);
     background-size: 300% 100%;
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
     animation: textFlow 20s linear infinite;
-    text-shadow: 0 0 30px rgba(255, 56, 96, 0.3);
+    text-shadow: 0 0 30px rgba(42, 171, 238, 0.3);
   }
   @keyframes textFlow {
     0%   { background-position: 0% 50%; }
@@ -197,14 +197,14 @@
     background: rgba(255, 201, 71, 0.15);
     padding: 1px 6px;
     border-radius: 4px;
-    color: #ffb86b;
+    color: #f5c16b;
     font-family: "JetBrains Mono", monospace;
   }
 
   /* ===== 分区块 ===== */
   .section {
-    background: rgba(5, 7, 13, 0.5);
-    border: 1px solid rgba(255, 56, 96, 0.12);
+    background: rgba(5, 5, 5, 0.5);
+    border: 1px solid rgba(42, 171, 238, 0.12);
     border-left: 3px solid var(--accent-red);
     border-radius: 12px;
     padding: 22px 24px;
@@ -212,8 +212,8 @@
     transition: all 0.3s ease;
   }
   .section:hover {
-    border-color: rgba(255, 56, 96, 0.3);
-    box-shadow: 0 0 30px rgba(255, 56, 96, 0.08);
+    border-color: rgba(42, 171, 238, 0.3);
+    box-shadow: 0 0 30px rgba(42, 171, 238, 0.08);
   }
   .section-title {
     font-family: "Orbitron", sans-serif;
@@ -225,15 +225,12 @@
     margin-bottom: 18px;
     display: flex; align-items: center; gap: 10px;
     padding-bottom: 10px;
-    border-bottom: 1px dashed rgba(255, 56, 96, 0.15);
+    border-bottom: 1px dashed rgba(42, 171, 238, 0.15);
   }
   .section-title::before {
     content: "▸";
     color: var(--accent-red);
     text-shadow: 0 0 8px var(--accent-red);
-    
-  }
-  50%      { opacity: 0.4; }
   }
 
   /* ===== 字段 ===== */
@@ -256,7 +253,7 @@
     letter-spacing: 0.5px;
   }
   .field .hint code {
-    background: rgba(255,56,96,0.1);
+    background: rgba(42,171,238,0.1);
     padding: 1px 6px;
     border-radius: 3px;
     color: var(--accent-red);
@@ -268,9 +265,9 @@
   .field input[type="number"], .field textarea {
     width: 100%;
     padding: 11px 14px;
-    border: 1px solid rgba(255, 56, 96, 0.2);
+    border: 1px solid rgba(42, 171, 238, 0.2);
     border-radius: 8px;
-    background: rgba(5, 7, 13, 0.7);
+    background: rgba(5, 5, 5, 0.7);
     color: var(--text-bright);
     font-family: "JetBrains Mono", monospace;
     font-size: 13px;
@@ -280,11 +277,11 @@
   }
   .field input:focus, .field textarea:focus {
     border-color: var(--accent-red);
-    box-shadow: 0 0 0 3px rgba(255, 56, 96, 0.12), 0 0 20px rgba(255, 56, 96, 0.2);
-    background: rgba(5, 7, 13, 0.9);
+    box-shadow: 0 0 0 3px rgba(42, 171, 238, 0.12), 0 0 20px rgba(42, 171, 238, 0.2);
+    background: rgba(5, 5, 5, 0.9);
   }
   .field input[readonly] {
-    background: rgba(5, 7, 13, 0.9);
+    background: rgba(5, 5, 5, 0.9);
     color: var(--text-dim);
     cursor: not-allowed;
   }
@@ -295,9 +292,9 @@
 
   /* ===== 测试按钮 ===== */
   .test-btn {
-    background: rgba(255, 56, 96, 0.08);
+    background: rgba(42, 171, 238, 0.08);
     color: var(--accent-red);
-    border: 1px solid rgba(255, 56, 96, 0.3);
+    border: 1px solid rgba(42, 171, 238, 0.3);
     padding: 8px 16px;
     border-radius: 6px;
     font-family: "JetBrains Mono", monospace;
@@ -310,8 +307,8 @@
     transition: all 0.2s;
   }
   .test-btn:hover:not(:disabled) {
-    background: rgba(255, 56, 96, 0.18);
-    box-shadow: 0 0 15px rgba(255, 56, 96, 0.35);
+    background: rgba(42, 171, 238, 0.18);
+    box-shadow: 0 0 15px rgba(42, 171, 238, 0.35);
   }
   .test-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .test-result {
@@ -320,23 +317,23 @@
     font-size: 12px;
     letter-spacing: 0.5px;
   }
-  .test-result.ok  { color: var(--accent-lime); text-shadow: 0 0 8px rgba(125,216,138,0.5); }
-  .test-result.err { color: var(--accent-danger);   text-shadow: 0 0 8px rgba(255,56,96,0.5); }
+  .test-result.ok  { color: var(--accent-lime); text-shadow: 0 0 8px rgba(79,174,79,0.5); }
+  .test-result.err { color: var(--accent-danger);   text-shadow: 0 0 8px rgba(42,171,238,0.5); }
 
   /* ===== 文件上传 ===== */
   .file-input-wrap {
     display: flex; align-items: center; gap: 14px;
     padding: 16px;
-    background: rgba(5, 7, 13, 0.5);
-    border: 2px dashed rgba(255, 56, 96, 0.3);
+    background: rgba(5, 5, 5, 0.5);
+    border: 2px dashed rgba(42, 171, 238, 0.3);
     border-radius: 10px;
     cursor: pointer;
     transition: all 0.25s;
   }
   .file-input-wrap:hover {
     border-color: var(--accent-red);
-    background: rgba(255, 56, 96, 0.05);
-    box-shadow: 0 0 20px rgba(255, 56, 96, 0.15);
+    background: rgba(42, 171, 238, 0.05);
+    box-shadow: 0 0 20px rgba(42, 171, 238, 0.15);
   }
   .file-input-wrap input { display: none; }
   .file-icon {
@@ -349,7 +346,7 @@
     font-size: 12px;
     letter-spacing: 1px;
     margin-top: 3px;
-    text-shadow: 0 0 8px rgba(125,216,138,0.4);
+    text-shadow: 0 0 8px rgba(79,174,79,0.4);
   }
   .file-status.pending {
     color: var(--text-dim);
@@ -367,7 +364,7 @@
   .submit-btn {
     width: 100%;
     padding: 16px;
-    background: linear-gradient(135deg, #ff3860 0%, #c81e3a 50%, #ff6b3d 100%);
+    background: linear-gradient(135deg, #2aabee 0%, #3390ec 50%, #64abde 100%);
     background-size: 200% 200%;
     color: #fff;
     font-family: "Orbitron", sans-serif;
@@ -382,11 +379,11 @@
     position: relative;
     overflow: hidden;
     transition: all 0.3s ease;
-    box-shadow: 0 4px 25px rgba(255, 56, 96, 0.35);
+    box-shadow: 0 4px 25px rgba(42, 171, 238, 0.35);
   }
   .submit-btn:hover:not(:disabled) {
     background-position: 100% 100%;
-    box-shadow: 0 6px 40px rgba(255, 56, 96, 0.55), 0 0 60px rgba(255, 107, 61, 0.35);
+    box-shadow: 0 6px 40px rgba(42, 171, 238, 0.55), 0 0 60px rgba(100, 171, 222, 0.35);
     transform: translateY(-1px);
   }
   .submit-btn:active { transform: translateY(0); }
@@ -404,8 +401,8 @@
   #progress {
     margin-top: 22px;
     padding: 18px;
-    background: rgba(5, 7, 13, 0.8);
-    border: 1px solid rgba(255, 56, 96, 0.15);
+    background: rgba(5, 5, 5, 0.8);
+    border: 1px solid rgba(42, 171, 238, 0.15);
     border-radius: 10px;
     font-family: "JetBrains Mono", monospace;
     font-size: 12px;
@@ -415,24 +412,24 @@
     overflow-y: auto;
     color: var(--text);
   }
-  #progress .ok  { color: var(--accent-lime); text-shadow: 0 0 6px rgba(125,216,138,0.4); }
-  #progress .err { color: var(--accent-danger);   text-shadow: 0 0 6px rgba(255,56,96,0.4); }
+  #progress .ok  { color: var(--accent-lime); text-shadow: 0 0 6px rgba(79,174,79,0.4); }
+  #progress .err { color: var(--accent-danger);   text-shadow: 0 0 6px rgba(42,171,238,0.4); }
   #progress::-webkit-scrollbar { width: 6px; }
-  #progress::-webkit-scrollbar-thumb { background: rgba(255,56,96,0.3); border-radius: 3px; }
+  #progress::-webkit-scrollbar-thumb { background: rgba(42,171,238,0.3); border-radius: 3px; }
 
   /* ===== 帮助说明折叠块 ===== */
   details.howto {
     margin-top: 10px;
-    background: rgba(200, 30, 58, 0.06);
-    border: 1px solid rgba(200, 30, 58, 0.25);
+    background: rgba(51, 144, 236, 0.06);
+    border: 1px solid rgba(51, 144, 236, 0.25);
     border-radius: 8px;
     padding: 0;
     overflow: hidden;
     transition: all 0.25s;
   }
   details.howto[open] {
-    background: rgba(200, 30, 58, 0.1);
-    box-shadow: 0 0 20px rgba(200, 30, 58, 0.15);
+    background: rgba(51, 144, 236, 0.1);
+    box-shadow: 0 0 20px rgba(51, 144, 236, 0.15);
   }
   details.howto summary {
     padding: 10px 14px;
@@ -460,10 +457,10 @@
     content: "−";
     transform: rotate(180deg);
   }
-  details.howto summary:hover { color: #c81e3a; text-shadow: 0 0 10px rgba(200,30,58,0.5); }
+  details.howto summary:hover { color: #3390ec; text-shadow: 0 0 10px rgba(51,144,236,0.5); }
   details.howto .howto-body {
     padding: 14px 16px 16px;
-    border-top: 1px dashed rgba(200, 30, 58, 0.25);
+    border-top: 1px dashed rgba(51, 144, 236, 0.25);
     font-size: 12px;
     line-height: 1.9;
     color: var(--text);
@@ -471,7 +468,7 @@
   }
   details.howto .howto-body b { color: var(--accent-red); font-weight: 600; }
   details.howto .howto-body code {
-    background: rgba(255, 56, 96, 0.1);
+    background: rgba(42, 171, 238, 0.1);
     padding: 1px 6px;
     border-radius: 3px;
     color: var(--accent-red);
@@ -481,7 +478,7 @@
   details.howto .howto-body a {
     color: var(--accent-red);
     text-decoration: none;
-    border-bottom: 1px dashed rgba(255, 56, 96, 0.5);
+    border-bottom: 1px dashed rgba(42, 171, 238, 0.5);
     transition: text-shadow 0.2s;
   }
   details.howto .howto-body a:hover { text-shadow: 0 0 8px var(--accent-red); }
@@ -500,7 +497,7 @@
   .sys-status {
     margin-top: 30px;
     padding-top: 20px;
-    border-top: 1px dashed rgba(255, 56, 96, 0.12);
+    border-top: 1px dashed rgba(42, 171, 238, 0.12);
     display: flex;
     justify-content: space-between;
     font-size: 10px;
@@ -536,19 +533,13 @@
     {% if mode == 'setup' %}填完以下模块即可启动监控服务{% elif d.is_admin %}修改运行参数 — 保存后自动重启监控{% else %}个人面板 — 你只能修改自己的密码{% endif %}
   </p>
 
-  {% if mode == 'settings' and d.is_admin %}
-  <div class="note">
-    ⚠ 修改 <code>COMPANY_NAME</code> 需手动 <code>docker compose up -d --build</code> 重建容器;其他字段保存后自动生效。
-  </div>
-  {% endif %}
-
   {% if mode == 'settings' and not d.is_admin %}
-  <div class="note" style="background:rgba(255,56,96,0.08);border-left-color:var(--accent-red);color:var(--accent-red);">
+  <div class="note" style="background:rgba(42,171,238,0.08);border-left-color:var(--accent-red);color:var(--accent-red);">
     ▸ 当前账号 <code>{{ d.me }}</code> 为普通成员,只能修改自己的密码。系统配置请联系管理员或主帐号。
   </div>
   {% endif %}
   {% if mode == 'settings' and d.is_admin and not d.is_super %}
-  <div class="note" style="background:rgba(200,30,58,0.08);border-left-color:var(--accent-deep);color:#d96472;">
+  <div class="note" style="background:rgba(51,144,236,0.08);border-left-color:var(--accent-deep);color:#64abde;">
     ▸ 当前账号 <code>{{ d.me }}</code> 为管理员,可修改系统配置。新增/移除账号权限仅限<b>主帐号</b>。
   </div>
   {% endif %}
@@ -565,7 +556,7 @@
           <input type="text" name="company_name" value="{% if mode == 'settings' %}{{ d.company_name }}{% endif %}"
                  placeholder="例如: yueda, dingfeng" required
                  {% if mode == 'settings' %}readonly{% endif %}>
-          <div class="hint">用作容器名后缀。{% if mode == 'setup' %}设定后不建议修改。{% else %}修改需重建容器。{% endif %}</div>
+          <div class="hint">用作容器名后缀。{% if mode == 'setup' %}安装后不可修改,请谨慎填写。{% else %}已锁定(安装时定死,不可修改)。{% endif %}</div>
         </div>
         <div class="field">
           <label>显示名称 (可中文)</label>
@@ -762,7 +753,7 @@
       <div id="userList" style="font-size:12px;line-height:2;">加载中...</div>
     </div>
 
-    <div class="field" style="margin-top:18px;padding-top:14px;border-top:1px dashed rgba(200,30,58,0.2);">
+    <div class="field" style="margin-top:18px;padding-top:14px;border-top:1px dashed rgba(51,144,236,0.2);">
       <label>新增登入账号</label>
       <div class="two-col" style="margin-top:6px;">
         <input type="text" id="newUsername" placeholder="新账号(字母/数字/_/-)" pattern="[A-Za-z0-9_-]+">
@@ -783,7 +774,7 @@
     </div>
     {% endif %}
 
-    <div class="field" style="margin-top:18px;padding-top:14px;border-top:1px dashed rgba(200,30,58,0.2);">
+    <div class="field" style="margin-top:18px;padding-top:14px;border-top:1px dashed rgba(51,144,236,0.2);">
       <label>修改密码 <span style="color:var(--text-dim);font-weight:400;">(当前账号: {{ d.me }})</span></label>
       <div class="two-col" style="margin-top:6px;">
         <input type="password" id="oldPassword" placeholder="旧密码">
@@ -912,7 +903,7 @@ async function loadUsers() {
       const isMe = u.username === data.me;
       let badge;
       if (u.is_super) {
-        badge = '<span style="color:#ffb84a;font-size:10px;letter-spacing:1.5px;margin-left:8px;text-shadow:0 0 6px rgba(255,213,74,0.5);">[主帐号]</span>';
+        badge = '<span style="color:#f5a623;font-size:10px;letter-spacing:1.5px;margin-left:8px;text-shadow:0 0 6px rgba(255,213,74,0.5);">[主帐号]</span>';
       } else if (u.is_admin) {
         badge = '<span style="color:var(--accent-ember);font-size:10px;letter-spacing:1.5px;margin-left:8px;">[管理员]</span>';
       } else {
@@ -923,7 +914,7 @@ async function loadUsers() {
       const delBtn = (data.is_super && !u.is_super)
         ? `<button type="button" class="test-btn" style="padding:3px 10px;font-size:10px;margin-left:10px;" onclick="removeUser('${u.username}')">移除</button>`
         : '';
-      return `<div style="display:flex;align-items:center;padding:6px 10px;background:rgba(5,7,13,0.5);border:1px solid rgba(200,30,58,0.15);border-radius:6px;margin-bottom:6px;">
+      return `<div style="display:flex;align-items:center;padding:6px 10px;background:rgba(5,5,5,0.5);border:1px solid rgba(51,144,236,0.15);border-radius:6px;margin-bottom:6px;">
         <span style="flex:1;color:var(--text-bright);font-weight:600;">▸ ${u.username}${badge}${meTag}</span>${delBtn}
       </div>`;
     }).join('');

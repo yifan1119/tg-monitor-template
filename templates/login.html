@@ -7,13 +7,13 @@
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --accent-red: #ff3860;
-    --accent-ember: #ff6b3d;
-    --accent-deep: #c81e3a;
-    --bg-0: #0a0406;
-    --bg-1: #120a0c;
-    --text: #e8d5d5;
-    --text-dim: #8a6a6a;
+    --accent-red: #2aabee;
+    --accent-ember: #64abde;
+    --accent-deep: #3390ec;
+    --bg-0: #050505;
+    --bg-1: #0d0d0d;
+    --text: #ffffff;
+    --text-dim: #6d7f8f;
     --text-bright: #ffffff;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -36,18 +36,18 @@
     content: "";
     position: fixed; inset: 0; z-index: 0;
     background:
-      radial-gradient(circle at 15% 20%, rgba(200,30,58,0.28), transparent 50%),
-      radial-gradient(circle at 85% 80%, rgba(255,56,96,0.22), transparent 55%),
-      radial-gradient(circle at 50% 50%, rgba(255,107,61,0.12), transparent 60%),
-      linear-gradient(135deg, #0a0406 0%, #120a0c 50%, #0d0507 100%);
+      radial-gradient(circle at 15% 20%, rgba(51,144,236,0.28), transparent 50%),
+      radial-gradient(circle at 85% 80%, rgba(42,171,238,0.22), transparent 55%),
+      radial-gradient(circle at 50% 50%, rgba(100,171,222,0.12), transparent 60%),
+      linear-gradient(135deg, #050505 0%, #0d0d0d 50%, #050505 100%);
     animation: bgShift 30s ease-in-out infinite;
   }
   body::after {
     content: "";
     position: fixed; inset: 0; z-index: 0;
     background:
-      linear-gradient(rgba(255,56,96,0.05) 1px, transparent 1px) 0 0 / 40px 40px,
-      linear-gradient(90deg, rgba(255,56,96,0.05) 1px, transparent 1px) 0 0 / 40px 40px;
+      linear-gradient(rgba(42,171,238,0.05) 1px, transparent 1px) 0 0 / 40px 40px,
+      linear-gradient(90deg, rgba(42,171,238,0.05) 1px, transparent 1px) 0 0 / 40px 40px;
     mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
     -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
     pointer-events: none;
@@ -60,7 +60,7 @@
   /* 扫描线 */
   .scanline {
     position: fixed; inset: 0; z-index: 1; pointer-events: none;
-    background: linear-gradient(to bottom, transparent 0%, rgba(255,56,96,0.12) 50%, transparent 100%);
+    background: linear-gradient(to bottom, transparent 0%, rgba(42,171,238,0.12) 50%, transparent 100%);
     height: 2px; width: 100%;
     animation: scan 30s linear infinite;
   }
@@ -72,17 +72,17 @@
   /* ===== 登入卡 ===== */
   .login-box {
     position: relative; z-index: 10;
-    background: rgba(10, 15, 28, 0.72);
+    background: rgba(13, 13, 13, 0.72);
     backdrop-filter: blur(20px) saturate(150%);
     -webkit-backdrop-filter: blur(20px) saturate(150%);
-    border: 1px solid rgba(255, 56, 96, 0.22);
+    border: 1px solid rgba(42, 171, 238, 0.22);
     border-radius: 18px;
     padding: 48px 40px 40px;
     width: 420px;
     text-align: center;
     box-shadow:
-      0 0 60px rgba(255, 56, 96, 0.12),
-      0 0 120px rgba(200, 30, 58, 0.08),
+      0 0 60px rgba(42, 171, 238, 0.12),
+      0 0 120px rgba(51, 144, 236, 0.08),
       inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
   /* 卡片边缘流光 */
@@ -92,8 +92,8 @@
     border-radius: 18px;
     padding: 1px;
     background: linear-gradient(135deg,
-      rgba(255,56,96,0.6), transparent 30%,
-      transparent 70%, rgba(255,107,61,0.6));
+      rgba(42,171,238,0.6), transparent 30%,
+      transparent 70%, rgba(100,171,222,0.6));
     -webkit-mask:
       linear-gradient(#000 0 0) content-box,
       linear-gradient(#000 0 0);
@@ -107,7 +107,7 @@
   /* Logo 圈 */
   .login-icon {
     width: 68px; height: 68px;
-    background: linear-gradient(135deg, #ff3860, #c81e3a, #ff6b3d);
+    background: linear-gradient(135deg, #2aabee, #3390ec, #64abde);
     background-size: 200% 200%;
     border-radius: 18px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -115,12 +115,12 @@
     font-family: "Orbitron", sans-serif;
     color: #fff;
     margin-bottom: 22px;
-    box-shadow: 0 0 30px rgba(255, 56, 96, 0.5), 0 0 60px rgba(200, 30, 58, 0.3);
+    box-shadow: 0 0 30px rgba(42, 171, 238, 0.5), 0 0 60px rgba(51, 144, 236, 0.3);
     animation: iconPulse 6s ease-in-out infinite, gradientMove 18s ease infinite;
   }
   @keyframes iconPulse {
-    0%, 100% { transform: scale(1);   box-shadow: 0 0 30px rgba(255,56,96,0.5), 0 0 60px rgba(200,30,58,0.3); }
-    50%      { transform: scale(1.06); box-shadow: 0 0 50px rgba(255,56,96,0.8), 0 0 100px rgba(200,30,58,0.5); }
+    0%, 100% { transform: scale(1);   box-shadow: 0 0 30px rgba(42,171,238,0.5), 0 0 60px rgba(51,144,236,0.3); }
+    50%      { transform: scale(1.06); box-shadow: 0 0 50px rgba(42,171,238,0.8), 0 0 100px rgba(51,144,236,0.5); }
   }
   @keyframes gradientMove {
     0%, 100% { background-position: 0% 50%; }
@@ -134,13 +134,13 @@
     font-weight: 900;
     letter-spacing: 2px;
     margin-bottom: 8px;
-    background: linear-gradient(90deg, #ff3860, #c81e3a, #ff6b3d, #c81e3a, #ff3860);
+    background: linear-gradient(90deg, #2aabee, #3390ec, #64abde, #3390ec, #2aabee);
     background-size: 300% 100%;
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
     animation: textFlow 20s linear infinite;
-    text-shadow: 0 0 30px rgba(255, 56, 96, 0.3);
+    text-shadow: 0 0 30px rgba(42, 171, 238, 0.3);
   }
   @keyframes textFlow {
     0%   { background-position: 0% 50%; }
@@ -161,7 +161,7 @@
     letter-spacing: 3px;
     text-transform: uppercase;
     margin-bottom: 6px;
-    text-shadow: 0 0 10px rgba(255, 56, 96, 0.5);
+    text-shadow: 0 0 10px rgba(42, 171, 238, 0.5);
   }
   .login-box > p {
     font-size: 12px;
@@ -178,8 +178,8 @@
     width: 100%;
     padding: 14px 16px;
     border-radius: 10px;
-    border: 1px solid rgba(255, 56, 96, 0.2);
-    background: rgba(5, 7, 13, 0.6);
+    border: 1px solid rgba(42, 171, 238, 0.2);
+    background: rgba(5, 5, 5, 0.6);
     color: var(--text-bright);
     font-family: "JetBrains Mono", monospace;
     font-size: 15px;
@@ -190,8 +190,8 @@
   }
   .login-input:focus {
     border-color: var(--accent-red);
-    box-shadow: 0 0 0 3px rgba(255, 56, 96, 0.15), 0 0 25px rgba(255, 56, 96, 0.25);
-    background: rgba(5, 7, 13, 0.85);
+    box-shadow: 0 0 0 3px rgba(42, 171, 238, 0.15), 0 0 25px rgba(42, 171, 238, 0.25);
+    background: rgba(5, 5, 5, 0.85);
   }
   .login-input::placeholder {
     color: var(--text-dim); letter-spacing: 1px; text-transform: uppercase; font-size: 12px;
@@ -203,7 +203,7 @@
     padding: 14px;
     border-radius: 10px;
     border: none;
-    background: linear-gradient(135deg, #ff3860 0%, #c81e3a 50%, #ff6b3d 100%);
+    background: linear-gradient(135deg, #2aabee 0%, #3390ec 50%, #64abde 100%);
     background-size: 200% 200%;
     color: #fff;
     font-family: "Orbitron", sans-serif;
@@ -215,11 +215,11 @@
     position: relative;
     overflow: hidden;
     transition: all 0.3s ease;
-    box-shadow: 0 4px 20px rgba(255, 56, 96, 0.35);
+    box-shadow: 0 4px 20px rgba(42, 171, 238, 0.35);
   }
   .login-btn:hover {
     background-position: 100% 100%;
-    box-shadow: 0 6px 35px rgba(255, 56, 96, 0.55), 0 0 50px rgba(255, 107, 61, 0.35);
+    box-shadow: 0 6px 35px rgba(42, 171, 238, 0.55), 0 0 50px rgba(100, 171, 222, 0.35);
     transform: translateY(-1px);
   }
   .login-btn:active { transform: translateY(0); }
@@ -237,9 +237,9 @@
     margin-top: 16px;
     padding: 10px 14px;
     border-radius: 8px;
-    background: rgba(255, 56, 96, 0.1);
-    border: 1px solid rgba(255, 56, 96, 0.3);
-    color: #ff7a8a;
+    background: rgba(42, 171, 238, 0.1);
+    border: 1px solid rgba(42, 171, 238, 0.3);
+    color: #ff6b6b;
     font-size: 12px;
     letter-spacing: 1px;
     animation: errorShake 0.4s ease;
@@ -255,7 +255,7 @@
   .sys-status {
     margin-top: 28px;
     padding-top: 18px;
-    border-top: 1px dashed rgba(255, 56, 96, 0.12);
+    border-top: 1px dashed rgba(42, 171, 238, 0.12);
     display: flex;
     justify-content: space-between;
     font-size: 10px;
@@ -267,8 +267,8 @@
     display: inline-block;
     width: 6px; height: 6px;
     border-radius: 50%;
-    background: #7dd88a;
-    box-shadow: 0 0 8px #7dd88a;
+    background: #4fae4f;
+    box-shadow: 0 0 8px #4fae4f;
     margin-right: 6px;
     animation: ledBlink 3.5s ease-in-out infinite;
   }
