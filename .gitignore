@@ -1,0 +1,22 @@
+# 实例专属机密 — 永远不进 git
+.env
+service-account.json
+
+# 运行时数据
+sessions/*
+!sessions/.gitkeep
+data/*
+!data/.gitkeep
+*.session
+*.session-journal
+data.db
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store

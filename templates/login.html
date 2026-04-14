@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TG 监控 - 登录</title>
+    <style>
+        :root {
+            --bg: #0b1117;
+            --card: #141c27;
+            --border: #1e2a3a;
+            --text: #c9d1d9;
+            --text-dim: #6b7d8e;
+            --text-bright: #f0f6fc;
+            --accent: #58a6ff;
+            --red: #f85149;
+            --red-dim: rgba(248,81,73,0.1);
+            --radius: 10px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-font-smoothing: antialiased;
+        }
+        .login-box {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 40px 36px;
+            width: 380px;
+            text-align: center;
+        }
+        .login-icon {
+            width: 48px; height: 48px;
+            background: rgba(88,166,255,0.12);
+            border-radius: 12px;
+            display: inline-flex; align-items: center; justify-content: center;
+            font-size: 22px; margin-bottom: 20px;
+        }
+        .login-box h1 {
+            font-size: 18px; color: var(--text-bright);
+            margin-bottom: 6px;
+        }
+        .login-box p {
+            font-size: 13px; color: var(--text-dim);
+            margin-bottom: 24px;
+        }
+        .login-input {
+            width: 100%; padding: 11px 14px; border-radius: 6px;
+            border: 1px solid var(--border); background: var(--bg);
+            color: var(--text-bright); font-size: 14px; outline: none;
+            text-align: center; letter-spacing: 1px;
+            transition: border-color 0.15s;
+        }
+        .login-input:focus { border-color: var(--accent); }
+        .login-input::placeholder { color: var(--text-dim); letter-spacing: 0; }
+        .login-btn {
+            width: 100%; padding: 11px; border-radius: 6px; border: none;
+            background: var(--accent); color: #fff; font-size: 14px;
+            font-weight: 500; cursor: pointer; margin-top: 12px;
+            transition: background 0.15s;
+        }
+        .login-btn:hover { background: #79b8ff; }
+        .error {
+            margin-top: 12px; padding: 8px 12px; border-radius: 6px;
+            background: var(--red-dim); color: var(--red); font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <form class="login-box" method="POST">
+        <div class="login-icon">T</div>
+        <h1>TG 外事号监控</h1>
+        {% if company %}<p style="color:#58a6ff;margin-bottom:8px;font-weight:500;">{{ company }}</p>{% endif %}
+        <p>请输入管理密码</p>
+        <input class="login-input" type="password" name="password"
+               placeholder="管理密码" autofocus autocomplete="off">
+        <button class="login-btn" type="submit">登录</button>
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+    </form>
+</body>
+</html>

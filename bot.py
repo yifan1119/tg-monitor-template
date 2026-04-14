@@ -1,0 +1,262 @@
+"""TG Bot — 预警推送 + 审核按钮"""
+import json
+import logging
+import asyncio
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+
+import config
+import database as db
+import templates
+
+logger = logging.getLogger(__name__)
+
+
+class AlertBot:
+    def __init__(self, sheets_writer=None):
+        self.sheets = sheets_writer
+        if not config.BOT_TOKEN:
+            logger.warning("BOT_TOKEN 未设置，Bot 功能暂时关闭")
+            self.bot = None
+            self.dp = None
+            return
+
+        self.bot = Bot(token=config.BOT_TOKEN)
+        self.dp = Dispatcher()
+        self._register_handlers()
+
+    def _register_handlers(self):
+        @self.dp.callback_query(F.data.startswith("approve:") | F.data.startswith("reject:"))
+        async def on_audit(callback: CallbackQuery):
+            data = callback.data
+            action, alert_id_str = data.split(":", 1)
+            alert_id = int(alert_id_str)
+
+            alert = db.get_alert(alert_id)
+            if not alert:
+                await callback.answer("预警不存在")
+                return
+
+            if alert["status"] != "pending":
+                await callback.answer("已处理过了")
+                return
+
+            if action == "approve":
+                db.update_alert_status(alert_id, "approved")
+                # 写入对应的预警分表
+                self._write_alert_to_sheet(alert)
+                # 更新消息，去掉按钮
+                await callback.message.edit_text(
+                    callback.message.text + "\n\n✅ 已通过 — " + (callback.from_user.full_name or ""),
+                )
+                await callback.answer("已通过")
+            else:
+                db.update_alert_status(alert_id, "rejected")
+                await callback.message.edit_text(
+                    callback.message.text + "\n\n❌ 已拒绝 — " + (callback.from_user.full_name or ""),
+                )
+                await callback.answer("已拒绝")
+
+    def _make_keyboard(self, alert_id):
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="通过", callback_data=f"approve:{alert_id}"),
+                InlineKeyboardButton(text="拒绝", callback_data=f"reject:{alert_id}"),
+            ]
+        ])
+
+    def _write_alert_to_sheet(self, alert):
+        """审核通过后写入预警分表"""
+        if not self.sheets:
+            return
+        for attempt in range(3):
+            try:
+                account = db.get_conn().execute(
+                    "SELECT * FROM accounts WHERE id=?", (alert["account_id"],)
+                ).fetchone()
+                peer = db.get_conn().execute(
+                    "SELECT * FROM peers WHERE id=?", (alert["peer_id"],)
+                ).fetchone() if alert["peer_id"] else None
+
+                company = account["company"] if account else ""
+                operator = account["operator"] if account else ""
+                account_name = account["name"] if account else ""
+                peer_name = peer["name"] if peer else ""
+                now = db.now_bj()
+
+                with self.sheets._write_lock:
+                    if alert["type"] == "no_reply":
+                        ws = self.sheets.spreadsheet.worksheet(f"信息未回复预警{config.COMPANY_DISPLAY}")
+                        self.sheets._rate_limit()
+                        ws.append_row([company, operator, account_name, peer_name, alert["message_text"], now])
+                    elif alert["type"] == "deleted":
+                        ws = self.sheets.spreadsheet.worksheet(f"信息删除预警{config.COMPANY_DISPLAY}")
+                        self.sheets._rate_limit()
+                        ws.append_row([company, operator, account_name, peer_name, now])
+                return
+            except Exception as e:
+                logger.error("写入预警分表失败 (尝试 %d/3): %s", attempt + 1, e)
+                if attempt < 2:
+                    import time; time.sleep(2)
+
+    async def send_keyword_alert(self, account_id, peer, keyword, text):
+        """发送关键词预警（每个对话框每天只推一次）"""
+        if not self.bot or not config.ALERT_GROUP_ID:
+            return
+        if db.has_alert_today("keyword", peer["id"]):
+            return
+
+        account = db.get_conn().execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+        if not account:
+            return
+
+        msg = templates.keyword_alert(
+            company=account["company"],
+            operator=account["operator"],
+            account_name=account["name"],
+            peer_name=peer["name"],
+            keyword=keyword,
+            message_text=text,
+        )
+        try:
+            await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+            # 写入关键词监听分表: 所属公司,商务人员,外事号,广告主,关键词,消息内容,记录时间
+            if self.sheets:
+                for attempt in range(3):
+                    try:
+                        with self.sheets._write_lock:
+                            ws = self.sheets.spreadsheet.worksheet(f"关键词监听{config.COMPANY_DISPLAY}")
+                            self.sheets._rate_limit()
+                            ws.append_row([
+                                account["company"], account["operator"], account["name"],
+                                peer["name"], keyword, text, db.now_bj()
+                            ])
+                        break
+                    except Exception as e2:
+                        logger.error("写入关键词分表失败 (尝试 %d/3): %s", attempt + 1, e2)
+                        if attempt < 2:
+                            import time; time.sleep(2)
+            # 记录到 alerts 表
+            db.insert_alert("keyword", account_id, peer["id"], message_text=f"[{keyword}] {text}")
+        except Exception as e:
+            logger.error("发送关键词预警失败: %s", e)
+
+    async def send_no_reply_alert(self, account_id, peer, message_text, msg_id):
+        """发送未回复预警（每个广告主每天只推一次）"""
+        if not self.bot or not config.ALERT_GROUP_ID:
+            return
+        if db.has_alert_today("no_reply", peer["id"]):
+            return
+
+        account = db.get_conn().execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+        if not account:
+            return
+
+        # 创建预警记录
+        alert_id = db.insert_alert(
+            alert_type="no_reply",
+            account_id=account_id,
+            peer_id=peer["id"],
+            msg_id=msg_id,
+            message_text=message_text,
+        )
+
+        msg = templates.no_reply_alert(
+            company=account["company"],
+            operator=account["operator"],
+            account_name=account["name"],
+            peer_name=peer["name"],
+            message_text=message_text,
+        )
+        try:
+            sent = await self.bot.send_message(
+                config.ALERT_GROUP_ID, msg,
+                reply_markup=self._make_keyboard(alert_id),
+            )
+            db.update_alert_bot_msg(alert_id, sent.message_id)
+        except Exception as e:
+            logger.error("发送未回复预警失败: %s", e)
+
+    async def send_delete_alert(self, account_id, peer, message_text, msg_id):
+        """发送删除预警（每个广告主每天只推一次）"""
+        if not self.bot or not config.ALERT_GROUP_ID:
+            return
+        if db.has_alert_today("deleted", peer["id"]):
+            return
+
+        account = db.get_conn().execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+        if not account:
+            return
+
+        alert_id = db.insert_alert(
+            alert_type="deleted",
+            account_id=account_id,
+            peer_id=peer["id"],
+            msg_id=msg_id,
+            message_text=message_text,
+        )
+
+        msg = templates.delete_alert(
+            company=account["company"],
+            operator=account["operator"],
+            account_name=account["name"],
+            peer_name=peer["name"],
+            message_text=message_text,
+        )
+        try:
+            sent = await self.bot.send_message(
+                config.ALERT_GROUP_ID, msg,
+                reply_markup=self._make_keyboard(alert_id),
+            )
+            db.update_alert_bot_msg(alert_id, sent.message_id)
+        except Exception as e:
+            logger.error("发送删除预警失败: %s", e)
+
+    async def send_daily_report(self):
+        """发送每日总结"""
+        if not self.bot or not config.ALERT_GROUP_ID:
+            return
+
+        from database import TZ_BJ
+        from datetime import datetime
+
+        now = datetime.now(TZ_BJ).strftime("%Y-%m-%d %H:%M:%S")
+
+        # 统计昨天的数据（00:00 发送时统计前一天）
+        from datetime import timedelta
+        yesterday = (datetime.now(TZ_BJ) - timedelta(days=1)).strftime("%Y-%m-%d")
+        conn = db.get_conn()
+
+        chat_count = conn.execute(
+            "SELECT COUNT(DISTINCT peer_id) FROM messages WHERE timestamp LIKE ?",
+            (f"{yesterday}%",)
+        ).fetchone()[0]
+
+        no_reply = conn.execute(
+            "SELECT COUNT(*) FROM alerts WHERE type='no_reply' AND created_at LIKE ?",
+            (f"{yesterday}%",)
+        ).fetchone()[0]
+
+        deleted = conn.execute(
+            "SELECT COUNT(*) FROM alerts WHERE type='deleted' AND created_at LIKE ?",
+            (f"{yesterday}%",)
+        ).fetchone()[0]
+
+        keyword_count = conn.execute(
+            "SELECT COUNT(*) FROM alerts WHERE type='keyword' AND created_at LIKE ?",
+            (f"{yesterday}%",)
+        ).fetchone()[0]
+
+        msg = templates.daily_report(yesterday, now, chat_count, no_reply, deleted, keyword_count)
+        try:
+            await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+            logger.info("日报已推送")
+        except Exception as e:
+            logger.error("发送日报失败: %s", e)
+
+    async def start(self):
+        """启动 Bot 轮询"""
+        if not self.dp:
+            return
+        logger.info("Bot 启动...")
+        await self.dp.start_polling(self.bot)

@@ -1,0 +1,40 @@
+services:
+  tg-monitor:
+    build: .
+    container_name: tg-monitor-${COMPANY_NAME:-default}
+    restart: unless-stopped
+    volumes:
+      - ./sessions:/app/sessions
+      - ./data:/app/data
+      - ./.env:/app/.env
+      - ./service-account.json:/app/service-account.json
+    environment:
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "main.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build: .
+    container_name: tg-web-${COMPANY_NAME:-default}
+    restart: unless-stopped
+    command: python web.py
+    ports:
+      - "${WEB_PORT:-5001}:5001"
+    volumes:
+      - ./sessions:/app/sessions
+      - ./data:/app/data
+      - ./.env:/app/.env
+      - ./service-account.json:/app/service-account.json
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
