@@ -174,7 +174,28 @@ for i in {1..60}; do
     sleep 1
 done
 
-VPS_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || echo "<VPS_IP>")
+# 拿真实公网 IPv4
+# 1) 从默认路由源地址拿(最可靠,就是出口 eth0 的 IPv4)
+# 2) fallback 到 hostname -I / 外网服务(强制 -4)
+VPS_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
+if [ -z "$VPS_IP" ]; then
+    VPS_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+fi
+if [ -z "$VPS_IP" ] || [[ "$VPS_IP" =~ ^(10\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[0-1]\.|192\.168\.|127\.) ]]; then
+    VPS_IP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || curl -4 -s --max-time 5 ipinfo.io/ip 2>/dev/null || echo "<VPS_IP>")
+fi
+
+# 自检:从公网 IP 能不能访问到 web
+EXTERNAL_OK="unknown"
+if [ "$VPS_IP" != "<VPS_IP>" ]; then
+    ext_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${VPS_IP}:${WEB_PORT}/setup" 2>/dev/null || echo "")
+    [ "$ext_code" = "200" ] && EXTERNAL_OK="yes" || EXTERNAL_OK="no"
+fi
+
+# VPS 内部 ufw 兜底(有些镜像默认装了 ufw 且 active)
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw allow "${WEB_PORT}/tcp" >/dev/null 2>&1 || true
+fi
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"
@@ -185,6 +206,25 @@ echo "  📌 下一步：打开浏览器完成设置精灵"
 echo ""
 echo "     👉  http://${VPS_IP}:${WEB_PORT}/setup"
 echo ""
+
+if [ "$EXTERNAL_OK" = "yes" ]; then
+    echo "  ✅ 外网自检通过，直接打开上面链接即可开始设置"
+    echo ""
+elif [ "$EXTERNAL_OK" = "no" ]; then
+    echo "  ⚠️  外网自检未通过（本机 HTTP 200，外部 IP 访问不到）"
+    echo ""
+    echo "     99% 是云厂商的云端防火墙挡了端口 ${WEB_PORT}"
+    echo "     解决：去云厂商控制台开放 TCP ${WEB_PORT} 入站规则"
+    echo "       • Hostinger : hPanel → VPS → 安全 → 防火墙"
+    echo "       • AWS       : EC2 → Security Groups → Inbound Rules"
+    echo "       • GCP       : VPC Network → Firewall → Create Rule"
+    echo "       • DO/Vultr  : Networking → Firewalls"
+    echo "       • 阿里/腾讯 : 云服务器控制台 → 安全组 → 入方向"
+    echo ""
+    echo "     开完后再打开上面的链接即可"
+    echo ""
+fi
+
 echo "  当前 VPS 已部署部门:"
 for d in /root/tg-monitor-*/; do
     name=$(basename "$d" | sed 's/^tg-monitor-//')
