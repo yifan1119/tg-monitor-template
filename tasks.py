@@ -188,38 +188,50 @@ class TaskScheduler:
             await asyncio.sleep(config.PATROL_INTERVAL)
 
     async def _no_reply_loop(self):
-        """每分钟检查未回复"""
+        """每分钟检查未回复。按 WORK_SCHEDULE 精确判断工作时段：
+        - 当前不在工作时段（午休 13-15 / 晚休 19-20 / 周日等）→ 跳过
+        - 累计未回复分钟按工作时段算（非工作时段不累计）"""
         await asyncio.sleep(15)
         while self._running:
             try:
                 now = datetime.now(TZ_BJ)
-                hour = now.hour
 
-                # 只在工作时间检查
-                if config.WORK_HOUR_START <= hour < config.WORK_HOUR_END:
-                    accounts = db.get_all_accounts()
-                    for account in accounts:
-                        unanswered = db.get_unanswered_peers(
-                            account["id"], minutes=config.NO_REPLY_MINUTES
-                        )
-                        for row in unanswered:
-                            # 只跳过「启动时已经远超未回复阈值」的远古消息
-                            # 避免重启窗口内的消息被永久漏报
-                            if self.startup_time:
-                                try:
-                                    last_dt = datetime.strptime(row["last_time"], "%Y-%m-%d %H:%M:%S")
-                                    startup_dt = datetime.strptime(self.startup_time, "%Y-%m-%d %H:%M:%S")
-                                    if (startup_dt - last_dt).total_seconds() > config.NO_REPLY_MINUTES * 60:
-                                        continue
-                                except Exception:
-                                    pass
-                            peer = db.get_peer(row["tg_id"], account["id"])
-                            if peer and self.bot:
-                                await self.bot.send_no_reply_alert(
-                                    account["id"], peer,
-                                    row["last_text"], row["last_msg_id"]
-                                )
-                                logger.info("未回复预警: %s <- %s", account['name'], peer['name'])
+                # 当前不在工作时段 → 这一轮不发任何预警
+                if not config.is_work_time(now):
+                    await asyncio.sleep(60)
+                    continue
+
+                accounts = db.get_all_accounts()
+                for account in accounts:
+                    candidates = db.get_unanswered_candidates(account["id"])
+                    for row in candidates:
+                        try:
+                            last_dt = datetime.strptime(row["last_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ_BJ)
+                        except Exception:
+                            continue
+
+                        # 按工作时段累计分钟（午休/晚休/周日不算）
+                        elapsed = config.work_elapsed_minutes(last_dt, now)
+                        if elapsed < config.NO_REPLY_MINUTES:
+                            continue
+
+                        # 启动前已远超阈值的远古消息不补推
+                        if self.startup_time:
+                            try:
+                                startup_dt = datetime.strptime(self.startup_time, "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ_BJ)
+                                if config.work_elapsed_minutes(last_dt, startup_dt) > config.NO_REPLY_MINUTES:
+                                    continue
+                            except Exception:
+                                pass
+
+                        peer = db.get_peer(row["tg_id"], account["id"])
+                        if peer and self.bot:
+                            await self.bot.send_no_reply_alert(
+                                account["id"], peer,
+                                row["last_text"], row["last_msg_id"]
+                            )
+                            logger.info("未回复预警: %s <- %s (累计 %.1f 工作分钟)",
+                                        account['name'], peer['name'], elapsed)
             except Exception as e:
                 logger.error("未回复检查失败: %s", e)
             await asyncio.sleep(60)
