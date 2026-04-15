@@ -5,7 +5,7 @@
 #   ./update.sh
 #
 # 或 curl 方式(repo public 后):
-#   curl -fsSL https://raw.githubusercontent.com/PINK1119ZZ/tg-monitor-template/main/update.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/yifan1119/tg-monitor-template/main/update.sh | bash
 #
 # 行为:
 #   1. git fetch + 硬重置到 origin/main (用户本地改动会被丢弃)

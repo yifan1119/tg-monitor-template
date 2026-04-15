@@ -41,7 +41,7 @@
 
 ```bash
 cd /root
-git clone https://github.com/PINK1119ZZ/tg-monitor-template.git
+git clone https://github.com/yifan1119/tg-monitor-template.git
 cd tg-monitor-template
 
 # 用法: ./setup_company.sh <部门名> <预警群ID> <BOT_TOKEN> <SHEET_ID> [WEB_PORT]

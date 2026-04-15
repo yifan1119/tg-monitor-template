@@ -13,7 +13,7 @@ set -e
 
 COMPANY_NAME="${1:-}"
 REQUESTED_PORT="${2:-}"
-REPO="https://github.com/PINK1119ZZ/tg-monitor-template.git"
+REPO="https://github.com/yifan1119/tg-monitor-template.git"
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"
