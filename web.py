@@ -1132,7 +1132,7 @@ def api_dedup_clear():
     入参: { "type": "keyword" | "no_reply" | "deleted" | "all" }
     仅管理员可调用,避免普通用户误操作把主管的告警清光。
     """
-    me = current_user()
+    me = flask_session.get("username", "")
     if not is_admin(me):
         return jsonify({"ok": False, "msg": "只有管理员可清空去重"}), 403
 
