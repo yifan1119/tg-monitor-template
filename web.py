@@ -336,13 +336,22 @@ def _get_spreadsheet():
     return gc.open_by_key(config.SHEET_ID)
 
 
-def _create_sheet_tab(name):
-    """登录成功后自动建分页（格式与舒舒一致：全部置中 + 斑马纹 + 冻结 6 行）"""
+def _create_sheet_tab(name, operator="", company=""):
+    """登录成功后自动建分页（格式与舒舒一致：全部置中 + 斑马纹 + 冻结 6 行）
+
+    name: 外事号 TG 昵称 (会写到 row 5 col C)
+    operator: 商务人员 (会写到 B2；空就留白等用户自己填)
+    company: 所属中心/部门 (会写到 B3；空就默认用 .env 的 COMPANY_DISPLAY)
+    """
     try:
         sp = _get_spreadsheet()
         existing = [ws.title for ws in sp.worksheets()]
         if name in existing:
             return
+
+        # company 默认读 env COMPANY_DISPLAY
+        if not company:
+            company = read_env().get("COMPANY_DISPLAY") or read_env().get("COMPANY_NAME") or ""
 
         TOTAL_ROWS = 1000
         TOTAL_COLS = 30
@@ -355,11 +364,14 @@ def _create_sheet_tab(name):
         LIGHT_BLUE = {"red": 0.8784314, "green": 0.96862745, "blue": 0.98039216}
         TEAL = {"red": 0.29803923, "green": 0.69803923, "blue": 0.69803923}
 
-        # 文字内容 (labels + 第一个对话槽标题)
-        ws.update("A2:A3", [["商务人员"], ["中心/部门"]])
+        # 文字内容: label A2/A3 + value B2/B3 + 对话槽标题 row5-6
+        ws.update("A2:B3", [
+            ["商务人员", operator],
+            ["中心/部门", company],
+        ])
         ws.update("A5:C6", [
             ["A", "外事号", name],
-            ["B", "广告主", ""],
+            ["B", "广告主", "（等消息进来自动填）"],
         ])
 
         center_middle = {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}
