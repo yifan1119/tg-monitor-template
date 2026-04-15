@@ -750,11 +750,24 @@
               </button>
             </div>
           {% else %}
-            <a href="/api/oauth/start" class="test-btn" id="oauthStartBtn"
-               style="display:inline-block;text-decoration:none;background:rgba(126,201,255,0.15);border-color:rgba(126,201,255,0.5);color:#7ec9ff;">
-              ▸ 连接 Google Drive(OAuth 授权)
-            </a>
-            <span class="test-result" style="color:#7c8a9a;">点击会跳转 Google 授权页,完成后回到这里</span>
+            {% if mode == 'setup' %}
+              {# setup 模式:OAuth 会跳转到 Google,但这时 .env 里还没保存 Client ID/Secret,
+                 点了会报「请先保存」并清空整个表单。禁用掉让用户先走完保存流程。#}
+              <a href="javascript:void(0)" class="test-btn"
+                 onclick="alert('请先把整个表单填完并点最下面的「保存并启动」按钮。\n\n保存后会自动跳登录页 → 登录 → 在「设置」页面再点这个按钮做 OAuth 授权。\n\n(直接点会跳走 Google,回来表单就空了)'); return false;"
+                 style="display:inline-block;text-decoration:none;background:rgba(128,128,128,0.12);border-color:rgba(128,128,128,0.35);color:#7c8a9a;cursor:not-allowed;opacity:0.7;">
+                ⊘ 连接 Google Drive (请先保存再来)
+              </a>
+              <span class="test-result" style="color:#ff9b3d;">
+                ⚠ 保存前不能授权 — 先填完整个表单点「保存并启动」,登录后到「设置」页面再点这里
+              </span>
+            {% else %}
+              <a href="/api/oauth/start" class="test-btn" id="oauthStartBtn"
+                 style="display:inline-block;text-decoration:none;background:rgba(126,201,255,0.15);border-color:rgba(126,201,255,0.5);color:#7ec9ff;">
+                ▸ 连接 Google Drive(OAuth 授权)
+              </a>
+              <span class="test-result" style="color:#7c8a9a;">点击会跳转 Google 授权页,完成后回到这里</span>
+            {% endif %}
           {% endif %}
         </div>
 
