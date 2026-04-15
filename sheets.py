@@ -87,10 +87,36 @@ class SheetsWriter:
                         "fields": "pixelSize",
                     }
                 })
+            # 给 row 2+ 加双色斑马纹，跟分表统一视觉
+            width_requests.append({
+                "addBanding": {
+                    "bandedRange": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "startRowIndex": 1,  # row 2 起（0-based = 1）
+                            "endRowIndex": ws.row_count,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": len(headers),
+                        },
+                        "rowProperties": {
+                            "firstBandColor": {"red": 0.8784314, "green": 0.96862745, "blue": 0.98039216},  # 浅蓝
+                            "secondBandColor": {"red": 1.0, "green": 1.0, "blue": 1.0},  # 白
+                        },
+                    },
+                }
+            })
             if width_requests:
                 self._rate_limit()
-                self.spreadsheet.batch_update({"requests": width_requests})
-            logger.info("预警分页表头写入 + 列宽调整: %s", ws.title)
+                try:
+                    self.spreadsheet.batch_update({"requests": width_requests})
+                except Exception as e:
+                    # banding 可能已存在，去掉 addBanding 重试
+                    logger.warning("预警分页 batch_update 失败，退回无斑马纹: %s", e)
+                    self._rate_limit()
+                    self.spreadsheet.batch_update({
+                        "requests": [r for r in width_requests if "addBanding" not in r]
+                    })
+            logger.info("预警分页表头写入 + 列宽调整 + 斑马纹: %s", ws.title)
         except Exception as e:
             logger.warning("预警分页表头写入失败 (%s): %s", ws.title, e)
 

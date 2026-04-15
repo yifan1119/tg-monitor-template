@@ -422,18 +422,22 @@ def _create_sheet_tab(name, operator="", company=""):
             _col_dim(0, 1, 180),
             _col_dim(1, 2, 192),
             _col_dim(2, 3, 350),
-            # 斑马纹: row 7+ A-C 交替浅蓝/白
-            {"addBanding": {
-                "bandedRange": {
-                    "range": {"sheetId": sheet_id,
-                              "startRowIndex": 6, "endRowIndex": TOTAL_ROWS,
-                              "startColumnIndex": 0, "endColumnIndex": 3},
-                    "rowProperties": {
-                        "firstBandColor": LIGHT_BLUE,
-                        "secondBandColor": WHITE,
+            # 斑马纹: row 7+ 全部 30 列统一双色（淡蓝 / 白交替），一次铺满
+            # 每 3 列一个对话槽独立 banding，之后新 peer 进来的 slot 视觉会自然统一
+            *[
+                {"addBanding": {
+                    "bandedRange": {
+                        "range": {"sheetId": sheet_id,
+                                  "startRowIndex": 6, "endRowIndex": TOTAL_ROWS,
+                                  "startColumnIndex": slot * 3, "endColumnIndex": slot * 3 + 3},
+                        "rowProperties": {
+                            "firstBandColor": LIGHT_BLUE,
+                            "secondBandColor": WHITE,
+                        },
                     },
-                },
-            }},
+                }}
+                for slot in range(TOTAL_COLS // 3)  # 10 个对话槽都预先带斑马纹
+            ],
         ]
 
         sp.batch_update({"requests": requests})
