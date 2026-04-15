@@ -92,7 +92,9 @@ class AlertBot:
                     elif alert["type"] == "deleted":
                         ws = self.sheets.spreadsheet.worksheet(f"信息删除预警{config.COMPANY_DISPLAY}")
                         self.sheets._rate_limit()
-                        ws.append_row([company, operator, account_name, peer_name, now])
+                        # 第 5 列写入"删除前消息内容"方便主管看板回溯
+                        ws.append_row([company, operator, account_name, peer_name,
+                                       alert["message_text"] or "", now])
                 return
             except Exception as e:
                 logger.error("写入预警分表失败 (尝试 %d/3): %s", attempt + 1, e)
@@ -232,22 +234,32 @@ class AlertBot:
             (f"{yesterday}%",)
         ).fetchone()[0]
 
-        no_reply = conn.execute(
-            "SELECT COUNT(*) FROM alerts WHERE type='no_reply' AND created_at LIKE ?",
-            (f"{yesterday}%",)
-        ).fetchone()[0]
+        def _status_breakdown(type_name):
+            rows = conn.execute(
+                "SELECT status, COUNT(*) FROM alerts WHERE type=? AND created_at LIKE ? GROUP BY status",
+                (type_name, f"{yesterday}%")
+            ).fetchall()
+            bucket = {"approved": 0, "pending": 0, "rejected": 0}
+            for status, cnt in rows:
+                if status in bucket:
+                    bucket[status] = cnt
+            return bucket
 
-        deleted = conn.execute(
-            "SELECT COUNT(*) FROM alerts WHERE type='deleted' AND created_at LIKE ?",
-            (f"{yesterday}%",)
-        ).fetchone()[0]
+        no_reply_detail = _status_breakdown("no_reply")
+        no_reply = sum(no_reply_detail.values())
+
+        delete_detail = _status_breakdown("deleted")
+        deleted = sum(delete_detail.values())
 
         keyword_count = conn.execute(
             "SELECT COUNT(*) FROM alerts WHERE type='keyword' AND created_at LIKE ?",
             (f"{yesterday}%",)
         ).fetchone()[0]
 
-        msg = templates.daily_report(yesterday, now, chat_count, no_reply, deleted, keyword_count)
+        msg = templates.daily_report(
+            yesterday, now, chat_count, no_reply, deleted, keyword_count,
+            no_reply_detail=no_reply_detail, delete_detail=delete_detail,
+        )
         try:
             await self.bot.send_message(config.ALERT_GROUP_ID, msg)
             logger.info("日报已推送")

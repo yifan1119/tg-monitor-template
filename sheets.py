@@ -30,18 +30,88 @@ class SheetsWriter:
         logger.info("Google Sheets 连接成功: %s", self.spreadsheet.title)
         self.ensure_alert_tabs()
 
+    # 告警分页表头（跟苏总现有 Sheet 格式 1:1 对齐）
+    ALERT_HEADERS = {
+        "信息未回复预警": ["所属公司", "商务人员", "外事号", "广告主", "未回复消息", "记录时间"],
+        "关键词监听":   ["所属公司", "商务人员", "外事号", "广告主", "关键词", "消息内容", "记录时间"],
+        "信息删除预警": ["所属公司", "商务人员", "外事号", "广告主", "删除前消息内容", "记录时间"],
+    }
+
+    # 各列宽度（按表头文本映射，像素）
+    ALERT_COL_WIDTHS = {
+        "所属公司":       160,
+        "商务人员":       100,
+        "外事号":         100,
+        "广告主":         160,
+        "未回复消息":     350,
+        "消息内容":       350,
+        "删除前消息内容": 350,
+        "关键词":         100,
+        "记录时间":       180,
+    }
+
+    def _write_alert_header(self, ws, prefix):
+        """给告警分页写表头 + 上色 + 冻结首行 + 调列宽（幂等：只在空白分页执行）"""
+        headers = self.ALERT_HEADERS[prefix]
+        try:
+            self._rate_limit()
+            first_row = ws.row_values(1)
+        except Exception:
+            first_row = []
+        if first_row:  # 已有表头，跳过
+            return
+        try:
+            self._rate_limit()
+            ws.update("A1", [headers])
+            self._rate_limit()
+            ws.format(f"A1:{chr(64+len(headers))}1", {
+                "backgroundColor": {"red": 0.3, "green": 0.7, "blue": 0.7},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                "horizontalAlignment": "CENTER",
+            })
+            self._rate_limit()
+            ws.freeze(rows=1)
+            # 设列宽（batch_update 一次搞定）
+            width_requests = []
+            for i, h in enumerate(headers):
+                w = self.ALERT_COL_WIDTHS.get(h, 120)
+                width_requests.append({
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "dimension": "COLUMNS",
+                            "startIndex": i,
+                            "endIndex": i + 1,
+                        },
+                        "properties": {"pixelSize": w},
+                        "fields": "pixelSize",
+                    }
+                })
+            if width_requests:
+                self._rate_limit()
+                self.spreadsheet.batch_update({"requests": width_requests})
+            logger.info("预警分页表头写入 + 列宽调整: %s", ws.title)
+        except Exception as e:
+            logger.warning("预警分页表头写入失败 (%s): %s", ws.title, e)
+
     def ensure_alert_tabs(self):
         """自动建立/修正预警分页（信息未回复预警、关键词监听、信息删除预警）"""
         suffix = config.COMPANY_DISPLAY
-        needed = [f"信息未回复预警{suffix}", f"关键词监听{suffix}", f"信息删除预警{suffix}"]
+        needed = [
+            (f"信息未回复预警{suffix}", "信息未回复预警"),
+            (f"关键词监听{suffix}",     "关键词监听"),
+            (f"信息删除预警{suffix}",   "信息删除预警"),
+        ]
         existing = {ws.title: ws for ws in self.spreadsheet.worksheets()}
 
-        for tab_name in needed:
+        for tab_name, prefix in needed:
             if tab_name in existing:
+                # 已存在 → 检查表头是否存在，补写
+                self._write_alert_header(existing[tab_name], prefix)
                 continue
 
             # 检查是否有旧名（比如 YD 后缀的）需要改名
-            base = tab_name.replace(suffix, "")
+            base = prefix
             renamed = False
             for old_title, ws in existing.items():
                 if old_title.startswith(base) and old_title != tab_name:
@@ -49,6 +119,7 @@ class SheetsWriter:
                         self._rate_limit()
                         ws.update_title(tab_name)
                         logger.info("预警分页改名: %s → %s", old_title, tab_name)
+                        self._write_alert_header(ws, prefix)
                         renamed = True
                     except Exception as e:
                         logger.warning("预警分页改名失败: %s", e)
@@ -57,8 +128,9 @@ class SheetsWriter:
             if not renamed:
                 try:
                     self._rate_limit()
-                    self.spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=10)
+                    ws = self.spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=10)
                     logger.info("自动建立预警分页: %s", tab_name)
+                    self._write_alert_header(ws, prefix)
                 except Exception as e:
                     logger.warning("建立预警分页失败: %s", e)
 

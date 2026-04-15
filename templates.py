@@ -38,13 +38,24 @@ def keyword_alert(company, operator, account_name, peer_name, keyword, message_t
     )
 
 
-def daily_report(report_date, record_time, chat_count, no_reply_count, delete_count, keyword_count):
+def daily_report(report_date, record_time, chat_count,
+                 no_reply_count, delete_count, keyword_count,
+                 no_reply_detail=None, delete_detail=None):
+    """
+    no_reply_detail / delete_detail: 可选 dict {"approved": n, "pending": n, "rejected": n}
+    有值时日报会附上审批分桶 (已通过 / 待审 / 已拒)
+    """
+    def _fmt(total, detail):
+        if not detail:
+            return f"{total}"
+        return f"{total}  (已通过 {detail.get('approved', 0)} / 待审 {detail.get('pending', 0)} / 已拒 {detail.get('rejected', 0)})"
+
     return (
         f"【外事号监控总结】\n\n"
         f"统计日期：{report_date}\n"
         f"记录时间：{record_time}\n"
         f"监控聊天总数：{chat_count}\n"
-        f"未回复数量：{no_reply_count}\n"
-        f"信息删除数量：{delete_count}\n"
+        f"未回复数量：{_fmt(no_reply_count, no_reply_detail)}\n"
+        f"信息删除数量：{_fmt(delete_count, delete_detail)}\n"
         f"关键词监听数量：{keyword_count}"
     )
