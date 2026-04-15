@@ -702,6 +702,73 @@
         <span class="test-result" id="testSheetsResult"></span>
       </div>
 
+      {# ============ OAuth 授权块(媒体直显的前置条件) ============ #}
+      <div style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
+        <div style="background:rgba(255,77,94,0.08);border-left:3px solid #ff9b3d;padding:12px 16px;margin-bottom:14px;border-radius:6px;font-size:13px;line-height:1.8;color:#cfe3f5;">
+          <b style="color:#ff9b3d;">⚠ 为什么要 OAuth?</b>
+          Service Account 没有 Drive 存储配额(0 GB),直接传文件会 403 报「storage quota exceeded」。
+          所以图片/文件直显功能必须用<b>客户本人 OAuth 授权</b>,这样会用客户帐号的 15GB 免费配额。
+          <br><b>不需要这个功能就把下方所有字段留空</b>,系统照旧显示「[图片]/[文件]」文字。
+        </div>
+
+        <div class="two-col">
+          <div class="field">
+            <label>OAuth Client ID <span style="color:#7c8a9a;font-weight:400;">(可选)</span></label>
+            <input type="text" name="oauth_client_id" id="oauth_client_id"
+                   value="{{ d.oauth_client_id or '' }}"
+                   placeholder="xxxxxx.apps.googleusercontent.com">
+          </div>
+          <div class="field">
+            <label>OAuth Client Secret <span style="color:#7c8a9a;font-weight:400;">(可选)</span></label>
+            <input type="text" name="oauth_client_secret" id="oauth_client_secret"
+                   value="{{ d.oauth_client_secret or '' }}"
+                   placeholder="GOCSPX-xxxxxx">
+          </div>
+        </div>
+
+        <div class="field">
+          {% if d.oauth_status and d.oauth_status.connected %}
+            <div style="background:rgba(74,222,128,0.1);border-left:3px solid #4ade80;padding:10px 14px;border-radius:4px;color:#9ef0b8;font-size:13px;">
+              ✓ 已连接 Google Drive{% if d.oauth_status.email %}:<code>{{ d.oauth_status.email }}</code>{% endif %}
+              <button type="button" class="test-btn" id="oauthRevokeBtn"
+                      style="margin-left:14px;background:rgba(255,77,94,0.15);border-color:rgba(255,77,94,0.5);color:#ff9bb0;">
+                ▸ 撤销授权
+              </button>
+            </div>
+          {% else %}
+            <a href="/api/oauth/start" class="test-btn" id="oauthStartBtn"
+               style="display:inline-block;text-decoration:none;background:rgba(126,201,255,0.15);border-color:rgba(126,201,255,0.5);color:#7ec9ff;">
+              ▸ 连接 Google Drive(OAuth 授权)
+            </a>
+            <span class="test-result" style="color:#7c8a9a;">点击会跳转 Google 授权页,完成后回到这里</span>
+          {% endif %}
+        </div>
+
+        <details class="howto">
+          <summary>▸ 如何创建 OAuth Client ID/Secret(必看)</summary>
+          <div class="howto-body">
+            <ol>
+              <li><span class="step-label">01</span> 打开 <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console → 凭据</a>(同一个 GCP 项目里,跟 Service Account 一起)</li>
+              <li><span class="step-label">02</span> 顶部 <b>+ 创建凭据 → OAuth 客户端 ID</b></li>
+              <li><span class="step-label">03</span> 应用类型选 <b>「Web application / Web 应用」</b>(<u>不是</u>桌面)</li>
+              <li><span class="step-label">04</span> <b>已获授权的重定向 URI</b> 添加(必须完全一致):<br>
+                  <code id="oauth_redirect_hint" style="background:#0f1822;padding:4px 10px;border-radius:4px;color:#ffd28a;display:inline-block;margin-top:4px;">http://YOUR_VPS_IP:5002/api/oauth/callback</code>
+                  <br><span style="color:#9eb4c7;font-size:12px;">↑ 把 <code>YOUR_VPS_IP</code> 换成你这台机器的实际 IP / 域名,跟现在浏览器地址栏的一致</span>
+              </li>
+              <li><span class="step-label">05</span> 创建后会显示 <b>Client ID</b> 和 <b>Client Secret</b>,复制填到上方两个输入框</li>
+              <li><span class="step-label">06</span> 还需要在 <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank">OAuth 同意屏幕</a> 把客户的 Google 帐号加到 <b>「测试用户」</b>(非生产模式只允许测试用户授权)</li>
+              <li><span class="step-label">07</span> 保存设置 → 点上方「连接 Google Drive」 → Google 弹出授权 → 同意 → 自动跳回</li>
+            </ol>
+            <b>常见问题</b>
+            <ul style="margin:6px 0 0 16px;color:#bfd6e8;font-size:12.5px;">
+              <li><b>redirect_uri_mismatch</b>:第 04 步填的 URI 跟实际访问的 host 不一样。检查 <code>http</code>/<code>https</code>、端口都要对</li>
+              <li><b>access_denied</b>:授权账号不在「测试用户」名单里,回 OAuth 同意屏幕加上</li>
+              <li><b>没收到 refresh_token</b>:到 <a href="https://myaccount.google.com/permissions" target="_blank">myaccount.google.com/permissions</a> 撤销旧授权再重试</li>
+            </ul>
+          </div>
+        </details>
+      </div>
+
       <div class="field" style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
         <label>媒体文件直显 — Drive 文件夹 ID <span style="color:#7c8a9a;font-weight:400;">(可选)</span></label>
         <input type="text" name="media_folder_id" id="media_folder_id"
@@ -984,6 +1051,29 @@ if (testSheetsBtn) {
     res.textContent = (data.ok ? '✓ ' : '✗ ') + data.msg;
     res.className = 'test-result ' + (data.ok ? 'ok' : 'err');
     btn.disabled = false;
+  });
+}
+
+// 自动把当前 host 写到 OAuth 重定向 URI 提示里,免得客户填错
+(function autoFillOauthHint() {
+  const el = byId('oauth_redirect_hint');
+  if (el) el.textContent = location.origin + '/api/oauth/callback';
+})();
+
+const oauthRevokeBtn = byId('oauthRevokeBtn');
+if (oauthRevokeBtn) {
+  oauthRevokeBtn.addEventListener('click', async () => {
+    if (!confirm('确定要撤销 Google Drive 授权吗?撤销后图片/文件直显会停止工作。')) return;
+    oauthRevokeBtn.disabled = true;
+    try {
+      const resp = await fetch('/api/oauth/revoke', {method: 'POST'});
+      const data = await resp.json();
+      alert(data.ok ? '✓ ' + data.msg : '✗ ' + data.msg);
+      if (data.ok) location.reload();
+    } catch (e) {
+      alert('撤销失败:' + e.message);
+    }
+    oauthRevokeBtn.disabled = false;
   });
 }
 

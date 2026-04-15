@@ -23,7 +23,13 @@ _drive_service = None  # lazy 初始化 googleapiclient.discovery.Resource
 
 
 def _get_drive():
-    """lazy 创建 Drive v3 client（service account 凭证已在 sheets.py 配置过同款 scopes）"""
+    """lazy 创建 Drive v3 client。
+
+    优先级:
+      1. OAuth 用户授权 (data/google_oauth_token.json) — 推荐,用客户 15GB 配额
+      2. Service Account — fallback,只有客户开了 Workspace Shared Drive 时才能成功
+         (普通帐户 SA 没配额会 403 「Service Accounts do not have storage quota」)
+    """
     global _drive_service
     if _drive_service is not None:
         return _drive_service
@@ -31,21 +37,39 @@ def _get_drive():
         if _drive_service is not None:
             return _drive_service
         try:
-            from google.oauth2.service_account import Credentials
             from googleapiclient.discovery import build
-            creds = Credentials.from_service_account_file(
+            # 路径 1: OAuth 用户凭证
+            try:
+                import oauth_helper
+                creds = oauth_helper.get_credentials()
+                if creds:
+                    _drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+                    logger.info("Drive 服务初始化成功 (OAuth 用户授权)")
+                    return _drive_service
+            except Exception as e:
+                logger.warning("OAuth 凭证加载失败,fallback SA: %s", e)
+            # 路径 2: Service Account fallback
+            from google.oauth2.service_account import Credentials
+            sa_creds = Credentials.from_service_account_file(
                 str(config.SERVICE_ACCOUNT_FILE),
                 scopes=[
                     "https://www.googleapis.com/auth/drive",
                     "https://www.googleapis.com/auth/spreadsheets",
                 ],
             )
-            _drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
-            logger.info("Drive 服务初始化成功")
+            _drive_service = build("drive", "v3", credentials=sa_creds, cache_discovery=False)
+            logger.info("Drive 服务初始化成功 (Service Account fallback)")
             return _drive_service
         except Exception as e:
             logger.warning("Drive 服务初始化失败: %s", e)
             return None
+
+
+def reset_drive_cache():
+    """OAuth 状态变化时调用,下次上传重建连接"""
+    global _drive_service
+    with _lock:
+        _drive_service = None
 
 
 def is_enabled():

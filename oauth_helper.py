@@ -1,0 +1,147 @@
+"""Google OAuth 2.0 用户授权助手 — 用于 Drive 媒体上传。
+
+为什么需要 OAuth:
+  Service Account 没有 Drive 存储配额(0 GB),上传到客户文件夹会 403
+  「Service Accounts do not have storage quota」。
+  改用客户本人 OAuth 授权 → 用客户 15GB 免费配额。
+
+流程:
+  1. 客户在 Google Cloud Console 创建 OAuth 2.0 Client ID (Web application 类型)
+     - Authorized redirect URI: http://VPS_IP:WEB_PORT/api/oauth/callback
+  2. Client ID + Secret 填到 .env (GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET)
+  3. 后台点「连接 Google Drive」→ 跳转 Google 授权页
+  4. 客户同意 → callback 拿 refresh_token → 存 data/google_oauth_token.json
+  5. 上传时用 refresh_token 换 access_token,用客户身份调 Drive API
+"""
+import json
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# token 存储:跟 data.db 同目录,Docker volume 覆盖 → rebuild 不丢
+TOKEN_PATH = Path(__file__).parent / "data" / "google_oauth_token.json"
+TOKEN_PATH.parent.mkdir(exist_ok=True)
+
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+# drive.file = 只能访问本应用创建/打开的文件 → 比 drive 全权限安全很多
+
+
+def _client_config(client_id, client_secret, redirect_uri):
+    """Web application 类型的 OAuth client config 字典(给 google-auth-oauthlib 用)"""
+    return {
+        "web": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri],
+        }
+    }
+
+
+def build_auth_url(client_id, client_secret, redirect_uri, state=""):
+    """生成授权 URL 让用户跳转过去"""
+    from google_auth_oauthlib.flow import Flow
+    flow = Flow.from_client_config(
+        _client_config(client_id, client_secret, redirect_uri),
+        scopes=SCOPES,
+        redirect_uri=redirect_uri,
+    )
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",       # 必须,才能拿到 refresh_token
+        include_granted_scopes="true",
+        prompt="consent",            # 强制每次都返 refresh_token(否则二次授权可能没有)
+        state=state,
+    )
+    return auth_url
+
+
+def exchange_code(client_id, client_secret, redirect_uri, code):
+    """用授权码换 refresh_token + access_token,存到 TOKEN_PATH"""
+    from google_auth_oauthlib.flow import Flow
+    flow = Flow.from_client_config(
+        _client_config(client_id, client_secret, redirect_uri),
+        scopes=SCOPES,
+        redirect_uri=redirect_uri,
+    )
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+    if not creds.refresh_token:
+        raise RuntimeError("Google 没返回 refresh_token,请到 myaccount.google.com/permissions 撤销旧授权后重试")
+    save_token({
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": creds.refresh_token,
+        "token": creds.token,
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "scopes": SCOPES,
+    })
+    # 拿一下用户邮箱给 UI 展示
+    email = ""
+    try:
+        from googleapiclient.discovery import build
+        svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+        about = svc.about().get(fields="user(emailAddress)").execute()
+        email = about.get("user", {}).get("emailAddress", "")
+    except Exception as e:
+        logger.warning("拿用户邮箱失败: %s", e)
+    return email
+
+
+def save_token(data):
+    TOKEN_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    logger.info("OAuth token 已保存到 %s", TOKEN_PATH)
+
+
+def load_token():
+    """读 token 文件;不存在或损坏返 None"""
+    if not TOKEN_PATH.exists():
+        return None
+    try:
+        return json.loads(TOKEN_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("读 OAuth token 失败: %s", e)
+        return None
+
+
+def has_token():
+    t = load_token()
+    return bool(t and t.get("refresh_token"))
+
+
+def get_credentials():
+    """构造一个可直接给 googleapiclient 用的 Credentials 对象;auto-refresh access_token"""
+    from google.oauth2.credentials import Credentials
+    t = load_token()
+    if not t or not t.get("refresh_token"):
+        return None
+    return Credentials(
+        token=t.get("token"),
+        refresh_token=t["refresh_token"],
+        token_uri=t.get("token_uri", "https://oauth2.googleapis.com/token"),
+        client_id=t["client_id"],
+        client_secret=t["client_secret"],
+        scopes=t.get("scopes", SCOPES),
+    )
+
+
+def revoke_token():
+    """撤销并删除本地 token"""
+    t = load_token()
+    if not t:
+        return False, "没有 token 可撤销"
+    try:
+        import urllib.request, urllib.parse
+        data = urllib.parse.urlencode({"token": t["refresh_token"]}).encode()
+        urllib.request.urlopen(
+            urllib.request.Request("https://oauth2.googleapis.com/revoke", data=data),
+            timeout=10,
+        )
+    except Exception as e:
+        logger.warning("Google 撤销 API 报错(本地 token 仍会删): %s", e)
+    try:
+        TOKEN_PATH.unlink()
+    except Exception:
+        pass
+    return True, "已撤销"

@@ -197,6 +197,7 @@ def write_env(updates):
         "API_ID", "API_HASH",
         "COMPANY_NAME", "COMPANY_DISPLAY", "PEER_ROLE_LABEL",
         "SHEET_ID", "MEDIA_FOLDER_ID", "MEDIA_RETENTION_DAYS", "MEDIA_MAX_MB",
+        "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
         "BOT_TOKEN", "ALERT_GROUP_ID",
         "WEB_PORT", "WEB_PASSWORD",
         "KEYWORDS", "NO_REPLY_MINUTES",
@@ -637,6 +638,9 @@ def setup_page():
         "sheet_id": env.get("SHEET_ID", ""),
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
+        "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
+        "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
+        "oauth_status": _get_oauth_status(),
         "web_password": env.get("WEB_PASSWORD", DEFAULT_WEB_PASSWORD),
         "keywords": env.get("KEYWORDS", DEFAULT_KEYWORDS),
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
@@ -662,6 +666,9 @@ def settings_page():
         "sheet_id": env.get("SHEET_ID", ""),
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
+        "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
+        "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
+        "oauth_status": _get_oauth_status(),
         "keywords": env.get("KEYWORDS", DEFAULT_KEYWORDS),
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
         "api_id": env.get("API_ID", DEFAULT_API_ID),
@@ -682,23 +689,137 @@ def api_test_bot():
     return jsonify({"ok": ok, "msg": msg})
 
 
+def _get_oauth_status():
+    """返回 OAuth 当前状态给前端展示"""
+    try:
+        import oauth_helper
+        if not oauth_helper.has_token():
+            return {"connected": False, "email": ""}
+        # token 文件里没存 email,简化:连接状态 = 文件存在
+        return {"connected": True, "email": oauth_helper.load_token().get("email", "")}
+    except Exception as e:
+        return {"connected": False, "email": "", "error": str(e)}
+
+
+def _oauth_redirect_uri():
+    """根据当前请求构造回调 URI(必须跟 Google Cloud Console 配的完全一致)"""
+    # 优先用环境变量(客户可指定),否则从请求 host 推导
+    explicit = read_env().get("OAUTH_REDIRECT_URI", "").strip()
+    if explicit:
+        return explicit
+    # request.host_url 形如 http://76.13.219.163:5002/
+    return request.host_url.rstrip("/") + "/api/oauth/callback"
+
+
+@app.route("/api/oauth/start", methods=["GET"])
+@admin_required
+def api_oauth_start():
+    """开始 Google OAuth 流程 — 跳转到 Google 授权页"""
+    env = read_env()
+    cid = env.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    csec = env.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+    if not cid or not csec:
+        return "请先在设置里填写 OAuth Client ID 和 Secret 并保存", 400
+    try:
+        import oauth_helper
+        url = oauth_helper.build_auth_url(cid, csec, _oauth_redirect_uri())
+        return redirect(url)
+    except Exception as e:
+        return f"授权 URL 生成失败: {e}", 500
+
+
+@app.route("/api/oauth/callback", methods=["GET"])
+def api_oauth_callback():
+    """Google 授权完成后回调到这里 — 用 code 换 token 并存盘"""
+    code = request.args.get("code", "")
+    err = request.args.get("error", "")
+    if err:
+        return f"<h2>❌ 授权失败:{err}</h2><a href='/settings'>← 返回设置</a>", 400
+    if not code:
+        return "<h2>❌ 缺少 authorization code</h2>", 400
+    env = read_env()
+    cid = env.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    csec = env.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+    if not cid or not csec:
+        return "<h2>❌ 配置丢失,请回到设置重填</h2>", 400
+    try:
+        import oauth_helper
+        email = oauth_helper.exchange_code(cid, csec, _oauth_redirect_uri(), code)
+        # token 里加上 email 给 UI 展示
+        t = oauth_helper.load_token() or {}
+        t["email"] = email
+        oauth_helper.save_token(t)
+        # 重置 Drive client 让下次上传用新 token
+        try:
+            import media_uploader
+            media_uploader.reset_drive_cache()
+        except Exception:
+            pass
+        return f"""
+        <html><head><meta charset='utf-8'><title>授权成功</title></head>
+        <body style='font-family:sans-serif;background:#0a0e14;color:#cfe3f5;padding:60px;text-align:center;'>
+          <h1 style='color:#4ade80;'>✓ Google Drive 已连接</h1>
+          <p style='font-size:18px;margin:20px 0;'>授权账号:<code style='background:#1a2230;padding:4px 10px;border-radius:4px;'>{email or '(unknown)'}</code></p>
+          <p style='color:#7c8a9a;'>后续客户发的图片/文件会上传到这个账号的 Drive,使用其 15GB 免费配额。</p>
+          <p style='margin-top:40px;'><a href='/settings' style='color:#7ec9ff;font-size:16px;'>← 返回设置页</a></p>
+        </body></html>
+        """
+    except Exception as e:
+        return f"<h2>❌ 换取 token 失败</h2><pre style='background:#222;padding:14px;'>{e}</pre><a href='/settings'>← 返回</a>", 500
+
+
+@app.route("/api/oauth/revoke", methods=["POST"])
+@admin_required
+def api_oauth_revoke():
+    """撤销 OAuth 授权"""
+    try:
+        import oauth_helper
+        ok, msg = oauth_helper.revoke_token()
+        try:
+            import media_uploader
+            media_uploader.reset_drive_cache()
+        except Exception:
+            pass
+        return jsonify({"ok": ok, "msg": msg})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)})
+
+
+@app.route("/api/oauth/status", methods=["GET"])
+@admin_required
+def api_oauth_status():
+    return jsonify(_get_oauth_status())
+
+
 @app.route("/api/test-media-folder", methods=["POST"])
 def api_test_media_folder():
     """测试 Drive 文件夹访问权限：用现有 service-account.json 检查能否在该文件夹建文件"""
     folder_id = (request.form.get("media_folder_id") or "").strip()
     if not folder_id:
         return jsonify({"ok": False, "msg": "请填写 Drive 文件夹 ID"})
-    if not SA_PATH.exists():
-        return jsonify({"ok": False, "msg": "请先上传 service-account.json"})
     try:
-        from google.oauth2.service_account import Credentials
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaIoBaseUpload
         import io as _io
-        creds = Credentials.from_service_account_file(
-            str(SA_PATH),
-            scopes=["https://www.googleapis.com/auth/drive"],
-        )
+        # 优先用 OAuth(实际上传时也是这样)
+        creds = None
+        creds_source = ""
+        try:
+            import oauth_helper
+            creds = oauth_helper.get_credentials()
+            if creds:
+                creds_source = "OAuth 用户授权"
+        except Exception:
+            pass
+        if not creds:
+            if not SA_PATH.exists():
+                return jsonify({"ok": False, "msg": "请先上传 service-account.json,或先连接 Google Drive (OAuth)"})
+            from google.oauth2.service_account import Credentials
+            creds = Credentials.from_service_account_file(
+                str(SA_PATH),
+                scopes=["https://www.googleapis.com/auth/drive"],
+            )
+            creds_source = "Service Account"
         drive = build("drive", "v3", credentials=creds, cache_discovery=False)
         # 1. 文件夹存在性 + 访问权限
         meta = drive.files().get(fileId=folder_id, fields="id,name,mimeType",
@@ -716,16 +837,22 @@ def api_test_media_folder():
             drive.files().delete(fileId=f["id"], supportsAllDrives=True).execute()
         except Exception:
             pass
-        return jsonify({"ok": True, "msg": f"成功访问文件夹「{folder_name}」并通过写入测试 ✓"})
+        return jsonify({"ok": True, "msg": f"成功访问文件夹「{folder_name}」并通过写入测试 ✓ (用 {creds_source})"})
     except Exception as e:
         err = str(e)
+        if "storageQuotaExceeded" in err or "do not have storage quota" in err:
+            return jsonify({"ok": False, "msg": "Service Account 没有 Drive 配额。请到上方点「连接 Google Drive」用客户帐号 OAuth 授权,这样会用客户的 15GB 配额。"})
         if "File not found" in err or "notFound" in err:
+            hint = ""
             try:
-                sa = json.loads(SA_PATH.read_bytes())
-                email = sa.get("client_email", "?")
+                if creds_source == "Service Account" and SA_PATH.exists():
+                    sa = json.loads(SA_PATH.read_bytes())
+                    hint = f"请把文件夹分享给 service account:{sa.get('client_email','?')}(编辑者)"
+                elif creds_source == "OAuth 用户授权":
+                    hint = "请确认这个文件夹 ID 是 OAuth 授权账号自己的,或者已被分享给该账号(编辑者)"
             except Exception:
-                email = "?"
-            return jsonify({"ok": False, "msg": f"文件夹找不到或没权限。请把文件夹分享给 service account：{email}（编辑者）"})
+                pass
+            return jsonify({"ok": False, "msg": f"文件夹找不到或没权限。{hint}"})
         return jsonify({"ok": False, "msg": f"{type(e).__name__}: {err}"})
 
 
@@ -838,6 +965,8 @@ def _save_settings(is_first):
         "SHEET_ID": sheet_id,
         "MEDIA_FOLDER_ID": form.get("media_folder_id", "").strip(),
         "MEDIA_MAX_MB": form.get("media_max_mb", "20").strip() or "20",
+        "GOOGLE_OAUTH_CLIENT_ID": form.get("oauth_client_id", "").strip(),
+        "GOOGLE_OAUTH_CLIENT_SECRET": form.get("oauth_client_secret", "").strip(),
         "KEYWORDS": new_keywords_str,
         "NO_REPLY_MINUTES": form.get("no_reply_minutes", DEFAULT_NO_REPLY_MINUTES),
         "API_ID": form.get("api_id", DEFAULT_API_ID),
@@ -855,6 +984,13 @@ def _save_settings(is_first):
         importlib.reload(config)
     except Exception as e:
         print(f"[warn] 重新加载 config 失败（不影响 tg-monitor）: {e}")
+
+    # OAuth client 配置可能改了 → 让 Drive client 下次重建
+    try:
+        import media_uploader
+        media_uploader.reset_drive_cache()
+    except Exception:
+        pass
 
     # 启动/重启 tg-monitor
     ok, msg_docker = _start_tg_monitor()
