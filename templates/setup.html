@@ -688,16 +688,14 @@
             </div>
           {% else %}
             {% if mode == 'setup' %}
-              {# setup 模式:OAuth 会跳转到 Google,但这时 .env 里还没保存 Client ID/Secret,
-                 点了会报「请先保存」并清空整个表单。禁用掉让用户先走完保存流程。#}
-              <a href="javascript:void(0)" class="test-btn"
-                 onclick="alert('请先把整个表单填完并点最下面的「保存并启动」按钮。\n\n保存后会自动跳登录页 → 登录 → 在「设置」页面再点这个按钮做 OAuth 授权。\n\n(直接点会跳走 Google,回来表单就空了)'); return false;"
-                 style="display:inline-block;text-decoration:none;background:rgba(128,128,128,0.12);border-color:rgba(128,128,128,0.35);color:#7c8a9a;cursor:not-allowed;opacity:0.7;">
-                ⊘ 连接 Google Drive (请先保存再来)
+              {# setup 模式:点按钮 → 先 AJAX 把 Client ID/Secret 暂存到 .env → 再跳 Google。
+                 Google 回来后会 redirect 回 /setup?oauth_done=1,精灵里的其他字段从 .env 读回来不丢。#}
+              <a href="javascript:void(0)" class="test-btn" id="oauthStartBtn"
+                 onclick="startOAuthFromSetup(); return false;"
+                 style="display:inline-block;text-decoration:none;background:rgba(126,201,255,0.15);border-color:rgba(126,201,255,0.5);color:#7ec9ff;">
+                ▸ 连接 Google Drive(OAuth 授权)
               </a>
-              <span class="test-result" style="color:#ff9b3d;">
-                ⚠ 保存前不能授权 — 先填完整个表单点「保存并启动」,登录后到「设置」页面再点这里
-              </span>
+              <span class="test-result" id="oauthStartMsg" style="color:#7c8a9a;">点击会跳到 Google 授权页,完成后自动回到本精灵继续配置</span>
             {% else %}
               <a href="/api/oauth/start" class="test-btn" id="oauthStartBtn"
                  style="display:inline-block;text-decoration:none;background:rgba(126,201,255,0.15);border-color:rgba(126,201,255,0.5);color:#7ec9ff;">
@@ -1057,6 +1055,71 @@ if (autoCreateSheetBtn) {
 (function autoFillOauthHint() {
   const el = byId('oauth_redirect_hint');
   if (el) el.textContent = location.origin + '/api/oauth/callback';
+})();
+
+// setup 模式下:OAuth 按钮 — 先把 Client ID/Secret 暂存到 .env,再跳 Google 授权
+// 跳回来(/setup?oauth_done=1)会保留所有已填字段,体感就是「精灵里一键授权」
+async function startOAuthFromSetup() {
+  const btn = byId('oauthStartBtn');
+  const msg = byId('oauthStartMsg');
+  const cid = (byId('oauth_client_id') || {}).value || '';
+  const csec = (byId('oauth_client_secret') || {}).value || '';
+  if (!cid.trim() || !csec.trim()) {
+    msg.textContent = '✗ 请先把 OAuth Client ID 和 Secret 填上';
+    msg.style.color = '#ff9bb0';
+    return;
+  }
+  btn.style.pointerEvents = 'none';
+  btn.style.opacity = '0.6';
+  msg.textContent = '暂存凭证中,马上跳 Google...';
+  msg.style.color = '#7ec9ff';
+  try {
+    const fd = new FormData();
+    fd.append('oauth_client_id', cid.trim());
+    fd.append('oauth_client_secret', csec.trim());
+    const r = await fetch('/api/setup/save-oauth-creds', {method: 'POST', body: fd});
+    const data = await r.json();
+    if (!data.ok) {
+      msg.textContent = '✗ ' + (data.msg || '暂存失败');
+      msg.style.color = '#ff9bb0';
+      btn.style.pointerEvents = 'auto'; btn.style.opacity = '1';
+      return;
+    }
+    // callback 回来后落到 /setup?oauth_done=1,精灵里 d.oauth_status.connected 已为 true
+    window.location.href = '/api/oauth/start?return=/setup';
+  } catch (e) {
+    msg.textContent = '✗ 请求失败: ' + e.message;
+    msg.style.color = '#ff9bb0';
+    btn.style.pointerEvents = 'auto'; btn.style.opacity = '1';
+  }
+}
+
+// 检测 ?oauth_done=1 — 展示成功提示 + 自动触发「建 Sheet」(若还没建)
+(function handleOAuthReturn() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('oauth_done') !== '1') return;
+  const banner = document.createElement('div');
+  banner.style.cssText = 'background:rgba(74,222,128,0.15);border:1px solid #4ade80;color:#9ef0b8;padding:12px 18px;border-radius:6px;margin:0 0 16px 0;font-weight:600;';
+  banner.innerHTML = '✓ Google Drive 已连接,Drive 文件夹已自动建。正在自动建 Spreadsheet...';
+  const form = document.querySelector('form');
+  if (form) form.parentNode.insertBefore(banner, form);
+  // 自动建 Sheet(如果 sheet_id 还空)
+  const sheetInput = byId('sheet_id');
+  if (sheetInput && !sheetInput.value.trim()) {
+    fetch('/api/sheets/auto-create', {method: 'POST'}).then(r => r.json()).then(data => {
+      if (data.ok) {
+        sheetInput.value = data.sheet_id || '';
+        banner.innerHTML = '✓ Google Drive 已连接 + Spreadsheet 已建好。继续填其他字段,最后点「保存并启动」即可。';
+      } else {
+        banner.innerHTML = '✓ Google Drive 已连接。建 Spreadsheet 失败:' + (data.msg || '未知');
+        banner.style.color = '#ffd28a';
+      }
+    }).catch(() => { /* 忽略,用户可手动点 */ });
+  } else {
+    banner.innerHTML = '✓ Google Drive 已连接。继续填其他字段,最后点「保存并启动」即可。';
+  }
+  // 清干净 URL,避免刷新时重复触发
+  history.replaceState({}, '', '/setup');
 })();
 
 // HTTPS 启用由 install.sh --https 处理,web 端不再提供 toggle

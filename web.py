@@ -790,12 +790,40 @@ def api_oauth_start():
     csec = env.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
     if not cid or not csec:
         return "请先在设置里填写 OAuth Client ID 和 Secret 并保存", 400
+    # 用 state 带回「授权完要去哪」— Google 会原样回传
+    # 白名单 /setup 和 /settings,避免 open-redirect
+    return_to = request.args.get("return", "").strip()
+    if return_to not in ("/setup", "/settings"):
+        return_to = ""
     try:
         import oauth_helper
-        url = oauth_helper.build_auth_url(cid, csec, _oauth_redirect_uri())
+        url = oauth_helper.build_auth_url(cid, csec, _oauth_redirect_uri(), state=return_to)
         return redirect(url)
     except Exception as e:
         return f"授权 URL 生成失败: {e}", 500
+
+
+@app.route("/api/setup/save-oauth-creds", methods=["POST"])
+def api_setup_save_oauth_creds():
+    """setup 精灵内:在跳 Google 前暂存 Client ID/Secret 到 .env。
+
+    只在 setup 未完成时放行 — 不然任何人都能改 OAuth 凭证。
+    不设 SETUP_COMPLETE=true,精灵其余字段还没填。
+    """
+    if is_setup_complete():
+        return jsonify({"ok": False, "msg": "已完成首次设置,请到设置页修改"})
+    cid = (request.form.get("oauth_client_id") or "").strip()
+    csec = (request.form.get("oauth_client_secret") or "").strip()
+    if not cid or not csec:
+        return jsonify({"ok": False, "msg": "Client ID 和 Secret 不能为空"})
+    try:
+        write_env({
+            "GOOGLE_OAUTH_CLIENT_ID": cid,
+            "GOOGLE_OAUTH_CLIENT_SECRET": csec,
+        })
+        return jsonify({"ok": True, "msg": "已暂存,跳转 Google 授权..."})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"写入 .env 失败: {e}"})
 
 
 @app.route("/api/oauth/callback", methods=["GET"])
@@ -803,7 +831,13 @@ def api_oauth_callback():
     """Google 授权完成后回调到这里 — 用 code 换 token 并存盘"""
     code = request.args.get("code", "")
     err = request.args.get("error", "")
+    # state 里是之前 build_auth_url 带过来的「回到哪」— 白名单过一道防 open-redirect
+    return_to = (request.args.get("state") or "").strip()
+    if return_to not in ("/setup", "/settings"):
+        return_to = ""
     if err:
+        if return_to == "/setup":
+            return redirect(f"/setup?oauth_error={err}")
         return f"<h2>❌ 授权失败:{err}</h2><a href='/settings'>← 返回设置</a>", 400
     if not code:
         return "<h2>❌ 缺少 authorization code</h2>", 400
@@ -857,6 +891,10 @@ def api_oauth_callback():
                     auto_folder_msg += f"<p style='color:#ff9b3d;'>⚠ 重启监控服务失败({msg_r}),请手动 docker compose restart tg-monitor</p>"
             except Exception as e:
                 auto_folder_msg += f"<p style='color:#ff9b3d;'>⚠ 重启监控服务异常({e})</p>"
+        # 精灵触发的 OAuth → 直接跳回 /setup?oauth_done=1,让用户继续填剩下的字段
+        # 设置页触发的 OAuth → 显示老的成功页(有详细信息)
+        if return_to == "/setup":
+            return redirect("/setup?oauth_done=1")
         return f"""
         <html><head><meta charset='utf-8'><title>授权成功</title></head>
         <body style='font-family:sans-serif;background:#0a0e14;color:#cfe3f5;padding:60px;text-align:center;'>
