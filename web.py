@@ -361,6 +361,31 @@ def _https_status():
     return {"enabled": False, "domain": domain}
 
 
+def _check_ports_busy(client, ports):
+    """检查 host 上的端口是否被占用 — 用 host network 跑 alpine ss。
+    返回被占用的端口列表(空表示全部空闲)。"""
+    try:
+        out = client.containers.run(
+            "alpine:3.20",
+            command=["sh", "-c", "ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null"],
+            network_mode="host",
+            remove=True,
+            detach=False,
+            stdout=True,
+            stderr=False,
+        )
+        text = out.decode("utf-8", "ignore") if isinstance(out, (bytes, bytearray)) else str(out)
+        busy = []
+        for p in ports:
+            # 匹配 :80 / :443 在行首端 (LISTEN 行的本地 address 末尾)
+            if f":{p} " in text or f":{p}\n" in text or text.endswith(f":{p}"):
+                busy.append(p)
+        return busy
+    except Exception as e:
+        logger.warning("端口预检失败,跳过: %s", e)
+        return []
+
+
 def _enable_https_now(custom_domain=""):
     """一键启用 HTTPS — 在 docker socket 上启 Caddy 容器,自动 Let's Encrypt 签证书
 
@@ -375,6 +400,16 @@ def _enable_https_now(custom_domain=""):
     try:
         import docker as docker_sdk
         client = docker_sdk.from_env()
+
+        # 0. 端口预检 — VPS 80/443 必须空闲(Let's Encrypt HTTP-01/TLS-ALPN 用)
+        # 如果已被占用,要么是别的 Caddy/Nginx 在跑,要么是系统服务,Docker 启不了
+        busy = _check_ports_busy(client, [80, 443])
+        if busy:
+            return False, (
+                f"VPS 端口 {busy} 已被占用,Caddy 启不了。\n"
+                "请在 VPS 上跑 `ss -ltnp | grep -E ':(80|443)'` 找出占用的进程,"
+                "停掉它再试;或者改用已有的反代(把 tg-web-* 的 5001 端口反代到一个域名上)。"
+            )
 
         # 1. 域名
         domain = (custom_domain or "").strip()
