@@ -702,26 +702,11 @@
         <span class="test-result" id="testSheetsResult"></span>
       </div>
 
-      {# ============ HTTPS 一键启用(OAuth 前置条件) ============ #}
-      <div style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
-        <div id="httpsCard" style="background:rgba(255,77,94,0.08);border-left:3px solid #ff9b3d;padding:14px 18px;border-radius:6px;font-size:13px;line-height:1.85;color:#cfe3f5;">
-          <div style="font-weight:600;color:#ff9b3d;margin-bottom:8px;">▸ 第 1 步:启用 HTTPS(Google OAuth 强制要求)</div>
-          <div id="httpsStatus" style="margin-bottom:10px;color:#9eb4c7;">检测中...</div>
-          <button type="button" id="enableHttpsBtn" class="test-btn"
-                  style="background:rgba(126,201,255,0.15);border-color:rgba(126,201,255,0.5);color:#7ec9ff;">
-            ▸ 一键启用 HTTPS(自动配置)
-          </button>
-          <span class="test-result" id="enableHttpsResult"></span>
-          <div style="margin-top:8px;font-size:12px;color:#7c8a9a;">
-            点了之后:自动检测公网 IP → 申请免费域名 → Caddy 反代 → Let's Encrypt 签证书。约 30-60 秒完成。
-          </div>
-        </div>
-      </div>
-
       {# ============ OAuth 授权块 ============ #}
+      {# HTTPS 由 install.sh --https 统一处理,设置页不再让客户操作(减少配置负担) #}
       <div style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
         <div style="background:rgba(255,77,94,0.08);border-left:3px solid #ff9b3d;padding:12px 16px;margin-bottom:14px;border-radius:6px;font-size:13px;line-height:1.8;color:#cfe3f5;">
-          <b style="color:#ff9b3d;">▸ 第 2 步:授权 Google Drive(让客户图片/文件直接显示在 Sheet)</b>
+          <b style="color:#ff9b3d;">▸ 授权 Google Drive(让客户图片/文件直接显示在 Sheet)</b>
           <br>不需要这个功能就跳过,留空即可,系统照旧显示「[图片]/[文件]」文字占位。
         </div>
 
@@ -1106,67 +1091,7 @@ if (testSheetsBtn) {
   if (el) el.textContent = location.origin + '/api/oauth/callback';
 })();
 
-// HTTPS 状态检测 + 一键启用
-(async function checkHttpsStatus() {
-  const status = byId('httpsStatus'); const btn = byId('enableHttpsBtn');
-  const card = byId('httpsCard');
-  if (!status) return;
-  try {
-    const r = await fetch('/api/https-status'); const d = await r.json();
-    const onHttps = location.protocol === 'https:';
-    if (d.enabled && d.domain && onHttps) {
-      card.style.borderLeftColor = '#4ade80';
-      card.style.background = 'rgba(74,222,128,0.08)';
-      card.querySelector('div').style.color = '#4ade80';
-      card.querySelector('div').textContent = '▸ 第 1 步:✓ HTTPS 已启用';
-      status.innerHTML = '✓ 当前域名:<code>' + d.domain + '</code> · 可以进行第 2 步 OAuth 授权';
-      btn.style.display = 'none';
-    } else if (d.enabled && d.domain) {
-      status.innerHTML = '⚠ Caddy 已起,但你现在用的是 HTTP。请改用 <a href="https://' + d.domain + '/settings" style="color:#7ec9ff;">https://' + d.domain + '/settings</a> 访问';
-      btn.textContent = '▸ 重新启用';
-    } else {
-      status.innerHTML = '⚠ 尚未启用 HTTPS。Google OAuth 不接受 HTTP 或纯 IP,必须先启用 HTTPS。';
-    }
-  } catch (e) {
-    status.textContent = '检测失败:' + e.message;
-  }
-})();
-
-const enableHttpsBtn = byId('enableHttpsBtn');
-if (enableHttpsBtn) {
-  enableHttpsBtn.addEventListener('click', async () => {
-    const btn = enableHttpsBtn, res = byId('enableHttpsResult');
-    btn.disabled = true; res.textContent = '启用中...';
-    try {
-      const fd = new FormData();
-      const resp = await fetch('/api/enable-https', {method:'POST', body:fd});
-      const d = await resp.json();
-      if (d.ok) {
-        res.innerHTML = '✓ ' + d.msg;
-        res.className = 'test-result ok';
-        // 弹出明显提示 + 倒计时跳转
-        const newUrl = d.settings_url;
-        if (confirm('✓ HTTPS 已启用!\n\n新地址:' + newUrl + '\n\n点确定后自动跳转到 HTTPS 域名(等 Caddy 30 秒拿证书)。'
-                    + '\n\nGoogle Cloud Console 那两个 URI 也帮你算好了,跳过去后会显示。')) {
-          // 等 30 秒证书签好,再跳
-          let count = 30;
-          const timer = setInterval(() => {
-            res.innerHTML = '✓ ' + d.msg + ' · 等 Let\'s Encrypt 拿证书... ' + count + 's';
-            count--;
-            if (count < 0) { clearInterval(timer); location.href = newUrl; }
-          }, 1000);
-        }
-      } else {
-        res.textContent = '✗ ' + d.msg;
-        res.className = 'test-result err';
-      }
-    } catch (e) {
-      res.textContent = '✗ ' + e.message;
-      res.className = 'test-result err';
-    }
-    btn.disabled = false;
-  });
-}
+// HTTPS 启用由 install.sh --https 处理,web 端不再提供 toggle
 
 const oauthRevokeBtn = byId('oauthRevokeBtn');
 if (oauthRevokeBtn) {
