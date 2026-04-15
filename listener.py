@@ -6,6 +6,7 @@ from telethon.tl.types import PeerUser
 
 import config
 import database as db
+import media_uploader
 
 TZ_BJ = timezone(timedelta(hours=8))
 
@@ -113,17 +114,23 @@ class Listener:
                 elif event.message.voice:
                     media_type = "voice"
                     text = "[语音]"
-                elif event.message.document:
-                    media_type = "file"
-                    text = "[文件]"
                 elif event.message.video:
                     media_type = "video"
                     text = "[视频]"
                 elif event.message.sticker:
                     media_type = "sticker"
                     text = "[贴纸]"
+                elif event.message.document:
+                    media_type = "file"
+                    text = "[文件]"
                 else:
                     text = "[其他消息]"
+
+                # 启用 MEDIA_FOLDER_ID 时，把媒体上传到 Drive，文本换成 =IMAGE/=HYPERLINK 公式
+                if media_type and media_uploader.is_enabled():
+                    display, _url = await media_uploader.upload_media(event.message, media_type, peer_name)
+                    if display:
+                        text = display
 
             timestamp = event.message.date.astimezone(TZ_BJ).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -188,14 +195,19 @@ class Listener:
                         media_type, text = "photo", "[图片]"
                     elif msg.voice:
                         media_type, text = "voice", "[语音]"
-                    elif msg.document:
-                        media_type, text = "file", "[文件]"
                     elif msg.video:
                         media_type, text = "video", "[视频]"
                     elif msg.sticker:
                         media_type, text = "sticker", "[贴纸]"
+                    elif msg.document:
+                        media_type, text = "file", "[文件]"
                     else:
                         text = "[其他消息]"
+
+                    if media_type and media_uploader.is_enabled():
+                        display, _url = await media_uploader.upload_media(msg, media_type, peer["name"])
+                        if display:
+                            text = display
 
                 timestamp = msg.date.astimezone(TZ_BJ).strftime("%Y-%m-%d %H:%M:%S")
                 inserted = db.insert_message(
@@ -261,14 +273,19 @@ class Listener:
                         media_type, text = "photo", "[图片]"
                     elif msg.voice:
                         media_type, text = "voice", "[语音]"
-                    elif msg.document:
-                        media_type, text = "file", "[文件]"
                     elif msg.video:
                         media_type, text = "video", "[视频]"
                     elif msg.sticker:
                         media_type, text = "sticker", "[贴纸]"
+                    elif msg.document:
+                        media_type, text = "file", "[文件]"
                     else:
                         text = "[其他消息]"
+
+                    if media_type and media_uploader.is_enabled():
+                        display, _url = await media_uploader.upload_media(msg, media_type, peer_name)
+                        if display:
+                            text = display
 
                 timestamp = msg_dt.strftime("%Y-%m-%d %H:%M:%S")
                 inserted = db.insert_message(

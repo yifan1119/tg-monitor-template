@@ -701,6 +701,46 @@
         <button type="button" class="test-btn" id="testSheetsBtn">▸ 测试 Sheet 访问</button>
         <span class="test-result" id="testSheetsResult"></span>
       </div>
+
+      <div class="field" style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
+        <label>媒体文件直显 — Drive 文件夹 ID <span style="color:#7c8a9a;font-weight:400;">(可选)</span></label>
+        <input type="text" name="media_folder_id" id="media_folder_id"
+               value="{{ d.media_folder_id or '' }}"
+               placeholder="留空 = 仍显示「[图片]/[文件]」文字占位">
+        <div class="hint">
+          填了之后,客户发的<b>图片会直接显示在 Sheet 单元格里</b>(=IMAGE 公式),
+          <b>文件/语音/视频变成可点击下载的链接</b>(=HYPERLINK)。
+          需要客户自己在 Drive 建一个文件夹,把这个文件夹分享给 service account 的 <code>client_email</code>(编辑者权限)。
+        </div>
+        <details class="howto">
+          <summary>▸ 如何获取 Drive 文件夹 ID 并分享</summary>
+          <div class="howto-body">
+            <ol>
+              <li><span class="step-label">01</span> 打开 <a href="https://drive.google.com" target="_blank">Google Drive</a> → 新建文件夹(例如 <code>tg-monitor-媒体</code>)</li>
+              <li><span class="step-label">02</span> 进入文件夹,看浏览器地址栏:<br>
+                  <code>https://drive.google.com/drive/folders/<b>1AbcDeFgHiJkLm...</b></code><br>
+                  <code>folders/</code> 后面那串字符就是文件夹 ID</li>
+              <li><span class="step-label">03</span> 右键文件夹 → <b>共享</b> → 把上方 service-account.json 里的 <code>client_email</code> 邮箱加为<b>编辑者</b></li>
+              <li><span class="step-label">04</span> 把 ID 填到上方,点测试按钮验证</li>
+            </ol>
+            <b>⚠️ 风险提示</b>:启用后,客户发来的图片/文件都会上传到这个 Drive 文件夹。
+            <ul style="margin:6px 0 0 16px;color:#bfd6e8;">
+              <li>文件会被设为<b>「任何拥有连结的人可查看」</b>(=IMAGE 才能渲染)</li>
+              <li>Google 会自动扫描已知病毒,但<b>新型/伪装文件不一定能拦</b></li>
+              <li>占用 Drive 配额(免费 15GB);超过 <code>MEDIA_MAX_MB</code> 的大文件会被跳过</li>
+              <li>不需要这个功能时<b>留空就好</b>,系统会自动 fallback 显示文字「[图片]/[文件]」</li>
+            </ul>
+          </div>
+        </details>
+        <button type="button" class="test-btn" id="testMediaFolderBtn">▸ 测试文件夹权限</button>
+        <span class="test-result" id="testMediaFolderResult"></span>
+      </div>
+
+      <div class="field">
+        <label>单文件上传上限 (MB)</label>
+        <input type="number" name="media_max_mb" value="{{ d.media_max_mb or 20 }}" min="1" max="200" style="max-width:120px;">
+        <div class="hint">超过此大小的文件不会上传(防止刷爆 Drive),只显示文字占位。预设 20 MB</div>
+      </div>
     </div>
 
     <div class="section">
@@ -930,6 +970,26 @@ if (testSheetsBtn) {
     const data = await resp.json();
     res.textContent = (data.ok ? '✓ ' : '✗ ') + data.msg;
     res.className = 'test-result ' + (data.ok ? 'ok' : 'err');
+    btn.disabled = false;
+  });
+}
+
+const testMediaFolderBtn = byId('testMediaFolderBtn');
+if (testMediaFolderBtn) {
+  testMediaFolderBtn.addEventListener('click', async () => {
+    const btn = byId('testMediaFolderBtn'), res = byId('testMediaFolderResult');
+    btn.disabled = true; res.textContent = '测试中...'; res.className = 'test-result';
+    try {
+      const fd = new FormData();
+      fd.append('media_folder_id', byId('media_folder_id').value);
+      const resp = await fetch('/api/test-media-folder', {method: 'POST', body: fd});
+      const data = await resp.json();
+      res.textContent = (data.ok ? '✓ ' : '✗ ') + data.msg;
+      res.className = 'test-result ' + (data.ok ? 'ok' : 'err');
+    } catch (e) {
+      res.textContent = '✗ 请求失败: ' + e.message;
+      res.className = 'test-result err';
+    }
     btn.disabled = false;
   });
 }

@@ -196,7 +196,8 @@ def write_env(updates):
     order = [
         "API_ID", "API_HASH",
         "COMPANY_NAME", "COMPANY_DISPLAY", "PEER_ROLE_LABEL",
-        "SHEET_ID", "BOT_TOKEN", "ALERT_GROUP_ID",
+        "SHEET_ID", "MEDIA_FOLDER_ID", "MEDIA_RETENTION_DAYS", "MEDIA_MAX_MB",
+        "BOT_TOKEN", "ALERT_GROUP_ID",
         "WEB_PORT", "WEB_PASSWORD",
         "KEYWORDS", "NO_REPLY_MINUTES",
         "WORK_HOUR_START", "WORK_HOUR_END",
@@ -634,6 +635,8 @@ def setup_page():
         "bot_token": env.get("BOT_TOKEN", ""),
         "alert_group_id": env.get("ALERT_GROUP_ID", ""),
         "sheet_id": env.get("SHEET_ID", ""),
+        "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
+        "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
         "web_password": env.get("WEB_PASSWORD", DEFAULT_WEB_PASSWORD),
         "keywords": env.get("KEYWORDS", DEFAULT_KEYWORDS),
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
@@ -657,6 +660,8 @@ def settings_page():
         "bot_token": env.get("BOT_TOKEN", ""),
         "alert_group_id": env.get("ALERT_GROUP_ID", ""),
         "sheet_id": env.get("SHEET_ID", ""),
+        "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
+        "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
         "keywords": env.get("KEYWORDS", DEFAULT_KEYWORDS),
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
         "api_id": env.get("API_ID", DEFAULT_API_ID),
@@ -675,6 +680,53 @@ def api_test_bot():
     data = request.get_json(silent=True) or request.form
     ok, msg = _test_bot_api(data.get("bot_token"), data.get("alert_group_id"))
     return jsonify({"ok": ok, "msg": msg})
+
+
+@app.route("/api/test-media-folder", methods=["POST"])
+def api_test_media_folder():
+    """测试 Drive 文件夹访问权限：用现有 service-account.json 检查能否在该文件夹建文件"""
+    folder_id = (request.form.get("media_folder_id") or "").strip()
+    if not folder_id:
+        return jsonify({"ok": False, "msg": "请填写 Drive 文件夹 ID"})
+    if not SA_PATH.exists():
+        return jsonify({"ok": False, "msg": "请先上传 service-account.json"})
+    try:
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaIoBaseUpload
+        import io as _io
+        creds = Credentials.from_service_account_file(
+            str(SA_PATH),
+            scopes=["https://www.googleapis.com/auth/drive"],
+        )
+        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+        # 1. 文件夹存在性 + 访问权限
+        meta = drive.files().get(fileId=folder_id, fields="id,name,mimeType",
+                                 supportsAllDrives=True).execute()
+        if meta.get("mimeType") != "application/vnd.google-apps.folder":
+            return jsonify({"ok": False, "msg": f"ID「{folder_id}」不是文件夹"})
+        folder_name = meta.get("name", "")
+        # 2. 写权限测试：建一个 4 字节探针文件，立即删掉
+        probe = MediaIoBaseUpload(_io.BytesIO(b"ping"), mimetype="text/plain", resumable=False)
+        f = drive.files().create(
+            body={"name": "_tg_monitor_probe.txt", "parents": [folder_id]},
+            media_body=probe, fields="id", supportsAllDrives=True,
+        ).execute()
+        try:
+            drive.files().delete(fileId=f["id"], supportsAllDrives=True).execute()
+        except Exception:
+            pass
+        return jsonify({"ok": True, "msg": f"成功访问文件夹「{folder_name}」并通过写入测试 ✓"})
+    except Exception as e:
+        err = str(e)
+        if "File not found" in err or "notFound" in err:
+            try:
+                sa = json.loads(SA_PATH.read_bytes())
+                email = sa.get("client_email", "?")
+            except Exception:
+                email = "?"
+            return jsonify({"ok": False, "msg": f"文件夹找不到或没权限。请把文件夹分享给 service account：{email}（编辑者）"})
+        return jsonify({"ok": False, "msg": f"{type(e).__name__}: {err}"})
 
 
 @app.route("/api/test-sheets", methods=["POST"])
@@ -784,6 +836,8 @@ def _save_settings(is_first):
         "BOT_TOKEN": bot_token,
         "ALERT_GROUP_ID": alert_group_id,
         "SHEET_ID": sheet_id,
+        "MEDIA_FOLDER_ID": form.get("media_folder_id", "").strip(),
+        "MEDIA_MAX_MB": form.get("media_max_mb", "20").strip() or "20",
         "KEYWORDS": new_keywords_str,
         "NO_REPLY_MINUTES": form.get("no_reply_minutes", DEFAULT_NO_REPLY_MINUTES),
         "API_ID": form.get("api_id", DEFAULT_API_ID),

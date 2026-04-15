@@ -341,7 +341,9 @@ class SheetsWriter:
         if rows:
             end_row = current_row + len(rows) - 1
             self._rate_limit()
-            ws.update(f"{col_a}{current_row}:{col_c}{end_row}", rows)
+            # value_input_option=USER_ENTERED → =IMAGE() / =HYPERLINK() 公式才会渲染（启用 MEDIA_FOLDER_ID 后）
+            # 普通文字消息不受影响：USER_ENTERED 对纯文本等同 RAW，只是不会自动转日期/数字
+            ws.update(f"{col_a}{current_row}:{col_c}{end_row}", rows, value_input_option="USER_ENTERED")
 
             for i, m in enumerate(messages):
                 db.mark_written(m["id"], current_row + i)
