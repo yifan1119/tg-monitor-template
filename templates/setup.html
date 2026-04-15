@@ -844,6 +844,21 @@
         <input type="number" name="media_max_mb" value="{{ d.media_max_mb or 20 }}" min="1" max="200" style="max-width:120px;">
         <div class="hint">超过此大小的文件不会上传(防止刷爆 Drive),只显示文字占位。预设 20 MB</div>
       </div>
+
+      <div class="field">
+        <label>Drive 旧媒体自动清理 (天) <span style="color:#7c8a9a;font-weight:400;">— 0 表示永不清理</span></label>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <input type="number" name="media_retention_days" id="media_retention_days"
+                 value="{{ d.media_retention_days or 0 }}" min="0" max="3650" style="max-width:120px;">
+          <button type="button" class="test-btn" id="cleanupNowBtn">▸ 立即清理一次</button>
+          <span class="test-result" id="cleanupNowResult"></span>
+        </div>
+        <div class="hint">
+          每天凌晨 03:00 (北京时间) 自动删除 Drive 文件夹里超过 N 天的文件,防止长期堆积。
+          删除后 Sheet 里的旧文件链接会失效,但文字记录(时间/发送人/内容)永久保留。
+          Drive 回收站还留 30 天,误删可以恢复。常用:30 / 60 / 90 天。
+        </div>
+      </div>
     </div>
 
     <div class="section">
@@ -1171,6 +1186,33 @@ if (testMediaFolderBtn) {
       const fd = new FormData();
       fd.append('media_folder_id', byId('media_folder_id').value);
       const resp = await fetch('/api/test-media-folder', {method: 'POST', body: fd});
+      const data = await resp.json();
+      res.textContent = (data.ok ? '✓ ' : '✗ ') + data.msg;
+      res.className = 'test-result ' + (data.ok ? 'ok' : 'err');
+    } catch (e) {
+      res.textContent = '✗ 请求失败: ' + e.message;
+      res.className = 'test-result err';
+    }
+    btn.disabled = false;
+  });
+}
+
+const cleanupNowBtn = byId('cleanupNowBtn');
+if (cleanupNowBtn) {
+  cleanupNowBtn.addEventListener('click', async () => {
+    const btn = byId('cleanupNowBtn'), res = byId('cleanupNowResult');
+    const days = (byId('media_retention_days').value || '0').trim();
+    if (!days || parseInt(days) <= 0) {
+      res.textContent = '✗ 请先在左边填保留天数 (> 0)';
+      res.className = 'test-result err';
+      return;
+    }
+    if (!confirm(`确定删除 Drive 里超过 ${days} 天的媒体文件吗?\n(Drive 回收站还会保留 30 天,可恢复)`)) return;
+    btn.disabled = true; res.textContent = '清理中...'; res.className = 'test-result';
+    try {
+      const fd = new FormData();
+      fd.append('days', days);
+      const resp = await fetch('/api/media/cleanup-now', {method: 'POST', body: fd});
       const data = await resp.json();
       res.textContent = (data.ok ? '✓ ' : '✗ ') + data.msg;
       res.className = 'test-result ' + (data.ok ? 'ok' : 'err');

@@ -31,6 +31,7 @@ class TaskScheduler:
             self._no_reply_loop(),
             self._daily_report_loop(),
             self._peer_name_consistency_loop(),
+            self._media_cleanup_loop(),
         )
 
     async def stop(self):
@@ -296,6 +297,33 @@ class TaskScheduler:
             except Exception as e:
                 logger.error("广告主名一致性巡检失败: %s", e)
             await asyncio.sleep(config.PATROL_INTERVAL)  # 预设 60 秒
+
+    async def _media_cleanup_loop(self):
+        """每天北京时间 03:00 清理 Drive 里超过 MEDIA_RETENTION_DAYS 天的旧媒体。
+        MEDIA_RETENTION_DAYS=0 时 loop 还是照跑(睡到点再 check),客户改设置后下一轮立刻生效。"""
+        while self._running:
+            now = datetime.now(TZ_BJ)
+            target = now.replace(hour=3, minute=0, second=0, microsecond=0)
+            if target <= now:
+                target = target + timedelta(days=1)
+            wait_s = (target - now).total_seconds()
+            logger.info("下次媒体清理在 %s (北京时间)", target.strftime('%Y-%m-%d %H:%M:%S'))
+            await asyncio.sleep(wait_s)
+
+            try:
+                # 动态读(客户可能在 web 后台改了 MEDIA_RETENTION_DAYS,但 config 没 reload)
+                # → 每次跑都从 .env 重新读一次
+                import importlib
+                importlib.reload(config)
+                days = int(getattr(config, "MEDIA_RETENTION_DAYS", 0) or 0)
+                if days <= 0:
+                    logger.info("MEDIA_RETENTION_DAYS=0, 跳过自动清理")
+                    continue
+                import media_uploader
+                deleted, failed = media_uploader.cleanup_old_media(days)
+                logger.info("每日媒体清理完成: 删 %d 失败 %d", deleted, failed)
+            except Exception as e:
+                logger.error("每日媒体清理失败: %s", e)
 
     async def _daily_report_loop(self):
         """每天北京时间 00:00 发日报"""

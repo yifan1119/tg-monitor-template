@@ -836,6 +836,7 @@ def setup_page():
         "sheet_id": env.get("SHEET_ID", ""),
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
+        "media_retention_days": env.get("MEDIA_RETENTION_DAYS", "0"),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -864,6 +865,7 @@ def settings_page():
         "sheet_id": env.get("SHEET_ID", ""),
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
+        "media_retention_days": env.get("MEDIA_RETENTION_DAYS", "0"),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -1119,6 +1121,45 @@ def api_test_media_folder():
         return jsonify({"ok": False, "msg": f"{type(e).__name__}: {err}"})
 
 
+@app.route("/api/media/cleanup-now", methods=["POST"])
+@login_required
+def api_media_cleanup_now():
+    """手动触发一次 Drive 旧媒体清理。
+
+    天数优先级:表单 days > .env MEDIA_RETENTION_DAYS
+    (允许客户在设置页改完输入框,不保存直接点「立即清理」用新值试水)
+    """
+    try:
+        days_str = (request.form.get("days", "") or "").strip()
+        if not days_str:
+            days_str = read_env().get("MEDIA_RETENTION_DAYS", "0") or "0"
+        try:
+            days = int(days_str)
+        except ValueError:
+            return jsonify({"ok": False, "msg": f"保留天数非法: {days_str}"})
+        if days <= 0:
+            return jsonify({"ok": False, "msg": "保留天数需 > 0 (0 表示永不清理)"})
+        # 让 media_uploader 用最新 config
+        try:
+            import importlib
+            importlib.reload(config)
+        except Exception:
+            pass
+        import media_uploader
+        if not media_uploader.is_enabled():
+            return jsonify({"ok": False, "msg": "MEDIA_FOLDER_ID 未配置,请先连接 Google Drive"})
+        deleted, failed = media_uploader.cleanup_old_media(days)
+        return jsonify({
+            "ok": True,
+            "deleted": deleted,
+            "failed": failed,
+            "msg": f"清理完成:删除 {deleted} 个文件" + (f",失败 {failed} 个" if failed else "")
+                   + (" (超过 " + str(days) + " 天的旧文件)"),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"{type(e).__name__}: {e}"})
+
+
 @app.route("/api/test-sheets", methods=["POST"])
 def api_test_sheets():
     """测试 Sheet ID + service-account.json"""
@@ -1228,6 +1269,7 @@ def _save_settings(is_first):
         "SHEET_ID": sheet_id,
         "MEDIA_FOLDER_ID": form.get("media_folder_id", "").strip(),
         "MEDIA_MAX_MB": form.get("media_max_mb", "20").strip() or "20",
+        "MEDIA_RETENTION_DAYS": form.get("media_retention_days", "0").strip() or "0",
         "GOOGLE_OAUTH_CLIENT_ID": form.get("oauth_client_id", "").strip(),
         "GOOGLE_OAUTH_CLIENT_SECRET": form.get("oauth_client_secret", "").strip(),
         "KEYWORDS": new_keywords_str,

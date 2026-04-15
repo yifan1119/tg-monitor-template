@@ -194,3 +194,81 @@ async def upload_media(message, media_type, peer_name=""):
     except Exception as e:
         logger.warning("媒体上传失败 [%s]: %s", media_type, e)
         return "", ""
+
+
+def list_old_files(retention_days):
+    """列出 MEDIA_FOLDER_ID 里 createdTime 早于 cutoff 的文件。
+    Drive API 的 createdTime < 'RFC3339' 直接在服务端过滤,不用全拉下来自己比。
+    """
+    if not is_enabled():
+        return []
+    drive = _get_drive()
+    if not drive:
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+    q = (
+        f"'{config.MEDIA_FOLDER_ID}' in parents "
+        f"and trashed=false "
+        f"and createdTime < '{cutoff_iso}'"
+    )
+    old = []
+    page_token = None
+    while True:
+        try:
+            resp = drive.files().list(
+                q=q,
+                fields="nextPageToken, files(id, name, createdTime)",
+                pageSize=1000,
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute()
+        except Exception as e:
+            logger.warning("list 旧媒体失败: %s", e)
+            break
+        old.extend(resp.get("files", []))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return old
+
+
+def cleanup_old_media(retention_days=None):
+    """删掉 MEDIA_FOLDER_ID 里超过 retention_days 天的文件。
+
+    - retention_days=None → 读 config.MEDIA_RETENTION_DAYS
+    - retention_days<=0 → 跳过(等于「永不删」)
+    - 返回 (deleted_count, failed_count)
+    - drive.file scope 只能删本应用上传的文件,不会误删客户 Drive 其他东西
+    - Drive 回收站还留 30 天,真删错了还能恢复
+    """
+    if retention_days is None:
+        retention_days = int(getattr(config, "MEDIA_RETENTION_DAYS", 0) or 0)
+    if retention_days <= 0:
+        logger.info("MEDIA_RETENTION_DAYS<=0, 跳过清理")
+        return 0, 0
+    if not is_enabled():
+        logger.info("MEDIA_FOLDER_ID 未配置, 跳过清理")
+        return 0, 0
+    drive = _get_drive()
+    if not drive:
+        return 0, 0
+    old_files = list_old_files(retention_days)
+    if not old_files:
+        logger.info("没有超过 %d 天的旧媒体文件", retention_days)
+        return 0, 0
+    deleted = 0
+    failed = 0
+    for f in old_files:
+        try:
+            drive.files().delete(
+                fileId=f["id"],
+                supportsAllDrives=True,
+            ).execute()
+            deleted += 1
+        except Exception as e:
+            logger.warning("删除文件失败 %s: %s", f.get("name"), e)
+            failed += 1
+    logger.info("清理旧媒体: 删 %d 个, 失败 %d 个 (> %d 天)", deleted, failed, retention_days)
+    return deleted, failed

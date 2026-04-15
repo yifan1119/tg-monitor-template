@@ -113,9 +113,10 @@ PEER_ROLE_LABEL = os.environ.get("PEER_ROLE_LABEL", "广告主")
 # 媒体文件直显（图片/文件/语音/视频上传到 Drive 后展示在 Sheets）
 # - MEDIA_FOLDER_ID：客户自己建一个 Google Drive 文件夹，把 service-account 的 client_email
 #   加为编辑者（或用「任何人查看」权限），把文件夹 ID 填这里。留空 = 不上传，仍显示文字占位。
-# - MEDIA_RETENTION_DAYS：保留天数（暂只是配置项，未来可用于清理；实际清理由用户自己在 Drive 操作）
+# - MEDIA_RETENTION_DAYS：保留天数。>0 = 每天凌晨 3 点自动删超期 Drive 文件
+#   （Drive 回收站再留 30 天可恢复），0 = 永不删（默认，opt-in 才清理，升级不会误删老文件）。
 MEDIA_FOLDER_ID = os.environ.get("MEDIA_FOLDER_ID", "").strip()
-MEDIA_RETENTION_DAYS = int(os.environ.get("MEDIA_RETENTION_DAYS", "30") or "30")
+MEDIA_RETENTION_DAYS = int(os.environ.get("MEDIA_RETENTION_DAYS", "0") or "0")
 # 单文件上传大小上限（MB），防止大文件刷爆 Drive 配额
 MEDIA_MAX_MB = int(os.environ.get("MEDIA_MAX_MB", "20") or "20")
 
