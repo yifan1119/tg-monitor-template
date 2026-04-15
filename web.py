@@ -763,6 +763,15 @@ def _save_settings(is_first):
             "is_super": True,
         }})
 
+    # 关键词 diff（让前端 banner 显示新增/移除了哪些）
+    def _parse_kw(s):
+        return [k.strip() for k in (s or "").split(",") if k.strip()]
+    old_keywords = _parse_kw(read_env().get("KEYWORDS", ""))
+    new_keywords_str = form.get("keywords", DEFAULT_KEYWORDS)
+    new_keywords = _parse_kw(new_keywords_str)
+    kw_added = [k for k in new_keywords if k not in old_keywords]
+    kw_removed = [k for k in old_keywords if k not in new_keywords]
+
     # 写 .env
     updates = {
         "COMPANY_NAME": company_name,
@@ -770,7 +779,7 @@ def _save_settings(is_first):
         "BOT_TOKEN": bot_token,
         "ALERT_GROUP_ID": alert_group_id,
         "SHEET_ID": sheet_id,
-        "KEYWORDS": form.get("keywords", DEFAULT_KEYWORDS),
+        "KEYWORDS": new_keywords_str,
         "NO_REPLY_MINUTES": form.get("no_reply_minutes", DEFAULT_NO_REPLY_MINUTES),
         "API_ID": form.get("api_id", DEFAULT_API_ID),
         "API_HASH": form.get("api_hash", DEFAULT_API_HASH),
@@ -795,6 +804,8 @@ def _save_settings(is_first):
         "msg": "设置已保存" + ("并启动监控服务" if is_first else "并重启监控服务"),
         "docker_ok": ok,
         "docker_msg": msg_docker,
+        "kw_added": kw_added,
+        "kw_removed": kw_removed,
         "redirect": url_for("login_page"),
     })
 

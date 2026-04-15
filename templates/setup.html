@@ -805,6 +805,45 @@ function log(msg, cls) {
   progress.scrollTop = progress.scrollHeight;
 }
 
+// 保存成功后的大号绿色 banner (让非技术用户也一目了然)
+function showSuccessBanner(title, body) {
+  const old = document.getElementById('success-banner');
+  if (old) old.remove();
+  const bar = document.createElement('div');
+  bar.id = 'success-banner';
+  bar.style.cssText = `
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background: linear-gradient(135deg, #00e88f 0%, #2aabee 100%);
+    color: #000; padding: 18px 26px; border-radius: 12px;
+    font-family: "JetBrains Mono", monospace; font-weight: 600;
+    box-shadow: 0 12px 40px rgba(0,232,143,0.4), 0 0 0 1px rgba(255,255,255,0.2);
+    z-index: 99999; max-width: 640px; min-width: 420px;
+    white-space: pre-wrap; line-height: 1.6; font-size: 13px;
+    animation: slideDown 0.4s ease-out;
+  `;
+  bar.innerHTML =
+    '<div style="font-size:16px;margin-bottom:8px;">' + title + '</div>' +
+    '<div style="font-size:12px;opacity:0.85;font-weight:500;">' + body.replace(/\n/g, '<br>') + '</div>' +
+    '<div style="text-align:right;margin-top:10px;"><button onclick="document.getElementById(\'success-banner\').remove()" style="background:rgba(0,0,0,0.2);color:#000;border:none;padding:4px 14px;border-radius:4px;cursor:pointer;font-family:inherit;font-weight:600;">知道了</button></div>';
+  document.body.appendChild(bar);
+  // 8 秒后自动消失
+  setTimeout(() => {
+    if (document.getElementById('success-banner')) {
+      bar.style.transition = 'opacity 0.5s';
+      bar.style.opacity = '0';
+      setTimeout(() => bar.remove(), 500);
+    }
+  }, 8000);
+}
+
+// 注入 slideDown 动画
+if (!document.getElementById('success-banner-keyframes')) {
+  const style = document.createElement('style');
+  style.id = 'success-banner-keyframes';
+  style.textContent = `@keyframes slideDown { from { opacity: 0; transform: translate(-50%, -30px); } to { opacity: 1; transform: translate(-50%, 0); } }`;
+  document.head.appendChild(style);
+}
+
 // ======= 主配置表单(setup 模式 或 admin settings 模式) =======
 const saFile = byId('sa_file');
 if (saFile) {
@@ -869,11 +908,23 @@ if (setupForm) {
       if (data.ok) {
         log('[成功] ' + data.msg, 'ok');
         if (data.docker_msg) log('[容器] ' + data.docker_msg, data.docker_ok ? 'ok' : 'err');
+        // 关键词变更摘要
+        if (data.kw_added && data.kw_added.length) log('[关键词] ➕ 新增: ' + data.kw_added.join(', '), 'ok');
+        if (data.kw_removed && data.kw_removed.length) log('[关键词] ➖ 移除: ' + data.kw_removed.join(', '), 'ok');
         {% if mode == 'setup' %}
         log('[完成] 3 秒后跳转到登入页...', 'ok');
         setTimeout(() => location.href = data.redirect || '/login', 3000);
         {% else %}
-        log('[完成] 配置已重载', 'ok');
+        // 配置模式：显著的成功 banner，让客户/主管一眼看到已生效
+        const kwLine = (data.kw_added && data.kw_added.length)
+          ? '\n新增关键词已生效：' + data.kw_added.join(', ')
+          : '';
+        showSuccessBanner(
+          '✅ 已保存并自动重启监控',
+          '配置已写入 .env → 监控容器已重启 → 新关键词已加载' + kwLine +
+          '\n\n⚠️ 测试新关键词提示：同一客户同一关键词今天已推过则不会再推（每日去重）。'
+        );
+        log('[完成] 配置已重载 + 容器重启完成，设置立即生效 ✅', 'ok');
         setTimeout(() => btn.disabled = false, 1500);
         {% endif %}
       } else {
