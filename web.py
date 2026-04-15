@@ -325,6 +325,196 @@ def _start_tg_monitor():
         return False, str(e)
 
 
+def _detect_public_ip():
+    """检测 VPS 公网 IP — 多源 fallback"""
+    for url in ("https://api.ipify.org", "https://ifconfig.me", "https://ipinfo.io/ip"):
+        try:
+            with urllib.request.urlopen(url, timeout=5) as r:
+                ip = r.read().decode().strip()
+                # 简单校验是 IPv4
+                parts = ip.split(".")
+                if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+                    return ip
+        except Exception:
+            continue
+    return ""
+
+
+def _https_status():
+    """检查 Caddy 容器是否在跑 + 当前 PUBLIC_DOMAIN"""
+    env = read_env()
+    domain = env.get("PUBLIC_DOMAIN", "").strip()
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        for c in client.containers.list(all=True):
+            if c.name.startswith("tg-caddy-"):
+                running = c.status == "running"
+                return {
+                    "enabled": running,
+                    "domain": domain,
+                    "container": c.name,
+                    "status": c.status,
+                }
+    except Exception as e:
+        return {"enabled": False, "domain": domain, "error": str(e)}
+    return {"enabled": False, "domain": domain}
+
+
+def _enable_https_now(custom_domain=""):
+    """一键启用 HTTPS — 在 docker socket 上启 Caddy 容器,自动 Let's Encrypt 签证书
+
+    流程:
+    1. 决定域名:custom_domain 优先,否则自动检测 IP → nip.io
+    2. 写 PUBLIC_DOMAIN 到 .env
+    3. 找 web 容器的 host 挂载路径(给 Caddy 挂 Caddyfile)+ 网络名(让 Caddy 能 reverse_proxy web:5001)
+    4. 删旧 caddy 容器(如果有)
+    5. 启 caddy 容器,挂 Caddyfile + named volumes
+    6. 等几秒返回新域名给前端
+    """
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+
+        # 1. 域名
+        domain = (custom_domain or "").strip()
+        if not domain:
+            ip = _detect_public_ip()
+            if not ip:
+                return False, "无法自动获取公网 IP,请手动指定域名"
+            domain = f"{ip.replace('.', '-')}.nip.io"
+
+        company = read_env().get("COMPANY_NAME", "default")
+        caddy_name = f"tg-caddy-{company}"
+        web_name = f"tg-web-{company}"
+
+        # 2. 找 web 容器,拿到它的网络名 + host 挂载路径
+        try:
+            web_c = client.containers.get(web_name)
+        except docker_sdk.errors.NotFound:
+            # 兜底:找任何 tg-web- 开头的
+            web_c = None
+            for c in client.containers.list(all=True):
+                if c.name.startswith("tg-web-"):
+                    web_c = c
+                    break
+            if not web_c:
+                return False, "找不到 web 容器,请先 docker compose up -d"
+
+        # 网络名(取第一个非 bridge 的)
+        nets = list(web_c.attrs["NetworkSettings"]["Networks"].keys())
+        web_net = next((n for n in nets if n != "bridge"), None) or (nets[0] if nets else None)
+        if not web_net:
+            return False, "找不到 web 容器的网络"
+
+        # web 容器在自己网络里的 service 别名(docker compose 会注册 service name 当 alias)
+        web_alias = "web"
+        net_info = web_c.attrs["NetworkSettings"]["Networks"].get(web_net, {})
+        aliases = net_info.get("Aliases", []) or []
+        # 优先用 web alias,否则用容器名
+        upstream = "web" if "web" in aliases else web_c.name
+
+        # host 上的项目目录(找 /app/repo 或 /app 的 Source)
+        host_dir = None
+        for m in web_c.attrs.get("Mounts", []):
+            if m.get("Destination") == "/app/repo":
+                host_dir = m.get("Source")
+                break
+        if not host_dir:
+            # 退路:找任何 destination 是 /app/.env 的,取它的 dirname
+            for m in web_c.attrs.get("Mounts", []):
+                if m.get("Destination") == "/app/.env":
+                    host_dir = str(Path(m.get("Source", "")).parent)
+                    break
+        if not host_dir:
+            return False, "找不到项目目录的 host 路径,请确认 docker-compose.yml 有挂 .:/app/repo"
+
+        caddyfile_host = f"{host_dir}/Caddyfile"
+
+        # 3. 写 .env
+        write_env({"PUBLIC_DOMAIN": domain})
+
+        # 4. 删旧 caddy
+        try:
+            old = client.containers.get(caddy_name)
+            old.stop(timeout=5)
+            old.remove(force=True)
+        except docker_sdk.errors.NotFound:
+            pass
+
+        # 5. 准备 named volumes
+        for vol_name in (f"{caddy_name}_data", f"{caddy_name}_config"):
+            try:
+                client.volumes.get(vol_name)
+            except docker_sdk.errors.NotFound:
+                client.volumes.create(name=vol_name)
+
+        # 6. 启动 caddy
+        # Caddyfile 用 {$PUBLIC_DOMAIN} 占位,这里通过 env 传入;upstream 也通过 env 传(改 Caddyfile 兼容)
+        caddy = client.containers.run(
+            "caddy:2-alpine",
+            name=caddy_name,
+            detach=True,
+            restart_policy={"Name": "unless-stopped"},
+            ports={"80/tcp": 80, "443/tcp": 443},
+            volumes={
+                caddyfile_host: {"bind": "/etc/caddy/Caddyfile", "mode": "ro"},
+                f"{caddy_name}_data": {"bind": "/data", "mode": "rw"},
+                f"{caddy_name}_config": {"bind": "/config", "mode": "rw"},
+            },
+            environment={
+                "PUBLIC_DOMAIN": domain,
+                "WEB_UPSTREAM": f"{upstream}:5001",
+                "TZ": "Asia/Shanghai",
+            },
+            network=web_net,
+        )
+
+        return True, {
+            "domain": domain,
+            "container": caddy_name,
+            "redirect_uri": f"https://{domain}/api/oauth/callback",
+            "js_origin": f"https://{domain}",
+            "settings_url": f"https://{domain}/settings",
+        }
+
+    except Exception as e:
+        import traceback
+        return False, f"{type(e).__name__}: {e}\n{traceback.format_exc()[-500:]}"
+
+
+@app.route("/api/enable-https", methods=["POST"])
+@admin_required
+def api_enable_https():
+    custom = (request.form.get("domain") or "").strip()
+    ok, payload = _enable_https_now(custom)
+    if ok:
+        return jsonify({"ok": True, "msg": "Caddy 已启动,正在申请 Let's Encrypt 证书(约 30-60 秒)", **payload})
+    return jsonify({"ok": False, "msg": str(payload)})
+
+
+@app.route("/api/https-status", methods=["GET"])
+@admin_required
+def api_https_status():
+    return jsonify(_https_status())
+
+
+@app.route("/api/disable-https", methods=["POST"])
+@admin_required
+def api_disable_https():
+    """关掉 Caddy(回退到 http://IP:5002 直连)"""
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        for c in client.containers.list(all=True):
+            if c.name.startswith("tg-caddy-"):
+                c.stop(timeout=5)
+                c.remove(force=True)
+        return jsonify({"ok": True, "msg": "Caddy 已停止"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)})
+
+
 def _get_spreadsheet():
     """获取 Google Sheets 连接"""
     creds = Credentials.from_service_account_file(
@@ -760,12 +950,30 @@ def api_oauth_callback():
             media_uploader.reset_drive_cache()
         except Exception:
             pass
+
+        # 自动建 Drive 文件夹(如果客户没填) → 客户连建文件夹这步都免了
+        existing_folder = read_env().get("MEDIA_FOLDER_ID", "").strip()
+        auto_folder_msg = ""
+        if not existing_folder:
+            try:
+                folder_id = oauth_helper.auto_create_folder("tg-monitor-媒体")
+                if folder_id:
+                    write_env({"MEDIA_FOLDER_ID": folder_id})
+                    try:
+                        import importlib
+                        importlib.reload(config)
+                    except Exception:
+                        pass
+                    auto_folder_msg = f"<p style='color:#9ef0b8;'>✓ 自动建好了 Drive 文件夹「tg-monitor-媒体」(id: <code>{folder_id[:20]}...</code>)</p>"
+            except Exception as e:
+                auto_folder_msg = f"<p style='color:#ff9b3d;'>⚠ 自动建文件夹失败({e}),请手动到设置页填 Drive 文件夹 ID</p>"
         return f"""
         <html><head><meta charset='utf-8'><title>授权成功</title></head>
         <body style='font-family:sans-serif;background:#0a0e14;color:#cfe3f5;padding:60px;text-align:center;'>
           <h1 style='color:#4ade80;'>✓ Google Drive 已连接</h1>
           <p style='font-size:18px;margin:20px 0;'>授权账号:<code style='background:#1a2230;padding:4px 10px;border-radius:4px;'>{email or '(unknown)'}</code></p>
           <p style='color:#7c8a9a;'>后续客户发的图片/文件会上传到这个账号的 Drive,使用其 15GB 免费配额。</p>
+          {auto_folder_msg}
           <p style='margin-top:40px;'><a href='/settings' style='color:#7ec9ff;font-size:16px;'>← 返回设置页</a></p>
         </body></html>
         """

@@ -13,7 +13,7 @@
 # 前提:VPS 80 / 443 端口对外开放(Let's Encrypt HTTP-01 challenge 用)
 
 {$PUBLIC_DOMAIN} {
-    reverse_proxy web:5001 {
+    reverse_proxy {$WEB_UPSTREAM:web:5001} {
         # 透传真实 host,Flask 的 request.host_url 才会拿到外部 host(给 OAuth redirect 用)
         header_up Host {host}
         header_up X-Real-IP {remote}

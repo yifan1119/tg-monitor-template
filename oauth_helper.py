@@ -126,6 +126,33 @@ def get_credentials():
     )
 
 
+def auto_create_folder(folder_name="tg-monitor-媒体"):
+    """OAuth 授权完成后,自动在用户 Drive 根目录建一个文件夹,返回 folder_id。
+    不让客户自己跑去 Drive 建。"""
+    creds = get_credentials()
+    if not creds:
+        return ""
+    try:
+        from googleapiclient.discovery import build
+        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+        # 先查同名文件夹,有就复用
+        q = (f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' "
+             f"and trashed=false")
+        existing = drive.files().list(q=q, fields="files(id,name)", pageSize=1).execute()
+        if existing.get("files"):
+            return existing["files"][0]["id"]
+        # 没有就建
+        f = drive.files().create(
+            body={"name": folder_name, "mimeType": "application/vnd.google-apps.folder"},
+            fields="id",
+        ).execute()
+        logger.info("自动建了 Drive 文件夹: %s (id=%s)", folder_name, f["id"])
+        return f["id"]
+    except Exception as e:
+        logger.warning("自动建文件夹失败: %s", e)
+        return ""
+
+
 def revoke_token():
     """撤销并删除本地 token"""
     t = load_token()
