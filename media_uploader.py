@@ -159,25 +159,20 @@ async def upload_media(message, media_type, peer_name=""):
         except Exception as e:
             logger.warning("设公开权限失败 (file=%s): %s", filename, e)
 
-        # 构 URL
-        # 图片：用 thumbnail / direct view URL，=IMAGE() 才能渲染
-        # 文件：用 webViewLink，点了开 Drive 预览页（带下载按钮）
-        if media_type == "photo":
-            # 旧版直链（=IMAGE 可吃）
-            img_url = f"https://drive.google.com/thumbnail?id={file_id}&sz=w400"
-            display = f'=IMAGE("{img_url}")'
-        else:
-            view_url = f.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
-            label_emoji = {
-                "voice": "🎙",
-                "video": "🎬",
-                "sticker": "🌟",
-                "file": "📎",
-            }.get(media_type, "📎")
-            label = f"{label_emoji} {filename}"
-            # Sheets 公式里的双引号要 escape
-            safe_label = label.replace('"', '""')
-            display = f'=HYPERLINK("{view_url}", "{safe_label}")'
+        # 全部用 =HYPERLINK 超链接,不渲染缩略图(缩略图挤在单元格里太小看不清)
+        # 点链接 → 跳 Drive 预览页,看大图/下载都方便
+        view_url = f.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
+        label_emoji = {
+            "photo": "🖼",
+            "voice": "🎙",
+            "video": "🎬",
+            "sticker": "🌟",
+            "file": "📎",
+        }.get(media_type, "📎")
+        label = f"{label_emoji} {filename}"
+        # Sheets 公式里的双引号要 escape
+        safe_label = label.replace('"', '""')
+        display = f'=HYPERLINK("{view_url}", "{safe_label}")'
 
         url = f.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
         logger.info("媒体上传成功 [%s] %s → %s", media_type, filename, url)
