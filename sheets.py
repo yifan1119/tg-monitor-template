@@ -1,13 +1,22 @@
-"""Google Sheets 写入器 — 3 列横排格式，从 A 列开始"""
+"""Google Sheets 写入器 — 3 列横排格式，从 A 列开始
+
+Level 1 架构后:认证路径只走 OAuth 用户凭证(跟 media_uploader.py 一致)。
+Service Account 路径已完全移除。
+
+SHEET_ID 允许首次为空 — 上层 web.py 会在 OAuth 授权完成后,通过
+`/api/sheets/auto-create` 路由调用 oauth_helper.auto_create_sheet()
+建好一个新的 Spreadsheet,把 id 写回 .env 再启动 tg-monitor 容器。
+所以 tg-monitor 启动时 SHEET_ID 必然已经有值。
+"""
 import logging
 import time
 import threading
 from datetime import datetime, timedelta, timezone
 import gspread
-from google.oauth2.service_account import Credentials
 
 import config
 import database as db
+import oauth_helper
 
 TZ_BJ = timezone(timedelta(hours=8))
 logger = logging.getLogger(__name__)
@@ -15,19 +24,21 @@ logger = logging.getLogger(__name__)
 
 class SheetsWriter:
     def __init__(self):
-        creds = Credentials.from_service_account_file(
-            str(config.SERVICE_ACCOUNT_FILE),
-            scopes=[
-                "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive",
-            ],
-        )
+        if not config.SHEET_ID:
+            raise RuntimeError(
+                "SHEET_ID 为空 — 请先在 setup 精灵完成 Google 授权并点「自动建表格」"
+            )
+        creds = oauth_helper.get_credentials()
+        if not creds:
+            raise RuntimeError(
+                "OAuth 凭证不存在 — 请先在 setup 精灵完成 Google 授权"
+            )
         self.gc = gspread.authorize(creds)
         self.spreadsheet = self.gc.open_by_key(config.SHEET_ID)
         self._last_api_call = 0
         self._min_interval = 1.5
         self._write_lock = threading.Lock()
-        logger.info("Google Sheets 连接成功: %s", self.spreadsheet.title)
+        logger.info("Google Sheets 连接成功 (OAuth): %s", self.spreadsheet.title)
         self.ensure_alert_tabs()
 
     # 告警分页表头（跟苏总现有 Sheet 格式 1:1 对齐）

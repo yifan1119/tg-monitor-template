@@ -2,8 +2,6 @@
 .env
 .env.*
 !.env.example
-service-account.json
-*-service-account.json
 oauth_token.json
 google_oauth_token.json
 token.json

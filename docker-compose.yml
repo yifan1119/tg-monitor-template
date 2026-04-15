@@ -10,7 +10,6 @@ services:
       - ./sessions:/app/sessions
       - ./data:/app/data
       - ./.env:/app/.env
-      - ./service-account.json:/app/service-account.json
       - .:/app/repo:ro
     environment:
       - TZ=Asia/Shanghai
@@ -33,7 +32,6 @@ services:
       - ./sessions:/app/sessions
       - ./data:/app/data
       - ./.env:/app/.env
-      - ./service-account.json:/app/service-account.json
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/app/repo:ro   # host 代码挂这,启动时 sync 到 /app
     working_dir: /app

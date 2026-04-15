@@ -11,8 +11,10 @@ API_ID = int(os.environ.get("API_ID", "0") or "0")
 API_HASH = os.environ.get("API_HASH", "")
 
 # Google Sheets
+# SHEET_ID 可留空 — 首次 OAuth 授权完成后,setup 精灵会自动建表并把 ID 写回 .env
 SHEET_ID = os.environ.get("SHEET_ID", "")
-SERVICE_ACCOUNT_FILE = BASE_DIR / "service-account.json"
+# Service Account 已移除 — Level 1 架构只走客户 OAuth 授权(客户本人 15GB Drive 配额)
+# SA 在非 Workspace 帐户下没有 Drive 存储配额,上传必 403,没救。
 
 # 首次设置完成标志：true 才会让 tg-monitor 正常启动
 SETUP_COMPLETE = os.environ.get("SETUP_COMPLETE", "false").lower() == "true"
@@ -111,8 +113,8 @@ DEVICE_NAME = os.environ.get("DEVICE_NAME", "shencha")  # TG 设备名称
 PEER_ROLE_LABEL = os.environ.get("PEER_ROLE_LABEL", "广告主")
 
 # 媒体文件直显（图片/文件/语音/视频上传到 Drive 后展示在 Sheets）
-# - MEDIA_FOLDER_ID：客户自己建一个 Google Drive 文件夹，把 service-account 的 client_email
-#   加为编辑者（或用「任何人查看」权限），把文件夹 ID 填这里。留空 = 不上传，仍显示文字占位。
+# - MEDIA_FOLDER_ID：OAuth 授权完成后由 setup 精灵自动在客户 Drive 根目录建 "tg-monitor-媒体"
+#   文件夹并把 ID 写回 .env。留空 = 不上传，仍显示文字占位。
 # - MEDIA_RETENTION_DAYS：保留天数。>0 = 每天凌晨 3 点自动删超期 Drive 文件
 #   （Drive 回收站再留 30 天可恢复），0 = 永不删（默认，opt-in 才清理，升级不会误删老文件）。
 MEDIA_FOLDER_ID = os.environ.get("MEDIA_FOLDER_ID", "").strip()

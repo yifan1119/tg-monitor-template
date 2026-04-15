@@ -9,7 +9,7 @@
 #
 # 行为:
 #   1. git fetch + 硬重置到 origin/main (用户本地改动会被丢弃)
-#   2. 保留 .env / data/ / sessions/ / service-account.json (这些在 volume 或 .gitignore)
+#   2. 保留 .env / data/ / sessions/ / data/google_oauth_token.json (OAuth 凭证)
 #   3. docker compose up -d --build 重建镜像
 #   4. 等容器起来并打印版本信息
 
