@@ -260,15 +260,20 @@ class TaskScheduler:
                         logger.warning("读 row 6 失败 [%s]: %s", account["name"], e)
                         continue
 
+                    role_label = config.PEER_ROLE_LABEL
                     updates = []  # [(range, value)]
                     for peer in peers:
-                        col_idx = peer["col_group"] * 3 + 2  # 0-based
-                        current = row6[col_idx] if col_idx < len(row6) else ""
-                        target = peer["name"] or f"用户{peer['tg_id']}"
-                        # 只改已存在广告主格的（current 不空），避免覆盖尚未 setup 的列组
-                        if current and current != target:
-                            cell = f"{_col_letter(col_idx)}6"
-                            updates.append((cell, target))
+                        col_group_b = peer["col_group"] * 3 + 1  # B 列索引（role 标签）
+                        col_group_c = peer["col_group"] * 3 + 2  # C 列索引（peer name）
+                        # 同步 peer 名
+                        current_name = row6[col_group_c] if col_group_c < len(row6) else ""
+                        target_name = peer["name"] or f"用户{peer['tg_id']}"
+                        if current_name and current_name != target_name:
+                            updates.append((f"{_col_letter(col_group_c)}6", target_name))
+                        # 同步 role 标签（广告主 → 客户/合作方等）
+                        current_label = row6[col_group_b] if col_group_b < len(row6) else ""
+                        if current_label and current_label != role_label:
+                            updates.append((f"{_col_letter(col_group_b)}6", role_label))
 
                     if updates:
                         try:

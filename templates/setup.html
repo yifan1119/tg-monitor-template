@@ -565,6 +565,18 @@
           <div class="hint">登入页与预警消息显示用</div>
         </div>
       </div>
+      <div class="two-col">
+        <div class="field">
+          <label>对话方角色称谓</label>
+          <input type="text" name="peer_role_label" maxlength="8"
+                 value="{% if mode == 'settings' %}{{ d.peer_role_label }}{% else %}广告主{% endif %}"
+                 placeholder="广告主">
+          <div class="hint">不同中心可能叫「广告主 / 客户 / 合作方 / 商家」等,会显示在 Sheet 表头和预警消息里。留空=「广告主」</div>
+        </div>
+        <div class="field">
+          <!-- 占位,保持两栏对齐 -->
+        </div>
+      </div>
       {% if mode == 'setup' %}
       <div class="two-col">
         <div class="field">

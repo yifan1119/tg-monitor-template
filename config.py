@@ -107,6 +107,9 @@ COMPANY_NAME = os.environ.get("COMPANY_NAME", "")  # 用于容器名（英文）
 COMPANY_DISPLAY = os.environ.get("COMPANY_DISPLAY", COMPANY_NAME)  # 用于页面显示（中文）
 DEVICE_NAME = os.environ.get("DEVICE_NAME", "shencha")  # TG 设备名称
 
+# 对话方角色称谓（不同部门可能叫「广告主」「客户」「合作方」等）
+PEER_ROLE_LABEL = os.environ.get("PEER_ROLE_LABEL", "广告主")
+
 # Sheets 刷写间隔（秒）
 SHEETS_FLUSH_INTERVAL = int(os.environ.get("SHEETS_FLUSH_INTERVAL", "5"))
 

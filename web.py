@@ -195,7 +195,7 @@ def write_env(updates):
     # 固定顺序，读起来舒服
     order = [
         "API_ID", "API_HASH",
-        "COMPANY_NAME", "COMPANY_DISPLAY",
+        "COMPANY_NAME", "COMPANY_DISPLAY", "PEER_ROLE_LABEL",
         "SHEET_ID", "BOT_TOKEN", "ALERT_GROUP_ID",
         "WEB_PORT", "WEB_PASSWORD",
         "KEYWORDS", "NO_REPLY_MINUTES",
@@ -371,7 +371,7 @@ def _create_sheet_tab(name, operator="", company=""):
         ])
         ws.update("A5:C6", [
             ["A", "外事号", name],
-            ["B", "广告主", "（等消息进来自动填）"],
+            ["B", config.PEER_ROLE_LABEL, "（等消息进来自动填）"],
         ])
 
         center_middle = {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}
@@ -628,6 +628,7 @@ def setup_page():
     defaults = {
         "company_name": env.get("COMPANY_NAME", ""),
         "company_display": env.get("COMPANY_DISPLAY", ""),
+        "peer_role_label": env.get("PEER_ROLE_LABEL", "广告主"),
         "bot_token": env.get("BOT_TOKEN", ""),
         "alert_group_id": env.get("ALERT_GROUP_ID", ""),
         "sheet_id": env.get("SHEET_ID", ""),
@@ -650,6 +651,7 @@ def settings_page():
     current = {
         "company_name": env.get("COMPANY_NAME", ""),
         "company_display": env.get("COMPANY_DISPLAY", ""),
+        "peer_role_label": env.get("PEER_ROLE_LABEL", "广告主"),
         "bot_token": env.get("BOT_TOKEN", ""),
         "alert_group_id": env.get("ALERT_GROUP_ID", ""),
         "sheet_id": env.get("SHEET_ID", ""),
@@ -776,6 +778,7 @@ def _save_settings(is_first):
     updates = {
         "COMPANY_NAME": company_name,
         "COMPANY_DISPLAY": form.get("company_display", "").strip() or company_name,
+        "PEER_ROLE_LABEL": form.get("peer_role_label", "").strip() or "广告主",
         "BOT_TOKEN": bot_token,
         "ALERT_GROUP_ID": alert_group_id,
         "SHEET_ID": sheet_id,

@@ -8,7 +8,7 @@ def no_reply_alert(company, operator, account_name, peer_name, message_text):
         f"中心/部门：{company}\n"
         f"商务人员：{operator}\n"
         f"外事号：{account_name}\n"
-        f"广告主：{peer_name}\n"
+        f"{config.PEER_ROLE_LABEL}：{peer_name}\n"
         f"未回复信息：{message_text}"
     )
 
@@ -19,7 +19,7 @@ def delete_alert(company, operator, account_name, peer_name, message_text=""):
         f"中心/部门：{company}\n"
         f"商务人员：{operator}\n"
         f"外事号：{account_name}\n"
-        f"广告主：{peer_name}"
+        f"{config.PEER_ROLE_LABEL}：{peer_name}"
     )
     if message_text:
         text += f"\n已删除信息：{message_text}"
@@ -32,7 +32,7 @@ def keyword_alert(company, operator, account_name, peer_name, keyword, message_t
         f"中心/部门：{company}\n"
         f"商务人员：{operator}\n"
         f"外事号：{account_name}\n"
-        f"广告主：{peer_name}\n"
+        f"{config.PEER_ROLE_LABEL}：{peer_name}\n"
         f"关键词：{keyword}\n"
         f"消息内容：{message_text}"
     )

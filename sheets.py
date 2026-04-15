@@ -31,24 +31,30 @@ class SheetsWriter:
         self.ensure_alert_tabs()
 
     # 告警分页表头（跟苏总现有 Sheet 格式 1:1 对齐）
-    ALERT_HEADERS = {
-        "信息未回复预警": ["所属公司", "商务人员", "外事号", "广告主", "未回复消息", "记录时间"],
-        "关键词监听":   ["所属公司", "商务人员", "外事号", "广告主", "关键词", "消息内容", "记录时间"],
-        "信息删除预警": ["所属公司", "商务人员", "外事号", "广告主", "删除前消息内容", "记录时间"],
-    }
+    # 注意: "广告主" 这个位置用 config.PEER_ROLE_LABEL 动态替换，各部门可能叫「广告主/客户/合作方」等
+    @property
+    def ALERT_HEADERS(self):
+        role = config.PEER_ROLE_LABEL
+        return {
+            "信息未回复预警": ["所属公司", "商务人员", "外事号", role, "未回复消息", "记录时间"],
+            "关键词监听":   ["所属公司", "商务人员", "外事号", role, "关键词", "消息内容", "记录时间"],
+            "信息删除预警": ["所属公司", "商务人员", "外事号", role, "删除前消息内容", "记录时间"],
+        }
 
-    # 各列宽度（按表头文本映射，像素）
-    ALERT_COL_WIDTHS = {
-        "所属公司":       160,
-        "商务人员":       100,
-        "外事号":         100,
-        "广告主":         160,
-        "未回复消息":     350,
-        "消息内容":       350,
-        "删除前消息内容": 350,
-        "关键词":         100,
-        "记录时间":       180,
-    }
+    # 各列宽度（按表头文本映射，像素）— 角色列用 PEER_ROLE_LABEL 做 key
+    @property
+    def ALERT_COL_WIDTHS(self):
+        return {
+            "所属公司":       160,
+            "商务人员":       100,
+            "外事号":         100,
+            config.PEER_ROLE_LABEL: 160,
+            "未回复消息":     350,
+            "消息内容":       350,
+            "删除前消息内容": 350,
+            "关键词":         100,
+            "记录时间":       180,
+        }
 
     def _write_alert_header(self, ws, prefix):
         """给告警分页写表头 + 上色 + 冻结首行 + 调列宽（幂等：只在空白分页执行）"""
@@ -58,7 +64,17 @@ class SheetsWriter:
             first_row = ws.row_values(1)
         except Exception:
             first_row = []
-        if first_row:  # 已有表头，跳过
+        if first_row:  # 已有表头
+            # 角色列（第 4 列，index=3）label 可能被 /settings 改过 → 同步
+            role_idx = 3
+            if len(first_row) > role_idx and first_row[role_idx] and first_row[role_idx] != config.PEER_ROLE_LABEL:
+                try:
+                    self._rate_limit()
+                    cell = f"{chr(65 + role_idx)}1"  # D1
+                    ws.update(cell, [[config.PEER_ROLE_LABEL]])
+                    logger.info("告警分页角色列标签同步 [%s] %s → %s", ws.title, first_row[role_idx], config.PEER_ROLE_LABEL)
+                except Exception as e:
+                    logger.warning("告警分页角色列标签同步失败 [%s]: %s", ws.title, e)
             return
         try:
             self._rate_limit()
@@ -232,7 +248,7 @@ class SheetsWriter:
         self._rate_limit()
         ws.update(f"{col_a}5:{col_c}6", [
             ["A", "外事号", account_name],
-            ["B", "广告主", peer_name],
+            ["B", config.PEER_ROLE_LABEL, peer_name],
         ])
 
         # 颜色常量
