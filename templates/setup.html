@@ -744,29 +744,38 @@
           {% endif %}
         </div>
 
-        <details class="howto">
-          <summary>▸ 如何创建 OAuth Client ID/Secret(必看)</summary>
-          <div class="howto-body">
-            <ol>
-              <li><span class="step-label">01</span> 打开 <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console → 凭据</a>(同一个 GCP 项目里,跟 Service Account 一起)</li>
-              <li><span class="step-label">02</span> 顶部 <b>+ 创建凭据 → OAuth 客户端 ID</b></li>
-              <li><span class="step-label">03</span> 应用类型选 <b>「Web application / Web 应用」</b>(<u>不是</u>桌面)</li>
-              <li><span class="step-label">04</span> <b>已获授权的重定向 URI</b> 添加(必须完全一致):<br>
-                  <code id="oauth_redirect_hint" style="background:#0f1822;padding:4px 10px;border-radius:4px;color:#ffd28a;display:inline-block;margin-top:4px;">http://YOUR_VPS_IP:5002/api/oauth/callback</code>
-                  <br><span style="color:#9eb4c7;font-size:12px;">↑ 把 <code>YOUR_VPS_IP</code> 换成你这台机器的实际 IP / 域名,跟现在浏览器地址栏的一致</span>
-              </li>
-              <li><span class="step-label">05</span> 创建后会显示 <b>Client ID</b> 和 <b>Client Secret</b>,复制填到上方两个输入框</li>
-              <li><span class="step-label">06</span> 还需要在 <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank">OAuth 同意屏幕</a> 把客户的 Google 帐号加到 <b>「测试用户」</b>(非生产模式只允许测试用户授权)</li>
-              <li><span class="step-label">07</span> 保存设置 → 点上方「连接 Google Drive」 → Google 弹出授权 → 同意 → 自动跳回</li>
-            </ol>
-            <b>常见问题</b>
+        {# 默认展开的可视化教学,跟下面 Drive 文件夹 ID 教学风格统一 #}
+        <div style="background:rgba(42,171,238,0.06);border-left:3px solid #2aabee;padding:14px 18px;margin-top:12px;border-radius:6px;font-size:13px;line-height:1.85;color:#cfe3f5;">
+          <div style="color:#ff9b3d;font-weight:600;margin-bottom:10px;letter-spacing:0.5px;">▸ 如何创建 OAuth Client ID / Secret(7 步,跟 Service Account 同一个 GCP 项目)</div>
+
+          <div style="margin-bottom:10px;"><b>1.</b> 打开 <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#7ec9ff;">Google Cloud Console → 凭据</a> (用同一个 Google 帐号)</div>
+
+          <div style="margin-bottom:10px;"><b>2.</b> 顶部 <b>+ 创建凭据</b> → 选 <b>OAuth 客户端 ID</b></div>
+
+          <div style="margin-bottom:10px;"><b>3.</b> 应用类型选 <b style="color:#ffd28a;">「Web application / Web 应用」</b> <span style="color:#ff9bb0;">⚠ 不是「桌面」</span></div>
+
+          <div style="margin-bottom:6px;"><b>4.</b> <b>已获授权的重定向 URI</b> 添加这个(必须<u>完全一致</u>):</div>
+          <div style="background:#0f1822;border:1px solid rgba(255,155,61,0.4);border-radius:6px;padding:10px 14px;margin:4px 0 12px;font-family:Menlo,Consolas,monospace;font-size:13px;word-break:break-all;line-height:1.7;">
+            <span id="oauth_redirect_hint" style="background:rgba(255,155,61,0.25);color:#ffd28a;padding:3px 8px;border-radius:3px;font-weight:600;">http://YOUR_VPS_IP:5002/api/oauth/callback</span>
+          </div>
+          <div style="margin-bottom:10px;color:#9eb4c7;font-size:12px;">↑ 这一行会自动填上你<b>当前浏览器</b>用的 IP/端口,直接复制就行</div>
+
+          <div style="margin-bottom:10px;"><b>5.</b> 点「创建」→ 弹出 <b>Client ID</b> 和 <b>Client Secret</b>,分别复制粘贴到上方两个输入框 → 点最下方<b>保存</b></div>
+
+          <div style="margin-bottom:6px;"><b>6.</b> <span style="color:#ffd28a;font-weight:600;">关键步骤(忽略会 access_denied)</span>:打开 <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" style="color:#7ec9ff;">OAuth 同意屏幕</a> → 滑到下面 <b>「测试用户」</b> 区 → <b>+ ADD USERS</b> → 把要授权的 Gmail 加进去</div>
+          <div style="margin-bottom:10px;color:#9eb4c7;font-size:12px;">↑ 因为应用还在「测试」状态,只有名单里的用户能授权</div>
+
+          <div style="margin-bottom:6px;"><b>7.</b> 回这里点 <b style="color:#7ec9ff;">「连接 Google Drive」</b> → Google 弹授权页 → 选要授权的帐号 → <b>继续</b>(可能会出现「Google 没核实此应用」警告,点<b>高级 → 转至 [项目名] (不安全)</b>是正常的) → <b>同意</b> → 自动跳回这里</div>
+
+          <div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.1);">
+            <b style="color:#ff9b3d;">▸ 常见报错</b>
             <ul style="margin:6px 0 0 16px;color:#bfd6e8;font-size:12.5px;">
-              <li><b>redirect_uri_mismatch</b>:第 04 步填的 URI 跟实际访问的 host 不一样。检查 <code>http</code>/<code>https</code>、端口都要对</li>
-              <li><b>access_denied</b>:授权账号不在「测试用户」名单里,回 OAuth 同意屏幕加上</li>
-              <li><b>没收到 refresh_token</b>:到 <a href="https://myaccount.google.com/permissions" target="_blank">myaccount.google.com/permissions</a> 撤销旧授权再重试</li>
+              <li><b>redirect_uri_mismatch</b>:第 4 步填的跟当前 URL 不完全一致。<code>http</code> vs <code>https</code>、端口、IP 都要对得上</li>
+              <li><b>access_denied</b>:授权帐号没加到第 6 步的「测试用户」名单</li>
+              <li><b>没拿到 refresh_token</b>:到 <a href="https://myaccount.google.com/permissions" target="_blank" style="color:#7ec9ff;">myaccount.google.com/permissions</a> 撤销旧授权再重试</li>
             </ul>
           </div>
-        </details>
+        </div>
       </div>
 
       <div class="field" style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
