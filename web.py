@@ -3,7 +3,6 @@ import asyncio
 import json
 import logging
 import threading
-import tempfile
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -18,14 +17,13 @@ from flask import session as flask_session
 import config
 import database as db
 import gspread
-from google.oauth2.service_account import Credentials
 from werkzeug.security import generate_password_hash, check_password_hash
 
 logger = logging.getLogger(__name__)
 
 # ============ 设置文件读写 ============
+# 纯 OAuth:Drive + Sheets 共用 oauth_helper 维护的 token,不再有 service-account.json
 ENV_PATH = config.BASE_DIR / ".env"
-SA_PATH = config.BASE_DIR / "service-account.json"
 USERS_PATH = config.DATA_DIR / "users.json"
 
 
@@ -222,15 +220,21 @@ def write_env(updates):
 
 
 def is_setup_complete():
-    """是否已完成首次设置。条件：关键字段都有值 + SETUP_COMPLETE=true + service-account.json 存在 + 至少 1 个用户"""
+    """是否已完成首次设置。条件：关键字段都有值 + SETUP_COMPLETE=true + OAuth 已授权 + 至少 1 个用户。
+    纯 OAuth 后 SHEET_ID 允许先留空 — 授权后由 /api/sheets/auto-create 自动建。"""
     env = read_env()
-    required = ["COMPANY_NAME", "SHEET_ID", "BOT_TOKEN", "ALERT_GROUP_ID"]
+    required = ["COMPANY_NAME", "BOT_TOKEN", "ALERT_GROUP_ID"]
     for k in required:
         if not env.get(k) or env.get(k) in ("__pending__", "0"):
             return False
     if env.get("SETUP_COMPLETE", "false").lower() != "true":
         return False
-    if not SA_PATH.exists() or SA_PATH.stat().st_size < 100:
+    # OAuth token 必须存在(Drive + Sheets 共用这一套凭证)
+    try:
+        import oauth_helper
+        if not oauth_helper.has_token():
+            return False
+    except Exception:
         return False
     # 旧部署自动迁移
     migrate_legacy_password()
@@ -291,26 +295,23 @@ def _test_bot_api(token, group_id):
         return False, str(e)
 
 
-def _test_sheets_access(sheet_id, sa_json_bytes):
-    """验证 Google Sheets 访问权限。sa_json_bytes 是上传的服务账号 json 原始字节"""
+def _test_sheets_access(sheet_id):
+    """验证 Google Sheets 访问权限 — 使用当前 OAuth 授权凭证。
+
+    调用前提:调用方已确认 OAuth 已授权(oauth_helper.has_token() 为 True)。
+    若 sheet_id 为空或 OAuth 未授权,请在调用方里处理,本函数不做这类分支。
+    """
     sheet_id = (sheet_id or "").strip()
     if not sheet_id:
         return False, "Sheet ID 不能为空"
     try:
-        sa_data = json.loads(sa_json_bytes)
-        if "client_email" not in sa_data or "private_key" not in sa_data:
-            return False, "service-account.json 不是有效的服务账号凭证"
-    except Exception:
-        return False, "service-account.json 不是合法的 JSON"
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
+        import oauth_helper
+        creds = oauth_helper.get_credentials()
+        if not creds:
+            return False, "尚未完成 Google 授权,请先在上方点「连接 Google Drive」"
+    except Exception as e:
+        return False, f"获取 OAuth 凭证失败: {e}"
     try:
-        json.dump(sa_data, tmp)
-        tmp.close()
-        creds = Credentials.from_service_account_file(
-            tmp.name,
-            scopes=["https://www.googleapis.com/auth/spreadsheets",
-                    "https://www.googleapis.com/auth/drive"],
-        )
         gc = gspread.authorize(creds)
         sp = gc.open_by_key(sheet_id)
         # 能 open 只代表有「读」权限 — 必须验「写」,否则实际写入会 PermissionError
@@ -322,24 +323,20 @@ def _test_sheets_access(sheet_id, sa_json_bytes):
         except gspread.exceptions.APIError as e:
             body = getattr(e, "args", [""])[0] or str(e)
             if "PERMISSION_DENIED" in str(body) or "403" in str(body):
-                return False, (f"Sheet 可读但<b>无写权限</b>。请把 service account"
-                               f"「{sa_data['client_email']}」加为 Sheet 的<b>编辑者</b>(现在是查看者)")
+                return False, ("Sheet 可读但<b>无写权限</b>。请确认此 Sheet 是当前 OAuth 授权帐号"
+                               "自己建的,或已被分享为<b>编辑者</b>")
             return False, f"写入测试失败: {body}"
         return True, f"✅ 成功访问 Sheet: {sp.title}(已验证读+写权限)"
     except gspread.exceptions.SpreadsheetNotFound:
         return False, (f"Sheet ID「{sheet_id}」找不到或没访问权限。"
-                       f"请确认：① ID 正确；② service account「{sa_data.get('client_email','?')}」已加为该 Sheet 的编辑者")
+                       f"请确认:① ID 正确;② 当前 OAuth 授权帐号对该 Sheet 有编辑者权限"
+                       f"(或留空让系统自动建一个)")
     except gspread.exceptions.APIError as e:
         body = getattr(e, "args", [""])[0] or str(e) or repr(e)
         return False, f"Sheet API 错误: {body}"
     except Exception as e:
         err = str(e) or repr(e) or type(e).__name__
         return False, f"{type(e).__name__}: {err}"
-    finally:
-        try:
-            os.unlink(tmp.name)
-        except Exception:
-            pass
 
 
 def _start_tg_monitor():
@@ -367,14 +364,11 @@ def _start_tg_monitor():
 
 
 def _get_spreadsheet():
-    """获取 Google Sheets 连接"""
-    creds = Credentials.from_service_account_file(
-        str(config.SERVICE_ACCOUNT_FILE),
-        scopes=[
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ],
-    )
+    """获取 Google Sheets 连接 — 使用 OAuth 用户授权凭证"""
+    import oauth_helper
+    creds = oauth_helper.get_credentials()
+    if not creds:
+        raise RuntimeError("OAuth 未授权,请到设置页点「连接 Google Drive」")
     gc = gspread.authorize(creds)
     return gc.open_by_key(config.SHEET_ID)
 
@@ -668,6 +662,17 @@ def _redirect_to_setup_if_needed():
     # 静态和 setup 本体永远放行
     if path.startswith("/setup") or path.startswith("/api/setup") or path.startswith("/static"):
         return None
+    # OAuth 流程(setup 页要跳转授权 + 回调)永远放行
+    # /api/oauth/callback 更是必须放行,否则 Google 回调回来直接被重定向丢 code
+    if path.startswith("/api/oauth/"):
+        return None
+    # /api/sheets/auto-create 是 setup 流程的一环 — OAuth 完成后 setup 页点「自动建表格」
+    if path.startswith("/api/sheets/"):
+        if not is_setup_complete():
+            return None
+        if not flask_session.get("authed"):
+            return jsonify({"ok": False, "msg": "未登录"}), 401
+        return None
     # /api/test-* 仅在 setup 未完成时放行(setup 页 JS 要调);完成后必须登录才能调
     if path.startswith("/api/test-"):
         if not is_setup_complete():
@@ -704,7 +709,6 @@ def setup_page():
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
         "api_id": env.get("API_ID", DEFAULT_API_ID),
         "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
-        "sa_uploaded": SA_PATH.exists() and SA_PATH.stat().st_size > 100,
     }
     return render_template("setup.html", d=defaults, mode="setup")
 
@@ -732,7 +736,6 @@ def settings_page():
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
         "api_id": env.get("API_ID", DEFAULT_API_ID),
         "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
-        "sa_uploaded": SA_PATH.exists() and SA_PATH.stat().st_size > 100,
         "is_admin": is_admin(me),
         "is_super": is_super(me),
         "me": me,
@@ -771,9 +774,19 @@ def _oauth_redirect_uri():
 
 
 @app.route("/api/oauth/start", methods=["GET"])
-@admin_required
 def api_oauth_start():
-    """开始 Google OAuth 流程 — 跳转到 Google 授权页"""
+    """开始 Google OAuth 流程 — 跳转到 Google 授权页
+
+    注意:不挂 @admin_required — 首次 setup 时还没建账号,setup 页要调这个接口,
+    挂上会卡死客户在 setup 永远跨不过 OAuth 这步。
+    setup 完成后再检查:只有管理员能重新授权,避免普通用户把授权换到自己账号。
+    """
+    if is_setup_complete():
+        # setup 完成后必须已登录且是管理员才能重走 OAuth
+        if not flask_session.get("authed"):
+            return redirect(url_for("login_page"))
+        if not is_admin(flask_session.get("username", "")):
+            return "需要管理员权限", 403
     env = read_env()
     cid = env.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
     csec = env.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
@@ -883,35 +896,66 @@ def api_oauth_status():
     return jsonify(_get_oauth_status())
 
 
+@app.route("/api/sheets/auto-create", methods=["POST"])
+def api_sheets_auto_create():
+    """OAuth 授权后,自动建一个 Spreadsheet,ID 写回 .env。
+    已有 SHEET_ID 则直接返回现有的,不重复建。"""
+    import oauth_helper
+    if not oauth_helper.has_token():
+        return jsonify({"ok": False, "msg": "请先完成 Google 授权"})
+    # 读最新 .env(优先)而不是依赖模块级 config,避免同一进程内缓存过期
+    existing = (read_env().get("SHEET_ID") or "").strip()
+    if existing:
+        return jsonify({
+            "ok": True,
+            "sheet_id": existing,
+            "url": f"https://docs.google.com/spreadsheets/d/{existing}/edit",
+            "created": False,
+        })
+    # 标题用部门显示名
+    env = read_env()
+    title = "TG监控-" + (env.get("COMPANY_DISPLAY") or env.get("COMPANY_NAME") or "default")
+    try:
+        sheet_id = oauth_helper.auto_create_sheet(title)
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"建立 Spreadsheet 失败: {e}"})
+    if not sheet_id:
+        return jsonify({"ok": False, "msg": "建立 Spreadsheet 失败,查看日志"})
+    # 写回 .env 并 reload config
+    write_env({"SHEET_ID": sheet_id})
+    try:
+        import importlib
+        importlib.reload(config)
+    except Exception as e:
+        logger.warning(f"reload config 失败(不影响写入): {e}")
+    return jsonify({
+        "ok": True,
+        "sheet_id": sheet_id,
+        "url": f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit",
+        "created": True,
+    })
+
+
 @app.route("/api/test-media-folder", methods=["POST"])
 def api_test_media_folder():
-    """测试 Drive 文件夹访问权限：用现有 service-account.json 检查能否在该文件夹建文件"""
+    """测试 Drive 文件夹访问权限 — 使用当前 OAuth 授权凭证(建探针文件再删掉)"""
     folder_id = (request.form.get("media_folder_id") or "").strip()
     if not folder_id:
         return jsonify({"ok": False, "msg": "请填写 Drive 文件夹 ID"})
+    # 必须已授权 OAuth
+    try:
+        import oauth_helper
+        if not oauth_helper.has_token():
+            return jsonify({"ok": False, "msg": "请先完成 Google 授权(上方「连接 Google Drive」)"})
+        creds = oauth_helper.get_credentials()
+        if not creds:
+            return jsonify({"ok": False, "msg": "OAuth 凭证失效,请重新授权"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"获取 OAuth 凭证失败: {e}"})
     try:
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaIoBaseUpload
         import io as _io
-        # 优先用 OAuth(实际上传时也是这样)
-        creds = None
-        creds_source = ""
-        try:
-            import oauth_helper
-            creds = oauth_helper.get_credentials()
-            if creds:
-                creds_source = "OAuth 用户授权"
-        except Exception:
-            pass
-        if not creds:
-            if not SA_PATH.exists():
-                return jsonify({"ok": False, "msg": "请先上传 service-account.json,或先连接 Google Drive (OAuth)"})
-            from google.oauth2.service_account import Credentials
-            creds = Credentials.from_service_account_file(
-                str(SA_PATH),
-                scopes=["https://www.googleapis.com/auth/drive"],
-            )
-            creds_source = "Service Account"
         drive = build("drive", "v3", credentials=creds, cache_discovery=False)
         # 1. 文件夹存在性 + 访问权限
         meta = drive.files().get(fileId=folder_id, fields="id,name,mimeType",
@@ -919,7 +963,7 @@ def api_test_media_folder():
         if meta.get("mimeType") != "application/vnd.google-apps.folder":
             return jsonify({"ok": False, "msg": f"ID「{folder_id}」不是文件夹"})
         folder_name = meta.get("name", "")
-        # 2. 写权限测试：建一个 4 字节探针文件，立即删掉
+        # 2. 写权限测试:建一个 4 字节探针文件,立即删掉
         probe = MediaIoBaseUpload(_io.BytesIO(b"ping"), mimetype="text/plain", resumable=False)
         f = drive.files().create(
             body={"name": "_tg_monitor_probe.txt", "parents": [folder_id]},
@@ -929,22 +973,11 @@ def api_test_media_folder():
             drive.files().delete(fileId=f["id"], supportsAllDrives=True).execute()
         except Exception:
             pass
-        return jsonify({"ok": True, "msg": f"成功访问文件夹「{folder_name}」并通过写入测试 ✓ (用 {creds_source})"})
+        return jsonify({"ok": True, "msg": f"成功访问文件夹「{folder_name}」并通过写入测试 ✓"})
     except Exception as e:
         err = str(e)
-        if "storageQuotaExceeded" in err or "do not have storage quota" in err:
-            return jsonify({"ok": False, "msg": "Service Account 没有 Drive 配额。请到上方点「连接 Google Drive」用客户帐号 OAuth 授权,这样会用客户的 15GB 配额。"})
         if "File not found" in err or "notFound" in err:
-            hint = ""
-            try:
-                if creds_source == "Service Account" and SA_PATH.exists():
-                    sa = json.loads(SA_PATH.read_bytes())
-                    hint = f"请把文件夹分享给 service account:{sa.get('client_email','?')}(编辑者)"
-                elif creds_source == "OAuth 用户授权":
-                    hint = "请确认这个文件夹 ID 是 OAuth 授权账号自己的,或者已被分享给该账号(编辑者)"
-            except Exception:
-                pass
-            return jsonify({"ok": False, "msg": f"文件夹找不到或没权限。{hint}"})
+            return jsonify({"ok": False, "msg": "文件夹找不到或没权限。请确认这个文件夹 ID 是当前 OAuth 授权帐号自己的(或已被分享为编辑者)。"})
         return jsonify({"ok": False, "msg": f"{type(e).__name__}: {err}"})
 
 
@@ -989,16 +1022,19 @@ def api_media_cleanup_now():
 
 @app.route("/api/test-sheets", methods=["POST"])
 def api_test_sheets():
-    """测试 Sheet ID + service-account.json"""
-    sheet_id = request.form.get("sheet_id", "")
-    sa_file = request.files.get("service_account")
-    if sa_file:
-        sa_bytes = sa_file.read()
-    elif SA_PATH.exists():
-        sa_bytes = SA_PATH.read_bytes()
-    else:
-        return jsonify({"ok": False, "msg": "请先上传 service-account.json"})
-    ok, msg = _test_sheets_access(sheet_id, sa_bytes)
+    """测试 Sheet ID 能否用当前 OAuth 凭证访问。
+    SHEET_ID 为空时直接返回 ok(会在授权后由 /api/sheets/auto-create 自动建)。"""
+    sheet_id = (request.form.get("sheet_id") or "").strip()
+    if not sheet_id:
+        return jsonify({"ok": True, "msg": "Sheet ID 留空 — 将在 Google 授权后自动建一份"})
+    # SHEET_ID 已填 → 必须已授权才能验证
+    try:
+        import oauth_helper
+        if not oauth_helper.has_token():
+            return jsonify({"ok": False, "msg": "请先完成 Google 授权,才能验证 Sheet 访问权限"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"获取 OAuth 状态失败: {e}"})
+    ok, msg = _test_sheets_access(sheet_id)
     return jsonify({"ok": ok, "msg": msg})
 
 
@@ -1025,9 +1061,9 @@ def _save_settings(is_first):
     alert_group_id = (form.get("alert_group_id") or "").strip()
     sheet_id = (form.get("sheet_id") or "").strip()
 
-    # 必填验证
-    if not company_name or not bot_token or not alert_group_id or not sheet_id:
-        return jsonify({"ok": False, "msg": "部门名称、Bot Token、预警群 ID、Sheet ID 都必填"})
+    # 必填验证(SHEET_ID 纯 OAuth 后允许留空,授权后由 /api/sheets/auto-create 自动建)
+    if not company_name or not bot_token or not alert_group_id:
+        return jsonify({"ok": False, "msg": "部门名称、Bot Token、预警群 ID 都必填"})
 
     # 首次设置：必须提供管理员账号+密码
     if is_first:
@@ -1046,23 +1082,17 @@ def _save_settings(is_first):
     if not api_id_val.isdigit():
         return jsonify({"ok": False, "msg": "API ID 应为纯数字"})
 
-    # service-account.json：首次必须上传；修改时如果上传了就覆盖，没上传就保留
-    sa_file = request.files.get("service_account")
-    if sa_file and sa_file.filename:
-        sa_bytes = sa_file.read()
-        # 先验证再写入
-        ok, msg = _test_sheets_access(sheet_id, sa_bytes)
-        if not ok:
-            return jsonify({"ok": False, "msg": f"Sheet 验证失败：{msg}"})
-        SA_PATH.write_bytes(sa_bytes)
-    elif is_first and not SA_PATH.exists():
-        return jsonify({"ok": False, "msg": "首次设置必须上传 service-account.json"})
-    else:
-        # 用现有凭证验证 sheet_id
-        sa_bytes = SA_PATH.read_bytes()
-        ok, msg = _test_sheets_access(sheet_id, sa_bytes)
-        if not ok:
-            return jsonify({"ok": False, "msg": f"Sheet 验证失败：{msg}"})
+    # Sheet 验证:纯 OAuth。只在 SHEET_ID 已填 且 OAuth 已授权 时才尝试验证。
+    # 首次 setup 时通常 SHEET_ID 留空 + OAuth 尚未授权 — 直接跳过,后续由 auto-create 补齐。
+    if sheet_id:
+        try:
+            import oauth_helper
+            if oauth_helper.has_token():
+                ok, msg = _test_sheets_access(sheet_id)
+                if not ok:
+                    return jsonify({"ok": False, "msg": f"Sheet 验证失败:{msg}"})
+        except Exception as e:
+            logger.warning(f"Sheet 验证跳过(OAuth 不可用): {e}")
 
     # 验证 Bot
     ok, msg = _test_bot_api(bot_token, alert_group_id)
@@ -1534,16 +1564,14 @@ def remove_session():
         conn.commit()
         deleted_db = True
 
-        # 3. 删 Sheets 分页（失败不影响主流程）
+        # 3. 删 Sheets 分页（失败不影响主流程）— 用 OAuth 凭证
         if tab:
             try:
                 import gspread
-                from google.oauth2.service_account import Credentials
-                creds = Credentials.from_service_account_file(
-                    str(config.SERVICE_ACCOUNT_FILE),
-                    scopes=["https://www.googleapis.com/auth/spreadsheets",
-                            "https://www.googleapis.com/auth/drive"],
-                )
+                import oauth_helper
+                creds = oauth_helper.get_credentials()
+                if not creds:
+                    raise RuntimeError("OAuth 未授权,跳过删除 Sheets 分页")
                 gc = gspread.authorize(creds)
                 sh = gc.open_by_key(config.SHEET_ID)
                 ws = sh.worksheet(tab)

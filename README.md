@@ -63,24 +63,22 @@ curl -fsSL .../install.sh | bash -s -- yueda --https monitor.abc.com
 
 1. 申请 Telegram API
 2. 创建 Bot + 预警群
-3. Google Cloud 项目 / Service Account / OAuth
-4. 新建 Google 表格并授权
-5. VPS 一键安装
-6. 设置精灵操作(4 步)
-7. 登录外事号
-8. 三步验证部署成功
-9. 常见故障排查
+3. Google Cloud 项目 / OAuth 凭据
+4. VPS 一键安装
+5. 设置精灵操作(3 步)
+6. 登录外事号
+7. 三步验证部署成功
+8. 常见故障排查
 
 ## 安装后:打开 setup 页完成配置
 
-装完浏览器打开 `https://<your-ip>.nip.io/setup`,设置精灵 4 步:
+装完浏览器打开 `https://<your-ip>.nip.io/setup`,设置精灵 3 步:
 
 | 步骤 | 填什么 | 从哪来 |
 |---|---|---|
 | 1. Telegram API | API_ID + API_HASH | [my.telegram.org](https://my.telegram.org) 申请 |
-| 2. Google Drive OAuth | 上传 OAuth client JSON → 点授权 | Google Cloud → 凭据 → OAuth 客户端 ID |
-| 3. Google Sheets | SHEET_ID + Service Account JSON | 新建 Sheet + Google Cloud → 服务账号 |
-| 4. Telegram Bot | BOT_TOKEN + ALERT_GROUP_ID | [@BotFather](https://t.me/BotFather) + 把 Bot 设群管理员 |
+| 2. Google 授权(Drive + Sheets) | 上传 OAuth client JSON → 点授权 → 自动建 Sheet | Google Cloud → 凭据 → OAuth 客户端 ID |
+| 3. Telegram Bot | BOT_TOKEN + ALERT_GROUP_ID | [@BotFather](https://t.me/BotFather) + 把 Bot 设群管理员 |
 
 每步都有实时验证(权限检查 / 写入测试 / Bot 管理员状态),绿勾全过 → 点「完成设置并启动」→ 自动跳登录页。
 
@@ -132,7 +130,7 @@ docker compose -p tg-yueda restart
 - 每部门一个独立目录 `/root/tg-monitor-<name>/`
 - 端口自动从 5001 起扫描,每部门不同
 - 容器名 `tg-web-<name>` / `tg-monitor-<name>`,project 名 `tg-<name>`,互不冲突
-- Service Account JSON / OAuth JSON 可共用一份
+- OAuth client JSON 可共用一份
 - HTTPS 每部门自己申请 nip.io 证书
 
 查看当前部署情况:
@@ -184,7 +182,7 @@ bash install.sh
 
 ## 安全说明
 
-- `.env` / `service-account.json` / `oauth_token.json` 都在 `.gitignore`,不会被提交
+- `.env` / `google_oauth_token.json` / `client_secret*.json` 都在 `.gitignore`,不会被提交
 - 设置精灵完成前 `/api/test-*` 不需要登录(方便首次自检),完成后必须登录
 - Bot 验证只调 `getMe` + `getChatMember`(不发测试消息,不骚扰群成员)
 - Sheets 验证读 A1 → 写回同值,幂等无副作用

@@ -34,10 +34,8 @@ _drive_service = None  # lazy 初始化 googleapiclient.discovery.Resource
 def _get_drive():
     """lazy 创建 Drive v3 client。
 
-    优先级:
-      1. OAuth 用户授权 (data/google_oauth_token.json) — 推荐,用客户 15GB 配额
-      2. Service Account — fallback,只有客户开了 Workspace Shared Drive 时才能成功
-         (普通帐户 SA 没配额会 403 「Service Accounts do not have storage quota」)
+    Level 1 架构后:只走 OAuth 用户凭证(drive.file scope),用客户 15GB 免费配额。
+    SA 路径已移除 — SA 没 Drive 存储配额,在非 Workspace 帐户下必然 403。
     """
     global _drive_service
     if _drive_service is not None:
@@ -47,27 +45,13 @@ def _get_drive():
             return _drive_service
         try:
             from googleapiclient.discovery import build
-            # 路径 1: OAuth 用户凭证
-            try:
-                import oauth_helper
-                creds = oauth_helper.get_credentials()
-                if creds:
-                    _drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
-                    logger.info("Drive 服务初始化成功 (OAuth 用户授权)")
-                    return _drive_service
-            except Exception as e:
-                logger.warning("OAuth 凭证加载失败,fallback SA: %s", e)
-            # 路径 2: Service Account fallback
-            from google.oauth2.service_account import Credentials
-            sa_creds = Credentials.from_service_account_file(
-                str(config.SERVICE_ACCOUNT_FILE),
-                scopes=[
-                    "https://www.googleapis.com/auth/drive",
-                    "https://www.googleapis.com/auth/spreadsheets",
-                ],
-            )
-            _drive_service = build("drive", "v3", credentials=sa_creds, cache_discovery=False)
-            logger.info("Drive 服务初始化成功 (Service Account fallback)")
+            import oauth_helper
+            creds = oauth_helper.get_credentials()
+            if not creds:
+                logger.warning("Drive 未初始化: 缺 OAuth 凭证,请先在 setup 精灵授权")
+                return None
+            _drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+            logger.info("Drive 服务初始化成功 (OAuth 用户授权)")
             return _drive_service
         except Exception as e:
             logger.warning("Drive 服务初始化失败: %s", e)

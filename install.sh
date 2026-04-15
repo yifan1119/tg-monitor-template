@@ -196,17 +196,12 @@ else
     fi
 fi
 
-# 6. 建空 service-account.json 占位（让 docker compose 不报 mount error）
-if [ ! -f "service-account.json" ]; then
-    echo "{}" > service-account.json
-fi
-
-# 7. 启动（project 名带部门名避免 compose 把同部门跨安装合并）
+# 6. 启动（project 名带部门名避免 compose 把同部门跨安装合并）
 echo "🐳 构建镜像 + 启动容器..."
 export COMPANY_NAME WEB_PORT
 docker compose -p "tg-${COMPANY_NAME}" up -d --build
 
-# 8. 等 web 起来
+# 7. 等 web 起来
 echo "⏳ 等待 web 服务就绪..."
 for i in {1..60}; do
     code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${WEB_PORT}/setup" 2>/dev/null || echo "")

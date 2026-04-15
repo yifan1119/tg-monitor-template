@@ -30,8 +30,12 @@ logger = logging.getLogger(__name__)
 TOKEN_PATH = Path(__file__).parent / "data" / "google_oauth_token.json"
 TOKEN_PATH.parent.mkdir(exist_ok=True)
 
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/spreadsheets",
+]
 # drive.file = 只能访问本应用创建/打开的文件 → 比 drive 全权限安全很多
+# spreadsheets = 读写本应用创建的 Spreadsheet(跟 drive.file 配套,gspread 需要)
 
 
 def _client_config(client_id, client_secret, redirect_uri):
@@ -185,6 +189,38 @@ def auto_create_folder(folder_name="tg-monitor-媒体"):
         return f["id"]
     except Exception as e:
         logger.warning("自动建文件夹失败: %s", e)
+        return ""
+
+
+def auto_create_sheet(title):
+    """OAuth 授权完成后,自动在用户 Drive 建一个新 Spreadsheet,返回 sheet_id。
+    用 drive.file scope 建的 Sheet 默认归本应用可见,不需要额外授权。
+    如果同名 Spreadsheet 已经存在(本应用之前建过的),直接复用,保证幂等。
+    """
+    creds = get_credentials()
+    if not creds:
+        logger.warning("auto_create_sheet: 无 OAuth 凭证")
+        return ""
+    try:
+        from googleapiclient.discovery import build
+        # 先用 Drive API 查同名 Spreadsheet(仅限本应用可见范围)
+        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+        q = (f"name='{title}' and mimeType='application/vnd.google-apps.spreadsheet' "
+             f"and trashed=false")
+        existing = drive.files().list(q=q, fields="files(id,name)", pageSize=1).execute()
+        if existing.get("files"):
+            sid = existing["files"][0]["id"]
+            logger.info("复用已有 Spreadsheet: %s (id=%s)", title, sid)
+            return sid
+        # 用 Sheets API 建新 Spreadsheet(比 Drive 建 .gsheet 更标准,会自带 Sheet1)
+        sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        body = {"properties": {"title": title}}
+        created = sheets.spreadsheets().create(body=body, fields="spreadsheetId").execute()
+        sid = created.get("spreadsheetId", "")
+        logger.info("自动建了 Spreadsheet: %s (id=%s)", title, sid)
+        return sid
+    except Exception as e:
+        logger.warning("auto_create_sheet 失败: %s", e)
         return ""
 
 

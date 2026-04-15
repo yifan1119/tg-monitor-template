@@ -639,66 +639,18 @@
     <div class="section">
       <div class="section-title">03 · Google Sheets</div>
       <div class="field">
-        <label>Sheet ID <span class="req">*</span></label>
+        <label>Sheet ID <span style="color:#7c8a9a;font-weight:400;">(首次授权后可自动建,可留空)</span></label>
         <input type="text" name="sheet_id" id="sheet_id" value="{{ d.sheet_id }}"
-               placeholder="1TDN11dCf1HTOKyYH3clfZ9HBh43lwxrGbVkV810VObg" required>
-        <div class="hint">URL <code>docs.google.com/spreadsheets/d/<b>[SHEET_ID]</b>/edit</code></div>
-        <details class="howto">
-          <summary>▸ 如何获取 Sheet ID</summary>
-          <div class="howto-body">
-            <ol>
-              <li><span class="step-label">01</span> 打开 <a href="https://sheets.google.com" target="_blank">Google Sheets</a> → 新建一个表格(或使用现有表格)</li>
-              <li><span class="step-label">02</span> 复制浏览器地址栏的 URL,格式类似:<br>
-                  <code>https://docs.google.com/spreadsheets/d/<b>1TDN11dCf1HTOKyYH3clfZ9HBh43lwxrGbVkV810VObg</b>/edit#gid=0</code></li>
-              <li><span class="step-label">03</span> 中间 <code>/d/</code> 和 <code>/edit</code> 之间那串长字符就是 <b>Sheet ID</b>,复制填入上方</li>
-              <li><span class="step-label">04</span> 右上角「共享」→ 把下方 Service Account 的 <code>client_email</code> 邮箱加为<b>编辑者</b>(必做)</li>
-            </ol>
-          </div>
-        </details>
-      </div>
-      <div class="field">
-        <label>Service Account 凭证 {% if mode == 'setup' %}<span class="req">*</span>{% endif %}</label>
-        <label class="file-input-wrap" for="sa_file">
-          <span class="file-icon">▣</span>
-          <div>
-            <div class="file-text">选择 service-account.json</div>
-            <div class="file-status {% if not d.sa_uploaded %}pending{% endif %}" id="saStatus">
-              {% if d.sa_uploaded %}✓ 已有凭证文件(重新上传可覆盖){% else %}// 尚未上传{% endif %}
-            </div>
-          </div>
-          <input type="file" id="sa_file" name="service_account" accept=".json">
-        </label>
-        <div class="hint">记得把凭证里 <code>client_email</code> 的邮箱加为 Sheet 的<b>编辑者</b></div>
-        <details class="howto">
-          <summary>▸ 如何申请 Service Account 并获取 JSON 凭证</summary>
-          <div class="howto-body">
-            <b>一、创建 Google Cloud 项目</b>
-            <ol>
-              <li><span class="step-label">01</span> 打开 <a href="https://console.cloud.google.com" target="_blank">Google Cloud Console</a>(需登录 Google 账号)</li>
-              <li><span class="step-label">02</span> 顶部选择器 → <b>新建项目</b> → 输入项目名(例如 <code>tg-monitor</code>)→ 创建</li>
-            </ol>
-            <b>二、启用 API</b>
-            <ol>
-              <li><span class="step-label">01</span> 左侧菜单 → <b>API 和服务 → 已启用的 API 和服务</b></li>
-              <li><span class="step-label">02</span> 点 <b>+ 启用 API 和服务</b> → 搜 <code>Google Sheets API</code> → 启用</li>
-              <li><span class="step-label">03</span> 再搜 <code>Google Drive API</code> → 启用(两个都需要)</li>
-            </ol>
-            <b>三、创建 Service Account</b>
-            <ol>
-              <li><span class="step-label">01</span> 左侧 <b>IAM 和管理 → 服务账号</b> → <b>+ 创建服务账号</b></li>
-              <li><span class="step-label">02</span> 填名称(如 <code>tg-monitor-sa</code>)→ 创建并继续 → 跳过授权步骤 → 完成</li>
-              <li><span class="step-label">03</span> 点击刚建的服务账号 → <b>密钥</b>标签 → <b>添加密钥 → 创建新密钥</b></li>
-              <li><span class="step-label">04</span> 选 <b>JSON</b> 格式 → 创建,浏览器会自动下载一个 <code>.json</code> 文件</li>
-              <li><span class="step-label">05</span> 把这个 JSON 文件上传到上方文件框</li>
-            </ol>
-            <b>四、授权 Sheet 访问</b>
-            <ol>
-              <li><span class="step-label">01</span> 打开 JSON 文件,找 <code>"client_email": "xxx@xxx.iam.gserviceaccount.com"</code> 这行</li>
-              <li><span class="step-label">02</span> 回到你的 Google Sheet → 右上角<b>共享</b> → 把这个邮箱加为<b>编辑者</b></li>
-            </ol>
-          </div>
-        </details>
-        <button type="button" class="test-btn" id="testSheetsBtn">▸ 测试 Sheet 访问</button>
+               placeholder="留空即可 — OAuth 授权后点「自动建表格」会自动填上">
+        <div class="hint">
+          留空 + 完成下方 Google 授权 → 点「自动建表格」即可。
+          想用已有表格才手动填,URL 里 <code>docs.google.com/spreadsheets/d/<b>[SHEET_ID]</b>/edit</code> 中间那串就是。
+        </div>
+        <button type="button" class="test-btn" id="autoCreateSheetBtn" style="margin-top:8px;background:rgba(126,201,255,0.15);border-color:rgba(126,201,255,0.5);color:#7ec9ff;">
+          ▸ 自动建表格(需先完成 Google 授权)
+        </button>
+        <span class="test-result" id="autoCreateSheetResult"></span>
+        <button type="button" class="test-btn" id="testSheetsBtn" style="margin-top:8px;">▸ 测试 Sheet 访问</button>
         <span class="test-result" id="testSheetsResult"></span>
       </div>
 
@@ -758,7 +710,7 @@
 
         {# 默认展开的可视化教学,跟下面 Drive 文件夹 ID 教学风格统一 #}
         <div style="background:rgba(42,171,238,0.06);border-left:3px solid #2aabee;padding:14px 18px;margin-top:12px;border-radius:6px;font-size:13px;line-height:1.85;color:#cfe3f5;">
-          <div style="color:#ff9b3d;font-weight:600;margin-bottom:10px;letter-spacing:0.5px;">▸ 如何创建 OAuth Client ID / Secret(7 步,跟 Service Account 同一个 GCP 项目)</div>
+          <div style="color:#ff9b3d;font-weight:600;margin-bottom:10px;letter-spacing:0.5px;">▸ 如何创建 OAuth Client ID / Secret(7 步,在 Google Cloud Console 新建或用已有项目)</div>
 
           <div style="margin-bottom:10px;"><b>1.</b> 打开 <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#7ec9ff;">Google Cloud Console → 凭据</a> (用同一个 Google 帐号)</div>
 
@@ -1038,15 +990,6 @@ if (!document.getElementById('success-banner-keyframes')) {
 }
 
 // ======= 主配置表单(setup 模式 或 admin settings 模式) =======
-const saFile = byId('sa_file');
-if (saFile) {
-  saFile.addEventListener('change', e => {
-    if (e.target.files[0]) {
-      byId('saStatus').textContent = '▸ ' + e.target.files[0].name;
-      byId('saStatus').classList.remove('pending');
-    }
-  });
-}
 
 const testBotBtn = byId('testBotBtn');
 if (testBotBtn) {
@@ -1075,12 +1018,37 @@ if (testSheetsBtn) {
     btn.disabled = true; res.textContent = '测试中...'; res.className = 'test-result';
     const fd = new FormData();
     fd.append('sheet_id', byId('sheet_id').value);
-    const f = byId('sa_file').files[0];
-    if (f) fd.append('service_account', f);
     const resp = await fetch('/api/test-sheets', {method: 'POST', body: fd});
     const data = await resp.json();
     res.textContent = (data.ok ? '✓ ' : '✗ ') + data.msg;
     res.className = 'test-result ' + (data.ok ? 'ok' : 'err');
+    btn.disabled = false;
+  });
+}
+
+// 自动建表格 — 需先完成 OAuth 授权,建好后把 sheet_id 填回输入框
+const autoCreateSheetBtn = byId('autoCreateSheetBtn');
+if (autoCreateSheetBtn) {
+  autoCreateSheetBtn.addEventListener('click', async () => {
+    const btn = autoCreateSheetBtn, res = byId('autoCreateSheetResult');
+    btn.disabled = true; res.textContent = '建立中...'; res.className = 'test-result';
+    try {
+      const resp = await fetch('/api/sheets/auto-create', {method: 'POST'});
+      const data = await resp.json();
+      if (data.ok) {
+        byId('sheet_id').value = data.sheet_id || '';
+        const tag = data.created ? '✓ 已自动建好 Spreadsheet' : '✓ 已有 Sheet ID,无需重建';
+        const link = data.url ? ` <a href="${data.url}" target="_blank" style="color:#7ec9ff;">打开表格 ↗</a>` : '';
+        res.innerHTML = tag + link;
+        res.className = 'test-result ok';
+      } else {
+        res.textContent = '✗ ' + (data.msg || '建立失败');
+        res.className = 'test-result err';
+      }
+    } catch (e) {
+      res.textContent = '✗ 请求失败: ' + e.message;
+      res.className = 'test-result err';
+    }
     btn.disabled = false;
   });
 }
