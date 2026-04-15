@@ -246,23 +246,56 @@
 </div>
 
 <script>
+function legacyCopy(text) {
+  // navigator.clipboard 在 HTTP（非 HTTPS / 非 localhost）下不可用，必须用旧 API
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.top = '-9999px';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+}
+
 async function copy(btn, idx) {
   const text = document.getElementById('code-' + idx).textContent;
-  try {
-    await navigator.clipboard.writeText(text);
+  let ok = false;
+  // 优先用 navigator.clipboard（HTTPS / localhost）
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch (e) { ok = false; }
+  }
+  // 退回 execCommand
+  if (!ok) ok = legacyCopy(text);
+
+  if (ok) {
     btn.textContent = '✓ 已复制';
     btn.classList.add('ok');
     setTimeout(() => {
       btn.textContent = '复制';
       btn.classList.remove('ok');
     }, 1600);
-  } catch (e) {
-    btn.textContent = '✗ 失败';
+  } else {
+    btn.textContent = '✗ 失败 — 手动选择';
     btn.classList.add('err');
+    // 失败时直接帮用户选取整个 code block，方便 Ctrl+C
+    const pre = document.getElementById('code-' + idx);
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
     setTimeout(() => {
       btn.textContent = '复制';
       btn.classList.remove('err');
-    }, 2000);
+    }, 3000);
   }
 }
 </script>
