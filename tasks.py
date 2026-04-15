@@ -288,7 +288,7 @@ class TaskScheduler:
                             logger.warning("广告主名批量更新失败 [%s]: %s", account["name"], e)
             except Exception as e:
                 logger.error("广告主名一致性巡检失败: %s", e)
-            await asyncio.sleep(600)  # 10 分钟
+            await asyncio.sleep(config.PATROL_INTERVAL)  # 预设 60 秒
 
     async def _daily_report_loop(self):
         """每天北京时间 00:00 发日报"""

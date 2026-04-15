@@ -369,9 +369,11 @@ def _create_sheet_tab(name, operator="", company=""):
             ["商务人员", operator],
             ["中心/部门", company],
         ])
+        # C6 留空（第一条消息进来时 setup_dialog_columns 会填真实 peer 名）
+        # 之前预填「（等消息进来自动填）」会让 sheets.py 的空检查失效，导致 B6 永远不同步
         ws.update("A5:C6", [
             ["A", "外事号", name],
-            ["B", config.PEER_ROLE_LABEL, "（等消息进来自动填）"],
+            ["B", config.PEER_ROLE_LABEL, ""],
         ])
 
         center_middle = {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}
