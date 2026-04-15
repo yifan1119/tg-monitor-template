@@ -780,6 +780,14 @@ def _save_settings(is_first):
         updates["WEB_PORT"] = read_env().get("WEB_PORT", "5001")
     write_env(updates)
 
+    # 重新加载 config 模块，让 web 这一进程立即看到新的 API_ID / API_HASH / BOT_TOKEN / SHEET_ID
+    # 否则用户配置完后立刻去「添加账号」会拿到旧（空）值，要手动 docker restart
+    try:
+        import importlib
+        importlib.reload(config)
+    except Exception as e:
+        print(f"[warn] 重新加载 config 失败（不影响 tg-monitor）: {e}")
+
     # 启动/重启 tg-monitor
     ok, msg_docker = _start_tg_monitor()
     return jsonify({

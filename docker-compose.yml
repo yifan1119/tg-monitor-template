@@ -37,7 +37,7 @@ services:
       - PYTHONUNBUFFERED=1
       - WEB_PORT=${WEB_PORT:-5001}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/setup"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:5001/login", "-o", "/dev/null"]
       interval: 30s
       timeout: 5s
       retries: 3
