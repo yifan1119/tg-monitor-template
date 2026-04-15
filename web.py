@@ -220,21 +220,19 @@ def write_env(updates):
 
 
 def is_setup_complete():
-    """是否已完成首次设置。条件：关键字段都有值 + SETUP_COMPLETE=true + OAuth 已授权 + 至少 1 个用户。
-    纯 OAuth 后 SHEET_ID 允许先留空 — 授权后由 /api/sheets/auto-create 自动建。"""
+    """是否已完成首次设置。条件:关键字段都有值 + SETUP_COMPLETE=true + 至少 1 个用户。
+
+    注意 OAuth token 不放在这里检查 —— 精灵保存后用户还没登录,
+    根本没机会做 OAuth。把 has_token() 当硬条件会死锁:
+    没 token → 被踢回 /setup → /setup 本身又不需登录 → 循环填表。
+    OAuth 作为登入后在 /settings 页完成的「第二步」,监控服务启动时再检查凭证。
+    """
     env = read_env()
     required = ["COMPANY_NAME", "BOT_TOKEN", "ALERT_GROUP_ID"]
     for k in required:
         if not env.get(k) or env.get(k) in ("__pending__", "0"):
             return False
     if env.get("SETUP_COMPLETE", "false").lower() != "true":
-        return False
-    # OAuth token 必须存在(Drive + Sheets 共用这一套凭证)
-    try:
-        import oauth_helper
-        if not oauth_helper.has_token():
-            return False
-    except Exception:
         return False
     # 旧部署自动迁移
     migrate_legacy_password()
