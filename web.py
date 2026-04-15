@@ -165,7 +165,7 @@ def _client_ip():
 # API_ID / API_HASH 必须客户自己申请 — 不在 repo 里预填,避免 public 仓库暴露私钥
 DEFAULT_API_ID = ""
 DEFAULT_API_HASH = ""
-DEFAULT_KEYWORDS = "到期,续费,暂停,下架,上架,地址,打款,欠费"
+DEFAULT_KEYWORDS = "到期,续费,暂停,下架,上架,地址,打款,欠费,返点,返利,回扣"
 DEFAULT_WEB_PASSWORD = "tg@monitor2026"
 DEFAULT_NO_REPLY_MINUTES = "30"
 DEFAULT_PATROL_DAYS = "7"

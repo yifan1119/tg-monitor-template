@@ -133,7 +133,7 @@ BOT_TOKEN=
 ALERT_GROUP_ID=0
 
 # 业务默认值
-KEYWORDS=到期,续费,暂停,下架,上架,地址,打款,欠费
+KEYWORDS=到期,续费,暂停,下架,上架,地址,打款,欠费,返点,返利,回扣
 NO_REPLY_MINUTES=30
 WORK_HOUR_START=11
 WORK_HOUR_END=23

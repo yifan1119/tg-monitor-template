@@ -58,7 +58,7 @@ ALERT_GROUP_ID=${GROUP_ID}
 WEB_PORT=${WEB_PORT}
 
 # 关键词（逗号分隔）
-KEYWORDS=到期,续费,暂停,下架,上架,地址,打款,欠费
+KEYWORDS=到期,续费,暂停,下架,上架,地址,打款,欠费,返点,返利,回扣
 
 # 未回复预警（分钟）
 NO_REPLY_MINUTES=30
