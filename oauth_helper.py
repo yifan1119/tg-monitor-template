@@ -20,7 +20,9 @@ from pathlib import Path
 
 # Google 有时会返回比请求更多的 scope(include_granted_scopes 副作用 / consent screen 多配)
 # 不放宽 oauthlib 的严格 scope 比对就会 "Scope has changed from ... to ..." 直接报错
-os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+# 必须是字面量 "true",oauthlib 内部是 .lower() == 'true' 比对的,写 "1" 不生效
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "true"
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "0"  # 强制 HTTPS,正常应该是这样
 
 logger = logging.getLogger(__name__)
 
@@ -64,13 +66,22 @@ def build_auth_url(client_id, client_secret, redirect_uri, state=""):
 
 def exchange_code(client_id, client_secret, redirect_uri, code):
     """用授权码换 refresh_token + access_token,存到 TOKEN_PATH"""
+    import warnings
     from google_auth_oauthlib.flow import Flow
     flow = Flow.from_client_config(
         _client_config(client_id, client_secret, redirect_uri),
         scopes=SCOPES,
         redirect_uri=redirect_uri,
     )
-    flow.fetch_token(code=code)
+    # 兜底 1:把所有 oauthlib 的 Warning 当 warning 处理(不让它升成 error)
+    # 兜底 2:scope 不一致会 raise Warning 子类,catchall
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            flow.fetch_token(code=code)
+        except Warning as w:
+            # oauthlib 把 scope 不匹配当 Warning 抛 — 忽略,只要拿到 token 就行
+            logger.warning("OAuth scope warning(已忽略): %s", w)
     creds = flow.credentials
     if not creds.refresh_token:
         raise RuntimeError("Google 没返回 refresh_token,请到 myaccount.google.com/permissions 撤销旧授权后重试")
