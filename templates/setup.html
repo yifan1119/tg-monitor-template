@@ -792,7 +792,7 @@
           <div style="margin-bottom:6px;"><b>6.</b> <span style="color:#ffd28a;font-weight:600;">关键步骤(忽略会 access_denied)</span>:打开 <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" style="color:#7ec9ff;">OAuth 同意屏幕</a> → 滑到下面 <b>「测试用户」</b> 区 → <b>+ ADD USERS</b> → 把要授权的 Gmail 加进去</div>
           <div style="margin-bottom:10px;color:#9eb4c7;font-size:12px;">↑ 因为应用还在「测试」状态,只有名单里的用户能授权</div>
 
-          <div style="margin-bottom:6px;"><b>7.</b> 回这里点 <b style="color:#7ec9ff;">「连接 Google Drive」</b> → Google 弹授权页 → 选要授权的帐号 → <b>继续</b>(可能会出现「Google 没核实此应用」警告,点<b>高级 → 转至 [项目名] (不安全)</b>是正常的) → <b>同意</b> → 自动跳回这里</div>
+          <div style="margin-bottom:6px;"><b>7.</b> <b style="color:#ffd28a;">首次部署</b>:先把整个表单填完 → 点页面底部 <b>「保存并启动」</b> → 登录后<b>进入「设置」页</b>再点 <b style="color:#7ec9ff;">「连接 Google Drive」</b>(直接在这里点会丢表单) → Google 弹授权页 → 选要授权的帐号 → <b>继续</b>(可能会出现「Google 没核实此应用」警告,点<b>高级 → 转至 [项目名] (不安全)</b>是正常的) → <b>同意</b> → 自动跳回</div>
 
           <div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.1);">
             <b style="color:#ff9b3d;">▸ 常见报错</b>
@@ -815,26 +815,18 @@
           想用自己的文件夹再手动改。留空 = 不上传,仅显示「[图片]/[文件]」文字。
         </div>
 
-        {# 默认展开 → 打开页面就能看到「ID 在哪」,不用点开 #}
-        <div style="background:rgba(42,171,238,0.06);border-left:3px solid var(--accent-cyan,#2aabee);padding:14px 18px;margin-top:12px;border-radius:6px;font-size:13px;line-height:1.85;color:#cfe3f5;">
-          <div style="color:var(--accent-ember,#ff9b3d);font-weight:600;margin-bottom:8px;letter-spacing:0.5px;">▸ Drive 文件夹 ID 在哪?</div>
-
-          <div style="margin-bottom:6px;"><b>1.</b> 打开 <a href="https://drive.google.com" target="_blank" style="color:#7ec9ff;">drive.google.com</a> → 新建一个文件夹(例如 <code>tg-monitor-媒体</code>)</div>
-
-          <div style="margin-bottom:8px;"><b>2.</b> 双击进入这个文件夹,然后看浏览器<b>地址栏</b>:</div>
-
-          {# 视觉化:用框 + 高亮颜色让 ID 那段一眼可见 #}
-          <div style="background:#0f1822;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:10px 14px;margin:6px 0 12px;font-family:Menlo,Consolas,monospace;font-size:12.5px;word-break:break-all;line-height:1.7;">
-            <span style="color:#7c8a9a;">https://drive.google.com/drive/folders/</span><span style="background:rgba(255,155,61,0.25);color:#ffd28a;padding:2px 6px;border-radius:3px;font-weight:600;">1AbcDeFgHiJkLmNoPqRsTuVwXyZ_123</span>
+        {# OAuth 授权后自动建,这里只给「想用自己 Drive 现有文件夹」的高级用户用 #}
+        <details class="howto" style="margin-top:8px;">
+          <summary style="color:#9eb4c7;">▸ 想用自己现有的 Drive 文件夹?(高级)</summary>
+          <div class="howto-body" style="font-size:13px;line-height:1.85;color:#cfe3f5;">
+            <div style="margin-bottom:8px;color:#ffd28a;">
+              ⚠ 注意:OAuth 的 <code>drive.file</code> 权限只能管理本程序上传的文件。手动指定的文件夹<b>自动清理可能失效</b>,建议直接用自动建的文件夹。
+            </div>
+            <div style="margin-bottom:6px;"><b>1.</b> <a href="https://drive.google.com" target="_blank" style="color:#7ec9ff;">drive.google.com</a> 新建文件夹</div>
+            <div style="margin-bottom:6px;"><b>2.</b> 进入文件夹,地址栏 <code>folders/</code> 后面那串字符就是 ID,复制填到上方</div>
+            <div><b>3.</b> 点 <b>「测试文件夹权限」</b> 验证</div>
           </div>
-          <div style="margin-bottom:10px;color:#9eb4c7;">
-            <code>folders/</code> 后面那串<b style="color:#ffd28a;">高亮的字符</b>就是文件夹 ID,复制出来填到上方输入框。
-          </div>
-
-          <div style="margin-bottom:6px;"><b>3.</b> 右键这个文件夹 → <b>共享</b> → 把 service-account.json 里的 <code>client_email</code> 邮箱(就是上方第 03 区你上传的那个 SA 凭证里的邮箱)加为<b>编辑者</b></div>
-
-          <div><b>4.</b> 回到这里,把 ID 填到上方输入框,点 <b>「测试文件夹权限」</b> 验证</div>
-        </div>
+        </details>
 
         <details class="howto" style="margin-top:8px;">
           <summary>▸ 启用前请了解的风险</summary>
@@ -863,8 +855,11 @@
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
           <input type="number" name="media_retention_days" id="media_retention_days"
                  value="{{ d.media_retention_days or 0 }}" min="0" max="3650" style="max-width:120px;">
+          {# 「立即清理」只在已完成 setup 的设置页显示 — 首次部署还没上传过任何媒体,按了也没东西清 #}
+          {% if mode == 'settings' %}
           <button type="button" class="test-btn" id="cleanupNowBtn">▸ 立即清理一次</button>
           <span class="test-result" id="cleanupNowResult"></span>
+          {% endif %}
         </div>
         <div class="hint">
           每天凌晨 03:00 (北京时间) 自动删除 Drive 文件夹里超过 N 天的文件,防止长期堆积。

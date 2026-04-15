@@ -78,7 +78,24 @@ echo "  Web 端口: ${WEB_PORT}"
 echo "  安装路径: ${INSTALL_DIR}"
 echo ""
 
-# 1. 检查/安装 Docker
+# 1. 检查/安装 git(下一步 clone 需要,新装 VPS 默认可能没有)
+if ! command -v git &> /dev/null; then
+    echo "📦 未检测到 git,开始安装..."
+    if command -v apt-get &> /dev/null; then
+        apt-get update -y && apt-get install -y git
+    elif command -v yum &> /dev/null; then
+        yum install -y git
+    elif command -v dnf &> /dev/null; then
+        dnf install -y git
+    else
+        echo "❌ 未知包管理器,请先手动安装 git 再重试"
+        exit 1
+    fi
+else
+    echo "✅ git 已安装: $(git --version)"
+fi
+
+# 2. 检查/安装 Docker
 if ! command -v docker &> /dev/null; then
     echo "📦 未检测到 Docker，开始安装..."
     curl -fsSL https://get.docker.com | sh
@@ -88,13 +105,13 @@ else
     echo "✅ Docker 已安装: $(docker --version)"
 fi
 
-# 2. 检查 docker compose
+# 3. 检查 docker compose
 if ! docker compose version &> /dev/null; then
     echo "❌ 没找到 docker compose（v2），请先安装。老版的 docker-compose (v1) 不支持。"
     exit 1
 fi
 
-# 3. 目录检查
+# 4. 目录检查
 if [ -d "${INSTALL_DIR}" ]; then
     echo "⚠️  目录 ${INSTALL_DIR} 已存在（可能是同部门重装）"
     read -p "     是否继续（保留现有 sessions/data/凭证）？[y/N] " yn
@@ -108,7 +125,7 @@ else
     cd "${INSTALL_DIR}"
 fi
 
-# 4. 生成骨架 .env（保留已有凭证字段不覆盖）
+# 5. 生成骨架 .env（保留已有凭证字段不覆盖）
 if [ ! -f ".env" ]; then
     echo "📝 生成骨架 .env..."
     cat > .env << EOF
@@ -154,17 +171,17 @@ else
     fi
 fi
 
-# 5. 建空 service-account.json 占位（让 docker compose 不报 mount error）
+# 6. 建空 service-account.json 占位（让 docker compose 不报 mount error）
 if [ ! -f "service-account.json" ]; then
     echo "{}" > service-account.json
 fi
 
-# 6. 启动（project 名带部门名避免 compose 把同部门跨安装合并）
+# 7. 启动（project 名带部门名避免 compose 把同部门跨安装合并）
 echo "🐳 构建镜像 + 启动容器..."
 export COMPANY_NAME WEB_PORT
 docker compose -p "tg-${COMPANY_NAME}" up -d --build
 
-# 7. 等 web 起来
+# 8. 等 web 起来
 echo "⏳ 等待 web 服务就绪..."
 for i in {1..60}; do
     code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${WEB_PORT}/setup" 2>/dev/null || echo "")

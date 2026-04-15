@@ -1,6 +1,7 @@
 """Web 登录管理介面 — 账号登录 + 启用/停用 + 首次设置 + 设置修改"""
 import asyncio
 import json
+import logging
 import threading
 import tempfile
 import urllib.parse
@@ -19,6 +20,8 @@ import database as db
 import gspread
 from google.oauth2.service_account import Credentials
 from werkzeug.security import generate_password_hash, check_password_hash
+
+logger = logging.getLogger(__name__)
 
 # ============ 设置文件读写 ============
 ENV_PATH = config.BASE_DIR / ".env"
@@ -237,7 +240,8 @@ def is_setup_complete():
 
 
 def _test_bot_api(token, group_id):
-    """用 Bot API 发一则测试消息，验证 token 有效 + bot 在群里 + 是管理员"""
+    """验证 Bot token 有效 + bot 在群里(且是管理员)。
+    用 getMe + getChatMember 只读调用,不骚扰客户群(每次保存都发测试消息会刷屏)。"""
     token = (token or "").strip()
     group_id = (group_id or "").strip()
     if not token or ":" not in token:
@@ -245,19 +249,44 @@ def _test_bot_api(token, group_id):
     if not group_id:
         return False, "群 ID 不能为空"
     try:
-        data = urllib.parse.urlencode({
-            "chat_id": group_id,
-            "text": "✅ TG 监控 — 连线测试成功！设置完成后将开始接收预警。",
-        }).encode()
+        # 1. getMe — 验证 token 有效
+        with urllib.request.urlopen(
+            f"https://api.telegram.org/bot{token}/getMe", timeout=10
+        ) as resp:
+            me = json.loads(resp.read())
+        if not me.get("ok"):
+            return False, f"Token 无效: {me.get('description', '未知错误')}"
+        bot_info = me["result"]
+        bot_id = bot_info["id"]
+        bot_username = bot_info.get("username", "?")
+
+        # 2. getChat — 验证 bot 能看到这个群
+        data = urllib.parse.urlencode({"chat_id": group_id}).encode()
         req = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=data,
+            f"https://api.telegram.org/bot{token}/getChat", data=data
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                chat = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")
+            return False, f"群 ID「{group_id}」bot 看不到。确认: ① bot 已加进群 ② 群 ID 正确(含负号)。细节: {body}"
+        if not chat.get("ok"):
+            return False, f"群验证失败: {chat.get('description', '未知错误')}"
+        chat_title = chat["result"].get("title", "?")
+
+        # 3. getChatMember — 验证 bot 是管理员(能看到所有消息)
+        data = urllib.parse.urlencode({"chat_id": group_id, "user_id": bot_id}).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/getChatMember", data=data
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            result = json.loads(resp.read())
-        if result.get("ok"):
-            return True, "Bot 已发送测试消息到群组"
-        return False, result.get("description", "未知错误")
+            member = json.loads(resp.read())
+        status = member.get("result", {}).get("status", "")
+        if status not in ("administrator", "creator"):
+            return False, f"@{bot_username} 在群「{chat_title}」,但不是管理员(当前: {status})。请把 bot 设为管理员才能收到所有消息。"
+
+        return True, f"✅ @{bot_username} 已在群「{chat_title}」并具管理员权限"
     except Exception as e:
         return False, str(e)
 
@@ -284,7 +313,19 @@ def _test_sheets_access(sheet_id, sa_json_bytes):
         )
         gc = gspread.authorize(creds)
         sp = gc.open_by_key(sheet_id)
-        return True, f"成功访问 Sheet: {sp.title}（服务账号 {sa_data['client_email']}）"
+        # 能 open 只代表有「读」权限 — 必须验「写」,否则实际写入会 PermissionError
+        # 方法: 读第 1 页 A1 再写回去(幂等,对客户数据无副作用)
+        try:
+            ws = sp.sheet1
+            orig = ws.acell("A1").value
+            ws.update_acell("A1", orig if orig is not None else "")
+        except gspread.exceptions.APIError as e:
+            body = getattr(e, "args", [""])[0] or str(e)
+            if "PERMISSION_DENIED" in str(body) or "403" in str(body):
+                return False, (f"Sheet 可读但<b>无写权限</b>。请把 service account"
+                               f"「{sa_data['client_email']}」加为 Sheet 的<b>编辑者</b>(现在是查看者)")
+            return False, f"写入测试失败: {body}"
+        return True, f"✅ 成功访问 Sheet: {sp.title}(已验证读+写权限)"
     except gspread.exceptions.SpreadsheetNotFound:
         return False, (f"Sheet ID「{sheet_id}」找不到或没访问权限。"
                        f"请确认：① ID 正确；② service account「{sa_data.get('client_email','?')}」已加为该 Sheet 的编辑者")
@@ -812,9 +853,20 @@ def get_sessions():
 
 @app.before_request
 def _redirect_to_setup_if_needed():
-    """未完成首次设置的话，把所有请求导到 /setup（除了静态资源和 setup 自身）"""
+    """未完成首次设置的话，把所有请求导到 /setup（除了静态资源和 setup 自身）。
+
+    注意:/api/test-* 只在 setup 未完成时免登录(setup 页需要调用)。
+    setup 完成后这些端点走正常登录流程,不能永久裸露 — 否则攻击者可以用 token 扫 Sheet/Bot。"""
     path = request.path
-    if path.startswith("/setup") or path.startswith("/api/setup") or path.startswith("/api/test-") or path.startswith("/static"):
+    # 静态和 setup 本体永远放行
+    if path.startswith("/setup") or path.startswith("/api/setup") or path.startswith("/static"):
+        return None
+    # /api/test-* 仅在 setup 未完成时放行(setup 页 JS 要调);完成后必须登录才能调
+    if path.startswith("/api/test-"):
+        if not is_setup_complete():
+            return None
+        if not flask_session.get("authed"):
+            return jsonify({"ok": False, "msg": "未登录"}), 401
         return None
     if not is_setup_complete():
         return redirect(url_for("setup_page"))
