@@ -740,11 +740,41 @@
   </form>
   {% endif %}
 
+  {# ========== 今日去重管理(仅管理员,settings 模式) ========== #}
+  {% if mode == 'settings' and d.is_admin %}
+  <div class="section" style="margin-top:24px;border-left-color:var(--accent-red);">
+    <div class="section-title" style="color:var(--accent-red);">
+      05 · 今日去重管理（测试用）
+    </div>
+
+    <div style="background:rgba(42,171,238,0.06);border-left:3px solid var(--accent-red);padding:12px 16px;margin-bottom:16px;font-size:12px;color:#bfd6e8;line-height:1.8;">
+      <div style="color:var(--accent-ember);font-weight:600;margin-bottom:6px;letter-spacing:1px;">▸ 这是什么功能</div>
+      为避免同一客户同一关键词被反复刷屏，系统默认：<strong>同一客户（peer）·同一预警类型·每天只推一次</strong>。
+      <br>但当你<strong>刚修改完关键词想立刻测试</strong>时，会遇到：命中了但今天已推过 → 不会再推 → 误以为没生效。
+      <br><br>
+      <div style="color:var(--accent-ember);font-weight:600;margin-bottom:6px;letter-spacing:1px;">▸ 怎么用</div>
+      1. <strong>查看今日去重</strong>：看今天推过哪些预警（类型/客户/内容/时间）<br>
+      2. <strong>清空指定类型</strong>：只清 <code>关键词预警</code> 或 <code>未回复预警</code> 或 <code>删除预警</code> 对应的今日去重<br>
+      3. 清空后，那些客户今天即可<strong>重新触发</strong>该类预警<br><br>
+      <div style="color:#ff9bb0;">⚠️ 注意：清空后如果<strong>历史消息再次被扫描到</strong>会重推。一般建议只在测试/调试时清，正式运营不要乱清。</div>
+    </div>
+
+    <div class="field">
+      <button type="button" class="test-btn" id="viewDedupBtn">▸ 查看今日去重</button>
+      <button type="button" class="test-btn" id="clearKwBtn" style="background:rgba(255,77,94,0.15);border-color:rgba(255,77,94,0.5);color:#ff9bb0;">🧹 清空「关键词」今日去重</button>
+      <button type="button" class="test-btn" id="clearNrBtn" style="background:rgba(255,77,94,0.15);border-color:rgba(255,77,94,0.5);color:#ff9bb0;">🧹 清空「未回复」今日去重</button>
+      <button type="button" class="test-btn" id="clearDelBtn" style="background:rgba(255,77,94,0.15);border-color:rgba(255,77,94,0.5);color:#ff9bb0;">🧹 清空「删除预警」今日去重</button>
+      <button type="button" class="test-btn" id="clearAllBtn" style="background:rgba(255,77,94,0.3);border-color:rgba(255,77,94,0.8);color:#ff4d5e;">💥 全部清空（慎用）</button>
+    </div>
+    <div id="dedupResult" style="margin-top:14px;"></div>
+  </div>
+  {% endif %}
+
   {# ========== 账号管理区(settings 模式) ========== #}
   {% if mode == 'settings' %}
   <div class="section" style="margin-top:24px;border-left-color:var(--accent-deep);">
     <div class="section-title" style="color:var(--accent-deep);">
-      {% if d.is_super %}05 · 账号管理{% else %}修改我的密码{% endif %}
+      {% if d.is_super %}06 · 账号管理{% else %}修改我的密码{% endif %}
     </div>
 
     {% if d.is_super %}
@@ -1039,6 +1069,67 @@ if (changePwdBtn) {
 }
 
 loadUsers();
+
+// ======= 今日去重管理 =======
+{% if d.is_admin %}
+const dedupResult = byId('dedupResult');
+function dedupBox(html, cls) {
+  dedupResult.innerHTML = '<div style="background:rgba(42,171,238,0.06);border:1px solid ' +
+    (cls === 'err' ? 'rgba(255,77,94,0.5)' : cls === 'ok' ? 'rgba(0,232,143,0.5)' : 'rgba(42,171,238,0.3)') +
+    ';border-radius:6px;padding:14px 16px;font-size:12px;line-height:1.8;color:#cfe4f2;">' + html + '</div>';
+}
+
+const typeLabel = {'keyword':'关键词','no_reply':'未回复','deleted':'删除'};
+
+byId('viewDedupBtn').addEventListener('click', async () => {
+  dedupBox('正在查询...', 'info');
+  const resp = await fetch('/api/dedup/today');
+  const data = await resp.json();
+  if (!data.ok) { dedupBox('✗ ' + (data.msg || '查询失败'), 'err'); return; }
+  let html = '<div style="color:var(--accent-ember);font-weight:600;letter-spacing:1px;margin-bottom:10px;">▸ 今日（' + data.date + '）已推预警（总计 ' + data.total + ' 条）</div>';
+  html += '<div style="margin-bottom:10px;">';
+  for (const k of ['keyword','no_reply','deleted']) {
+    html += '<span style="margin-right:16px;">' + typeLabel[k] + ': <strong style="color:var(--accent-red);">' + (data.by_type[k]||0) + '</strong></span>';
+  }
+  html += '</div>';
+  if (data.entries.length) {
+    html += '<div style="max-height:240px;overflow-y:auto;margin-top:10px;border-top:1px dashed rgba(51,144,236,0.2);padding-top:8px;">';
+    for (const e of data.entries) {
+      html += '<div style="padding:4px 0;border-bottom:1px dashed rgba(51,144,236,0.1);font-size:11px;">';
+      html += '<span style="color:var(--accent-ember);">[' + typeLabel[e.type] + ']</span> ';
+      html += '<span style="color:var(--text-dim);">' + (e.created_at||'').slice(11,16) + '</span> ';
+      html += '<strong>' + (e.peer_name||'').replace(/</g,'&lt;') + '</strong> ';
+      html += '<span style="color:var(--text-dim);">← ' + (e.account_name||'').replace(/</g,'&lt;') + '</span> ';
+      if (e.message_text) html += '<br><span style="color:#9ab;padding-left:20px;">' + e.message_text.replace(/</g,'&lt;') + '</span>';
+      html += '</div>';
+    }
+    html += '</div>';
+  } else {
+    html += '<div style="color:var(--text-dim);">今日还没有任何预警记录</div>';
+  }
+  dedupBox(html, 'ok');
+});
+
+async function clearDedup(type, label) {
+  if (!confirm('确定清空今日【' + label + '】去重记录吗？\n\n清空后相关客户今天可以重新触发该类预警。\n通常只在测试调试时才清。')) return;
+  dedupBox('正在清空...', 'info');
+  const resp = await fetch('/api/dedup/clear', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({type: type})
+  });
+  const data = await resp.json();
+  if (data.ok) {
+    dedupBox('✓ ' + data.msg, 'ok');
+  } else {
+    dedupBox('✗ ' + (data.msg || '清空失败'), 'err');
+  }
+}
+byId('clearKwBtn').addEventListener('click', () => clearDedup('keyword', '关键词'));
+byId('clearNrBtn').addEventListener('click', () => clearDedup('no_reply', '未回复'));
+byId('clearDelBtn').addEventListener('click', () => clearDedup('deleted', '删除预警'));
+byId('clearAllBtn').addEventListener('click', () => clearDedup('all', '全部三类'));
+{% endif %}
 {% endif %}
 </script>
 </body>

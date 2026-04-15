@@ -1063,6 +1063,103 @@ def verify_password():
         return jsonify({"ok": False, "error": str(e)})
 
 
+@app.route("/api/dedup/today", methods=["GET"])
+@login_required
+def api_dedup_today():
+    """查看今日已推送的预警记录(即每日去重状态)
+
+    alerts 表 = 去重来源。has_alert_today() 通过查当日 alerts 记录判断是否已推过。
+    客户修改关键词后如果想立刻对已聊过的广告主重测,需要先清掉今日对应记录。
+
+    返回格式:
+        {
+            "date": "2026-04-15",
+            "total": 12,
+            "by_type": {"keyword": 8, "no_reply": 3, "deleted": 1},
+            "entries": [
+                {"type": "keyword", "peer_name": "王总(广告主A)", "account_name": "外事号1",
+                 "message_text": "这个月返点给多少...", "created_at": "2026-04-15 10:23:11"},
+                ...
+            ]
+        }
+    """
+    from datetime import datetime as _dt
+    today = _dt.now(db.TZ_BJ).strftime("%Y-%m-%d")
+    rows = db.get_conn().execute(
+        "SELECT a.type, a.message_text, a.created_at, "
+        "       COALESCE(p.name, '(未知客户)') AS peer_name, "
+        "       COALESCE(ac.name, '(未知账号)') AS account_name "
+        "FROM alerts a "
+        "LEFT JOIN peers p ON a.peer_id = p.id "
+        "LEFT JOIN accounts ac ON a.account_id = ac.id "
+        "WHERE a.created_at LIKE ? "
+        "ORDER BY a.created_at DESC",
+        (f"{today}%",)
+    ).fetchall()
+
+    by_type = {"keyword": 0, "no_reply": 0, "deleted": 0}
+    entries = []
+    for r in rows:
+        t = r["type"] or "unknown"
+        by_type[t] = by_type.get(t, 0) + 1
+        entries.append({
+            "type": t,
+            "peer_name": r["peer_name"],
+            "account_name": r["account_name"],
+            "message_text": (r["message_text"] or "")[:120],
+            "created_at": r["created_at"],
+        })
+
+    return jsonify({
+        "ok": True,
+        "date": today,
+        "total": len(entries),
+        "by_type": by_type,
+        "entries": entries[:50],  # 最多回 50 条避免过大
+    })
+
+
+@app.route("/api/dedup/clear", methods=["POST"])
+@login_required
+def api_dedup_clear():
+    """清空今日指定类型的去重记录,让相同关键词/客户可以重新触发预警
+
+    入参: { "type": "keyword" | "no_reply" | "deleted" | "all" }
+    仅管理员可调用,避免普通用户误操作把主管的告警清光。
+    """
+    me = current_user()
+    if not is_admin(me):
+        return jsonify({"ok": False, "msg": "只有管理员可清空去重"}), 403
+
+    data = request.get_json(silent=True) or {}
+    alert_type = (data.get("type") or "").strip().lower()
+    if alert_type not in ("keyword", "no_reply", "deleted", "all"):
+        return jsonify({"ok": False, "msg": "type 必须是 keyword / no_reply / deleted / all 其中之一"})
+
+    from datetime import datetime as _dt
+    today = _dt.now(db.TZ_BJ).strftime("%Y-%m-%d")
+    conn = db.get_conn()
+    if alert_type == "all":
+        cur = conn.execute(
+            "DELETE FROM alerts WHERE created_at LIKE ?",
+            (f"{today}%",)
+        )
+    else:
+        cur = conn.execute(
+            "DELETE FROM alerts WHERE type=? AND created_at LIKE ?",
+            (alert_type, f"{today}%")
+        )
+    deleted = cur.rowcount
+    conn.commit()
+
+    return jsonify({
+        "ok": True,
+        "msg": f"已清空今日 {alert_type} 类型 {deleted} 条去重记录,相关客户今天可以重新触发该类预警",
+        "deleted": deleted,
+        "type": alert_type,
+    })
+
+
 @app.route("/api/restart", methods=["POST"])
 @login_required
 def restart_monitor():
