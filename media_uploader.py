@@ -10,6 +10,7 @@
 import io
 import logging
 import mimetypes
+import os
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -17,6 +18,14 @@ import config
 
 logger = logging.getLogger(__name__)
 TZ_BJ = timezone(timedelta(hours=8))
+
+# 可执行/脚本类扩展名 — 打开就可能跑代码,在 Sheet 里加 ⚠️ 前缀提醒客户下载前确认
+# 客户业务审查场景几乎不会收到这类文件,一旦收到大概率是钓鱼 / 诈骗附件
+DANGER_EXTS = {
+    ".exe", ".bat", ".cmd", ".scr", ".vbs", ".vbe", ".js", ".jse",
+    ".wsf", ".wsh", ".ps1", ".psm1", ".msi", ".jar", ".com", ".pif",
+    ".hta", ".cpl", ".reg", ".lnk", ".dll", ".apk", ".app", ".dmg",
+}
 
 _lock = threading.Lock()
 _drive_service = None  # lazy 初始化 googleapiclient.discovery.Resource
@@ -169,7 +178,11 @@ async def upload_media(message, media_type, peer_name=""):
             "sticker": "🌟",
             "file": "📎",
         }.get(media_type, "📎")
-        label = f"{label_emoji} {filename}"
+        # 危险扩展名加 ⚠️ 前缀 — 客户一眼看出来别点下载
+        # 只检扩展名,不做深度扫描(Drive 自己会扫病毒;这里只是提醒层)
+        ext = os.path.splitext(filename)[1].lower()
+        danger_prefix = "⚠️ " if ext in DANGER_EXTS else ""
+        label = f"{danger_prefix}{label_emoji} {filename}"
         # Sheets 公式里的双引号要 escape
         safe_label = label.replace('"', '""')
         display = f'=HYPERLINK("{view_url}", "{safe_label}")'

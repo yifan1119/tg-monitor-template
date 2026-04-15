@@ -989,11 +989,13 @@ def api_oauth_callback():
         # 自动建 Drive 文件夹(如果客户没填) → 客户连建文件夹这步都免了
         existing_folder = read_env().get("MEDIA_FOLDER_ID", "").strip()
         auto_folder_msg = ""
+        folder_changed = False
         if not existing_folder:
             try:
                 folder_id = oauth_helper.auto_create_folder("tg-monitor-媒体")
                 if folder_id:
                     write_env({"MEDIA_FOLDER_ID": folder_id})
+                    folder_changed = True
                     try:
                         import importlib
                         importlib.reload(config)
@@ -1002,6 +1004,19 @@ def api_oauth_callback():
                     auto_folder_msg = f"<p style='color:#9ef0b8;'>✓ 自动建好了 Drive 文件夹「tg-monitor-媒体」(id: <code>{folder_id[:20]}...</code>)</p>"
             except Exception as e:
                 auto_folder_msg = f"<p style='color:#ff9b3d;'>⚠ 自动建文件夹失败({e}),请手动到设置页填 Drive 文件夹 ID</p>"
+
+        # 新 MEDIA_FOLDER_ID 写进 .env 了,tg-monitor 进程里的 config 还是旧的空值
+        # → 必须 restart 容器才能读到,否则后续收到的媒体依然走不进 Drive 上传分支
+        # (今天就是这个坑:OAuth 连完后所有图片都显示 [图片] 占位)
+        if folder_changed:
+            try:
+                ok_r, msg_r = _start_tg_monitor()
+                if ok_r:
+                    auto_folder_msg += "<p style='color:#9ef0b8;'>✓ 已重启监控服务,新配置即刻生效</p>"
+                else:
+                    auto_folder_msg += f"<p style='color:#ff9b3d;'>⚠ 重启监控服务失败({msg_r}),请手动 docker compose restart tg-monitor</p>"
+            except Exception as e:
+                auto_folder_msg += f"<p style='color:#ff9b3d;'>⚠ 重启监控服务异常({e})</p>"
         return f"""
         <html><head><meta charset='utf-8'><title>授权成功</title></head>
         <body style='font-family:sans-serif;background:#0a0e14;color:#cfe3f5;padding:60px;text-align:center;'>
