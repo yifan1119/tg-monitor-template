@@ -494,6 +494,11 @@ def super_required(f):
 app = Flask(__name__, template_folder="templates")
 app.secret_key = os.environ.get("WEB_SECRET_KEY", "tg-monitor-web-2026")
 
+# 反代场景(Caddy 加 HTTPS 给 OAuth 用):识别 X-Forwarded-* 头,让 request.host_url 拿到 https://
+# 没反代时这个不会有副作用,因为浏览器不会自己加这些头
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
 # 管理密码（从 .env 读取 WEB_PASSWORD，默认 tg@monitor2026）
 WEB_PASSWORD = os.environ.get("WEB_PASSWORD", "tg@monitor2026")
 

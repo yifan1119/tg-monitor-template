@@ -1,0 +1,26 @@
+# Caddy 反代配置 — 给 Web 后台套 HTTPS(为了 Google OAuth)
+#
+# 启用方式:
+#   1. 在 .env 加一行: PUBLIC_DOMAIN=76-13-219-163.nip.io
+#      (没域名的话用 nip.io;有域名就填你的域名比如 tg.example.com)
+#   2. docker compose -p tg-demo --profile https up -d caddy
+#   3. 等 30 秒,Caddy 会自动从 Let's Encrypt 申请证书
+#   4. 之后访问 https://YOUR_DOMAIN/  → 自动反代到 Web 容器的 5001
+#
+# Google OAuth 重定向 URI 改用:
+#   https://YOUR_DOMAIN/api/oauth/callback   (注意:HTTPS + 不带端口)
+#
+# 前提:VPS 80 / 443 端口对外开放(Let's Encrypt HTTP-01 challenge 用)
+
+{$PUBLIC_DOMAIN} {
+    reverse_proxy web:5001 {
+        # 透传真实 host,Flask 的 request.host_url 才会拿到外部 host(给 OAuth redirect 用)
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Caddy 默认会自动 enable Let's Encrypt;失败的话日志会说原因
+    encode gzip
+}
