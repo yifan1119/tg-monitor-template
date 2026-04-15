@@ -65,41 +65,60 @@ def build_auth_url(client_id, client_secret, redirect_uri, state=""):
 
 
 def exchange_code(client_id, client_secret, redirect_uri, code):
-    """用授权码换 refresh_token + access_token,存到 TOKEN_PATH"""
-    import warnings
-    from google_auth_oauthlib.flow import Flow
-    flow = Flow.from_client_config(
-        _client_config(client_id, client_secret, redirect_uri),
-        scopes=SCOPES,
-        redirect_uri=redirect_uri,
+    """用授权码换 refresh_token + access_token,存到 TOKEN_PATH
+
+    走 raw HTTP 而不是 google_auth_oauthlib.Flow.fetch_token —
+    后者会做严格 scope 校验,Google 只要返回比请求多的 scope(很常见,
+    因为客户的 OAuth client 上次授权过别的 app)就会 raise Warning
+    把 token 流程整个崩掉。raw HTTP 拿到原始 JSON,不管 scope 多不多,
+    refresh_token 是好的就行。
+    """
+    import requests
+    resp = requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        },
+        timeout=15,
     )
-    # 兜底 1:把所有 oauthlib 的 Warning 当 warning 处理(不让它升成 error)
-    # 兜底 2:scope 不一致会 raise Warning 子类,catchall
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        try:
-            flow.fetch_token(code=code)
-        except Warning as w:
-            # oauthlib 把 scope 不匹配当 Warning 抛 — 忽略,只要拿到 token 就行
-            logger.warning("OAuth scope warning(已忽略): %s", w)
-    creds = flow.credentials
-    if not creds.refresh_token:
-        raise RuntimeError("Google 没返回 refresh_token,请到 myaccount.google.com/permissions 撤销旧授权后重试")
+    if resp.status_code != 200:
+        raise RuntimeError(f"Google token endpoint {resp.status_code}: {resp.text[:300]}")
+    token_data = resp.json()
+    refresh_token = token_data.get("refresh_token")
+    if not refresh_token:
+        raise RuntimeError(
+            "Google 没返回 refresh_token,请到 myaccount.google.com/permissions "
+            "撤销「Telegram 监听」之类的授权后重试"
+        )
     save_token({
         "client_id": client_id,
         "client_secret": client_secret,
-        "refresh_token": creds.refresh_token,
-        "token": creds.token,
+        "refresh_token": refresh_token,
+        "token": token_data.get("access_token"),
         "token_uri": "https://oauth2.googleapis.com/token",
         "scopes": SCOPES,
     })
-    # 拿一下用户邮箱给 UI 展示
+    # 拿一下用户邮箱给 UI 展示(用 access_token 直接调 userinfo,免再过 oauthlib)
     email = ""
     try:
-        from googleapiclient.discovery import build
-        svc = build("drive", "v3", credentials=creds, cache_discovery=False)
-        about = svc.about().get(fields="user(emailAddress)").execute()
-        email = about.get("user", {}).get("emailAddress", "")
+        ui = requests.get(
+            "https://openidconnect.googleapis.com/v1/userinfo",
+            headers={"Authorization": f"Bearer {token_data.get('access_token')}"},
+            timeout=10,
+        )
+        if ui.status_code == 200:
+            email = ui.json().get("email", "")
+        else:
+            # userinfo scope 没要,fallback 走 Drive about API
+            from googleapiclient.discovery import build
+            creds = get_credentials()
+            svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+            about = svc.about().get(fields="user(emailAddress)").execute()
+            email = about.get("user", {}).get("emailAddress", "")
     except Exception as e:
         logger.warning("拿用户邮箱失败: %s", e)
     return email
