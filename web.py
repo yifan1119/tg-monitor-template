@@ -803,6 +803,34 @@ def api_oauth_start():
         return f"授权 URL 生成失败: {e}", 500
 
 
+@app.route("/api/drive/auto-create-folder", methods=["POST"])
+def api_drive_auto_create_folder():
+    """OAuth 已连接但 MEDIA_FOLDER_ID 空时调一下,自动建文件夹并回写 .env。
+
+    OAuth callback 里本来就会建,但如果 Drive API 当时没启用会失败。
+    API 启用后调这个端点就能补建。幂等(有就复用)。
+    """
+    import oauth_helper
+    if not oauth_helper.has_token():
+        return jsonify({"ok": False, "msg": "请先完成 Google 授权"})
+    existing = (read_env().get("MEDIA_FOLDER_ID") or "").strip()
+    if existing:
+        return jsonify({"ok": True, "folder_id": existing, "created": False})
+    try:
+        folder_id = oauth_helper.auto_create_folder("tg-monitor-媒体")
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"建立文件夹失败: {e}"})
+    if not folder_id:
+        return jsonify({"ok": False, "msg": "建立文件夹失败,查看日志(常见:Drive API 未启用)"})
+    write_env({"MEDIA_FOLDER_ID": folder_id})
+    try:
+        import importlib
+        importlib.reload(config)
+    except Exception as e:
+        logger.warning(f"reload config 失败(不影响): {e}")
+    return jsonify({"ok": True, "folder_id": folder_id, "created": True})
+
+
 @app.route("/api/setup/save-oauth-creds", methods=["POST"])
 def api_setup_save_oauth_creds():
     """setup 精灵内:在跳 Google 前暂存 Client ID/Secret 到 .env。

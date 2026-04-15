@@ -696,6 +696,12 @@
                 ▸ 连接 Google Drive(OAuth 授权)
               </a>
               <span class="test-result" id="oauthStartMsg" style="color:#7c8a9a;">点击会跳到 Google 授权页,完成后自动回到本精灵继续配置</span>
+              <div style="background:rgba(255,155,61,0.1);border-left:3px solid #ff9b3d;padding:10px 14px;margin-top:10px;border-radius:4px;color:#ffd28a;font-size:12.5px;line-height:1.7;">
+                ⚠ <b>点之前必做</b>:要授权的 Gmail 必须先加到
+                <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" style="color:#7ec9ff;font-weight:600;">OAuth 同意屏幕 → 测试用户</a>
+                白名单,<b>不然 Google 会报 403 access_denied</b>。<br>
+                做法:打开上面链接 → 滚到「测试用户」区 → <b>+ ADD USERS</b> → 填 Gmail → 保存。
+              </div>
             {% else %}
               <a href="/api/oauth/start" class="test-btn" id="oauthStartBtn"
                  style="display:inline-block;text-decoration:none;background:rgba(126,201,255,0.15);border-color:rgba(126,201,255,0.5);color:#7ec9ff;">
@@ -727,7 +733,7 @@
           <div style="margin-bottom:6px;"><b>6.</b> <span style="color:#ffd28a;font-weight:600;">关键步骤(忽略会 access_denied)</span>:打开 <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" style="color:#7ec9ff;">OAuth 同意屏幕</a> → 滑到下面 <b>「测试用户」</b> 区 → <b>+ ADD USERS</b> → 把要授权的 Gmail 加进去</div>
           <div style="margin-bottom:10px;color:#9eb4c7;font-size:12px;">↑ 因为应用还在「测试」状态,只有名单里的用户能授权</div>
 
-          <div style="margin-bottom:6px;"><b>7.</b> <b style="color:#ffd28a;">首次部署</b>:先把整个表单填完 → 点页面底部 <b>「保存并启动」</b> → 登录后<b>进入「设置」页</b>再点 <b style="color:#7ec9ff;">「连接 Google Drive」</b>(直接在这里点会丢表单) → Google 弹授权页 → 选要授权的帐号 → <b>继续</b>(可能会出现「Google 没核实此应用」警告,点<b>高级 → 转至 [项目名] (不安全)</b>是正常的) → <b>同意</b> → 自动跳回</div>
+          <div style="margin-bottom:6px;"><b>7.</b> <b style="color:#ffd28a;">现在就可以授权</b>:确认上方两个输入框已填好 Client ID / Secret → 点上方 <b style="color:#7ec9ff;">「▸ 连接 Google Drive」</b> 按钮 → 跳 Google 选帐号 <span style="color:#ff9bb0;">(这个帐号必须已加进第 6 步的测试用户白名单)</span> → <b>继续</b>(可能出现「Google 没核实此应用」警告,点<b>高级 → 转至 [项目名] (不安全)</b>是正常的) → <b>同意</b> → <b style="color:#9ef0b8;">自动飞回精灵页,Drive 文件夹 + Sheet 自动建好</b> → 继续填其他字段 → 最后点底部「保存并启动」</div>
 
           <div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.1);">
             <b style="color:#ff9b3d;">▸ 常见报错</b>
@@ -1093,6 +1099,81 @@ async function startOAuthFromSetup() {
     btn.style.pointerEvents = 'auto'; btn.style.opacity = '1';
   }
 }
+
+// 检测 ?oauth_error=XXX — 展示红色错误横幅 + 针对 access_denied 给修复指引
+(function handleOAuthError() {
+  const params = new URLSearchParams(location.search);
+  const err = params.get('oauth_error');
+  if (!err) return;
+  const banner = document.createElement('div');
+  banner.style.cssText = 'background:rgba(255,77,94,0.15);border:1px solid #ff4d5e;color:#ff9bb0;padding:14px 18px;border-radius:6px;margin:0 0 16px 0;font-size:14px;line-height:1.7;';
+  if (err === 'access_denied') {
+    banner.innerHTML = '✗ <b>Google 拒绝授权(access_denied)</b><br>' +
+      '最常见原因:用来登录的 Gmail 不在「测试用户」白名单里。<br>' +
+      '修复:打开 <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" style="color:#7ec9ff;font-weight:600;">OAuth 同意屏幕</a> → 滑到下方「测试用户」→ <b>+ ADD USERS</b> → 把 Gmail 加进去 → 保存,再回来点「连接 Google Drive」。';
+  } else {
+    banner.innerHTML = '✗ <b>Google 授权失败:</b> ' + err + '<br>检查 OAuth Client ID/Secret、重定向 URI 是否正确,必要时重新申请。';
+  }
+  const form = document.querySelector('form');
+  if (form) form.parentNode.insertBefore(banner, form);
+  history.replaceState({}, '', '/setup');
+})();
+
+// OAuth 已连接但 Drive 文件夹 / Sheet 还没建 → 页面加载时后台自动补建
+// 场景:OAuth callback 当时 Drive API 还没启用,文件夹和 Sheet 建失败。
+//      用户启用 API 后只要刷新精灵页,资源就自动补齐,不用手动点按钮。
+(function autoBackfillResources() {
+  // OAuth 状态通过模板渲染带到前端
+  const oauthConnected = {{ 'true' if (d.oauth_status and d.oauth_status.connected) else 'false' }};
+  if (!oauthConnected) return;
+  // 已连接但某个字段空 → 幂等补建
+  const sheetInput = byId('sheet_id');
+  const folderInput = byId('media_folder_id');
+  const sheetEmpty = sheetInput && !sheetInput.value.trim();
+  const folderEmpty = folderInput && !folderInput.value.trim();
+  if (!sheetEmpty && !folderEmpty) return;  // 都有,不用管
+
+  const banner = document.createElement('div');
+  banner.style.cssText = 'background:rgba(126,201,255,0.1);border-left:3px solid #7ec9ff;padding:12px 18px;border-radius:6px;margin:0 0 16px 0;color:#bfd6e8;font-size:13.5px;';
+  banner.innerHTML = '⏳ 检测到 Google 已授权但资源未建,正在后台自动补建...';
+  const form = document.querySelector('form');
+  if (form) form.parentNode.insertBefore(banner, form);
+
+  const jobs = [];
+  if (folderEmpty) {
+    jobs.push(fetch('/api/drive/auto-create-folder', {method: 'POST'}).then(r => r.json()).then(d => {
+      if (d.ok && d.folder_id && folderInput) folderInput.value = d.folder_id;
+      return {name: 'Drive 文件夹', ok: d.ok, msg: d.msg};
+    }));
+  }
+  if (sheetEmpty) {
+    jobs.push(fetch('/api/sheets/auto-create', {method: 'POST'}).then(r => r.json()).then(d => {
+      if (d.ok && d.sheet_id && sheetInput) sheetInput.value = d.sheet_id;
+      return {name: 'Spreadsheet', ok: d.ok, msg: d.msg};
+    }));
+  }
+  Promise.all(jobs).then(results => {
+    const fails = results.filter(r => !r.ok);
+    if (fails.length === 0) {
+      banner.style.background = 'rgba(74,222,128,0.15)';
+      banner.style.borderLeftColor = '#4ade80';
+      banner.style.color = '#9ef0b8';
+      banner.innerHTML = '✓ Google Drive 文件夹 + Spreadsheet 已自动建好,可以继续填其他字段了';
+    } else {
+      banner.style.background = 'rgba(255,155,61,0.12)';
+      banner.style.borderLeftColor = '#ff9b3d';
+      banner.style.color = '#ffd28a';
+      const lines = fails.map(r => `• ${r.name}:${r.msg || '失败'}`).join('<br>');
+      const apiHints = fails.some(r => (r.msg || '').includes('API') || (r.msg || '').includes('未启用') || (r.msg || '').includes('access'))
+        ? '<br><br>最常见原因:<b>Google Drive API / Sheets API 没启用</b>。启用后刷新本页即可自动重建。'
+        : '';
+      banner.innerHTML = `⚠ 部分资源自动建失败:<br>${lines}${apiHints}`;
+    }
+  }).catch(e => {
+    banner.style.color = '#ff9bb0';
+    banner.innerHTML = '✗ 自动补建异常:' + e.message;
+  });
+})();
 
 // 检测 ?oauth_done=1 — 展示成功提示 + 自动触发「建 Sheet」(若还没建)
 (function handleOAuthReturn() {
