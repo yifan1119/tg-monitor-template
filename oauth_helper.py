@@ -15,7 +15,12 @@
 """
 import json
 import logging
+import os
 from pathlib import Path
+
+# Google 有时会返回比请求更多的 scope(include_granted_scopes 副作用 / consent screen 多配)
+# 不放宽 oauthlib 的严格 scope 比对就会 "Scope has changed from ... to ..." 直接报错
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +55,7 @@ def build_auth_url(client_id, client_secret, redirect_uri, state=""):
     )
     auth_url, _ = flow.authorization_url(
         access_type="offline",       # 必须,才能拿到 refresh_token
-        include_granted_scopes="true",
+        include_granted_scopes="false",  # 不要把客户之前授权过的其他 scope 塞回来,避免 scope 比对炸
         prompt="consent",            # 强制每次都返 refresh_token(否则二次授权可能没有)
         state=state,
     )
