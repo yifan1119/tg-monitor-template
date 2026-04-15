@@ -410,12 +410,36 @@
       });
     }
 
+    function showError(msg, stack) {
+      let bar = document.getElementById('error-bar');
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'error-bar';
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#ff4d5e;color:#fff;padding:14px 18px;font:13px/1.5 monospace;z-index:9999;white-space:pre-wrap;word-break:break-all;box-shadow:0 4px 12px rgba(0,0,0,.4);';
+        document.body.appendChild(bar);
+      }
+      bar.textContent = '❌ 看板报错: ' + msg + (stack ? '\n\n' + stack : '');
+      document.getElementById('updated-at').textContent = '(刷新失败 — 见顶部红条)';
+    }
+
+    function clearError() {
+      const bar = document.getElementById('error-bar');
+      if (bar) bar.remove();
+    }
+
     function refresh() {
       google.script.run
-        .withSuccessHandler(render)
+        .withSuccessHandler(function (data) {
+          if (data && data.ok === false) {
+            showError(data.error || '未知错误', data.stack || '');
+            return;
+          }
+          clearError();
+          render(data);
+        })
         .withFailureHandler(function (err) {
           console.error(err);
-          document.getElementById('updated-at').textContent = '(刷新失败,见 Console)';
+          showError(String(err && err.message || err), String(err && err.stack || ''));
         })
         .getDashboardData();
     }

@@ -19,42 +19,66 @@ function doGet(e) {
 
 // 前端调用,一次拿全部数据
 function getDashboardData() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const suffix = detectSuffix(ss);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) {
+      throw new Error('没有抓到当前 Sheet — 请确认这个 Apps Script 是从「扩展功能 → Apps Script」打开,不是单独建的 standalone 项目');
+    }
 
-  const alertTabs = {
-    noReply: ss.getSheetByName('信息未回复预警' + suffix),
-    keyword: ss.getSheetByName('关键词监听' + suffix),
-    deleted: ss.getSheetByName('信息删除预警' + suffix),
-  };
-  const accountTabs = getAccountTabs(ss, suffix);
+    const suffix = detectSuffix(ss);
+    const allTabNames = ss.getSheets().map(function (s) { return s.getName(); });
 
-  // 所有预警分页的行(带时间)预先聚合一次,后面多处复用
-  const noReplyRows = readAlertRows(alertTabs.noReply, 5);     // 时间在第 6 列(0-based 5)
-  const keywordRows = readAlertRows(alertTabs.keyword, 6);     // 时间在第 7 列(0-based 6)
-  // 删除分页:新版 6 列(第 5 列 message,第 6 列时间),旧版 5 列(第 5 列时间)
-  const deletedRows = readDeletedRows(alertTabs.deleted);
+    const alertTabs = {
+      noReply: ss.getSheetByName('信息未回复预警' + suffix),
+      keyword: ss.getSheetByName('关键词监听' + suffix),
+      deleted: ss.getSheetByName('信息删除预警' + suffix),
+    };
+    const accountTabs = getAccountTabs(ss, suffix);
 
-  const conversationStats = scanConversations(accountTabs);
+    // 所有预警分页的行(带时间)预先聚合一次,后面多处复用
+    const noReplyRows = readAlertRows(alertTabs.noReply, 5);     // 时间在第 6 列(0-based 5)
+    const keywordRows = readAlertRows(alertTabs.keyword, 6);     // 时间在第 7 列(0-based 6)
+    // 删除分页:新版 6 列(第 5 列 message,第 6 列时间),旧版 5 列(第 5 列时间)
+    const deletedRows = readDeletedRows(alertTabs.deleted);
 
-  return {
-    company: suffix || '(未识别)',
-    spreadsheetName: ss.getName(),
-    generatedAt: nowStr(),
-    accountCount: accountTabs.length,
-    kpis: buildKpis(noReplyRows, keywordRows, deletedRows, conversationStats),
-    trend7d: buildTrend7d(noReplyRows, keywordRows, deletedRows, conversationStats),
-    hourHeatmap: conversationStats.hourHeatmap,
-    keywordTop: buildKeywordTop(keywordRows),
-    operatorStats: buildOperatorStats(noReplyRows, keywordRows, deletedRows, conversationStats),
-    slowResponders: buildSlowResponders(conversationStats.responseLog),
-    accountActivity: conversationStats.accountActivity.slice(0, 10),
-    inOutStats: buildInOutStats(conversationStats),
-    recentAlerts: buildRecentAlerts(noReplyRows, keywordRows, deletedRows),
-    alertsNoReply: buildAlertsList(noReplyRows, 'no_reply').slice(0, 30),
-    alertsKeyword: buildAlertsList(keywordRows, 'keyword').slice(0, 30),
-    alertsDeleted: buildAlertsList(deletedRows, 'deleted').slice(0, 30),
-  };
+    const conversationStats = scanConversations(accountTabs);
+
+    return {
+      ok: true,
+      company: suffix || '(未识别 — Sheet 里没有「信息未回复预警XXX」分页)',
+      spreadsheetName: ss.getName(),
+      generatedAt: nowStr(),
+      accountCount: accountTabs.length,
+      diag: {
+        suffix: suffix,
+        allTabs: allTabNames,
+        accountTabNames: accountTabs.map(function (s) { return s.getName(); }),
+        hasNoReply: !!alertTabs.noReply,
+        hasKeyword: !!alertTabs.keyword,
+        hasDeleted: !!alertTabs.deleted,
+      },
+      kpis: buildKpis(noReplyRows, keywordRows, deletedRows, conversationStats),
+      trend7d: buildTrend7d(noReplyRows, keywordRows, deletedRows, conversationStats),
+      hourHeatmap: conversationStats.hourHeatmap,
+      keywordTop: buildKeywordTop(keywordRows),
+      operatorStats: buildOperatorStats(noReplyRows, keywordRows, deletedRows, conversationStats),
+      slowResponders: buildSlowResponders(conversationStats.responseLog),
+      accountActivity: conversationStats.accountActivity.slice(0, 10),
+      inOutStats: buildInOutStats(conversationStats),
+      recentAlerts: buildRecentAlerts(noReplyRows, keywordRows, deletedRows),
+      alertsNoReply: buildAlertsList(noReplyRows, 'no_reply').slice(0, 30),
+      alertsKeyword: buildAlertsList(keywordRows, 'keyword').slice(0, 30),
+      alertsDeleted: buildAlertsList(deletedRows, 'deleted').slice(0, 30),
+    };
+  } catch (err) {
+    // 把真实错误传回前端,而不是让 Apps Script 默认吞掉
+    return {
+      ok: false,
+      error: String(err && err.message || err),
+      stack: String(err && err.stack || ''),
+      generatedAt: nowStr(),
+    };
+  }
 }
 
 // ========== 工具函数 ==========
@@ -415,6 +439,20 @@ function buildSlowResponders(responseLog) {
     .map(function (v) { return { key: v.key, account: v.account, peer: v.peer, avg: Math.round(v.total / v.n * 10) / 10, max: Math.round(v.max * 10) / 10, count: v.n }; })
     .sort(function (a, b) { return b.avg - a.avg; })
     .slice(0, 10);
+}
+
+// ========== 收发消息汇总 ==========
+function buildInOutStats(conv) {
+  const total = conv.totalSent + conv.totalRecv;
+  const sentPct = total > 0 ? Math.round(conv.totalSent / total * 100) : 0;
+  const recvPct = total > 0 ? 100 - sentPct : 0;
+  return {
+    sent: conv.totalSent,
+    recv: conv.totalRecv,
+    total: total,
+    sentPct: sentPct,
+    recvPct: recvPct,
+  };
 }
 
 // ========== 最新 10 条告警 ==========
