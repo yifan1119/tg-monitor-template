@@ -483,38 +483,6 @@ def _enable_https_now(custom_domain=""):
         return False, f"{type(e).__name__}: {e}\n{traceback.format_exc()[-500:]}"
 
 
-@app.route("/api/enable-https", methods=["POST"])
-@admin_required
-def api_enable_https():
-    custom = (request.form.get("domain") or "").strip()
-    ok, payload = _enable_https_now(custom)
-    if ok:
-        return jsonify({"ok": True, "msg": "Caddy 已启动,正在申请 Let's Encrypt 证书(约 30-60 秒)", **payload})
-    return jsonify({"ok": False, "msg": str(payload)})
-
-
-@app.route("/api/https-status", methods=["GET"])
-@admin_required
-def api_https_status():
-    return jsonify(_https_status())
-
-
-@app.route("/api/disable-https", methods=["POST"])
-@admin_required
-def api_disable_https():
-    """关掉 Caddy(回退到 http://IP:5002 直连)"""
-    try:
-        import docker as docker_sdk
-        client = docker_sdk.from_env()
-        for c in client.containers.list(all=True):
-            if c.name.startswith("tg-caddy-"):
-                c.stop(timeout=5)
-                c.remove(force=True)
-        return jsonify({"ok": True, "msg": "Caddy 已停止"})
-    except Exception as e:
-        return jsonify({"ok": False, "msg": str(e)})
-
-
 def _get_spreadsheet():
     """获取 Google Sheets 连接"""
     creds = Credentials.from_service_account_file(
@@ -874,6 +842,38 @@ def settings_page():
         "me": me,
     }
     return render_template("setup.html", d=current, mode="settings")
+
+
+@app.route("/api/enable-https", methods=["POST"])
+@admin_required
+def api_enable_https():
+    custom = (request.form.get("domain") or "").strip()
+    ok, payload = _enable_https_now(custom)
+    if ok:
+        return jsonify({"ok": True, "msg": "Caddy 已启动,正在申请 Let's Encrypt 证书(约 30-60 秒)", **payload})
+    return jsonify({"ok": False, "msg": str(payload)})
+
+
+@app.route("/api/https-status", methods=["GET"])
+@admin_required
+def api_https_status():
+    return jsonify(_https_status())
+
+
+@app.route("/api/disable-https", methods=["POST"])
+@admin_required
+def api_disable_https():
+    """关掉 Caddy(回退到 http://IP:5002 直连)"""
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        for c in client.containers.list(all=True):
+            if c.name.startswith("tg-caddy-"):
+                c.stop(timeout=5)
+                c.remove(force=True)
+        return jsonify({"ok": True, "msg": "Caddy 已停止"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)})
 
 
 @app.route("/api/test-bot", methods=["POST"])
