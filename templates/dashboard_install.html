@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>安装看板 · TG 监控</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --accent-red: #2aabee;
+    --accent-ember: #64abde;
+    --accent-deep: #3390ec;
+    --bg-0: #050505;
+    --bg-1: #0d0d0d;
+    --bg-2: #131313;
+    --text: #ffffff;
+    --text-dim: #6d7f8f;
+    --border: rgba(42,171,238,0.3);
+    --ok: #00e88f;
+    --err: #ff4d5e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    background: var(--bg-0);
+    color: var(--text);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    padding: 32px 24px 80px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+
+  h1 {
+    font-family: "Orbitron", sans-serif;
+    font-size: 28px;
+    font-weight: 900;
+    letter-spacing: 2px;
+    color: var(--accent-red);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+  }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 13px;
+    margin-bottom: 32px;
+  }
+
+  .nav {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 24px;
+    font-size: 12px;
+  }
+  .nav a {
+    color: var(--accent-red);
+    text-decoration: none;
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 4px;
+    transition: all .15s;
+  }
+  .nav a:hover {
+    background: rgba(42,171,238,0.1);
+  }
+
+  .steps {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 28px;
+  }
+  .steps h2 {
+    font-family: "Orbitron", sans-serif;
+    font-size: 16px;
+    color: var(--accent-ember);
+    margin-bottom: 16px;
+    letter-spacing: 1px;
+  }
+  .steps ol {
+    padding-left: 20px;
+    line-height: 1.9;
+    font-size: 13px;
+    color: #d5e4ef;
+  }
+  .steps ol li { margin-bottom: 4px; }
+  .steps code {
+    background: var(--bg-2);
+    padding: 2px 7px;
+    border-radius: 3px;
+    color: var(--accent-ember);
+    font-size: 12px;
+  }
+  .kbd {
+    display: inline-block;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    color: var(--accent-red);
+    background: var(--bg-2);
+  }
+
+  .sheet-link {
+    display: inline-block;
+    margin-left: 6px;
+    color: var(--accent-red);
+    text-decoration: underline;
+    font-size: 12px;
+    word-break: break-all;
+  }
+
+  .card {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 18px;
+    background: rgba(42,171,238,0.07);
+    border-bottom: 1px solid var(--border);
+  }
+  .card-head .fname {
+    font-family: "Orbitron", sans-serif;
+    font-size: 13px;
+    color: var(--accent-ember);
+    letter-spacing: 1px;
+  }
+  .card-head .fhint {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .copy-btn {
+    background: var(--accent-deep);
+    color: #fff;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 1px;
+    font-weight: 600;
+    transition: background .15s;
+  }
+  .copy-btn:hover { background: var(--accent-red); }
+  .copy-btn.ok { background: var(--ok); }
+  .copy-btn.err { background: var(--err); }
+
+  pre.code {
+    margin: 0;
+    padding: 16px 18px;
+    max-height: 340px;
+    overflow: auto;
+    background: var(--bg-0);
+    color: #cfe4f2;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre;
+    font-family: "JetBrains Mono", "SF Mono", monospace;
+  }
+  pre.code::-webkit-scrollbar { width: 8px; height: 8px; }
+  pre.code::-webkit-scrollbar-track { background: var(--bg-1); }
+  pre.code::-webkit-scrollbar-thumb { background: var(--accent-deep); border-radius: 4px; }
+
+  .tip {
+    background: rgba(42,171,238,0.06);
+    border-left: 3px solid var(--accent-red);
+    padding: 10px 14px;
+    margin: 16px 0;
+    font-size: 12px;
+    color: #bfd6e8;
+    line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="nav">
+    <a href="/">← 回主页</a>
+    <a href="/settings">系统设置</a>
+  </div>
+
+  <h1>安装主管看板</h1>
+  <div class="subtitle">把下面 3 个文件复制到 Google Apps Script → 部署成 Web 应用 → 拿到看板 URL</div>
+
+  <div class="steps">
+    <h2>▸ 安装步骤（5 分钟）</h2>
+    <ol>
+      <li>打开你的 Google Sheet
+        {% if sheet_id %}
+          <a class="sheet-link" href="https://docs.google.com/spreadsheets/d/{{ sheet_id }}" target="_blank">
+            → 打开 {{ company_display or "当前 Sheet" }}
+          </a>
+        {% endif %}
+      </li>
+      <li>菜单 <span class="kbd">扩展功能</span> → <span class="kbd">Apps Script</span>，会开一个新分页</li>
+      <li>依序复制以下 3 个文件到 Apps Script 编辑器：
+        <ul style="padding-left:20px; margin-top:4px;">
+          <li>左侧预设的 <code>Code.gs</code> → 全选删掉 → 贴下面「① Code.gs」的内容</li>
+          <li>点左侧 <span class="kbd">+</span> → <span class="kbd">HTML</span> → 命名 <code>Dashboard</code>（**不要加 .html**）→ 贴「② Dashboard.html」内容</li>
+          <li>左下 <span class="kbd">⚙ 设定</span> → 勾「在编辑器中显示 <code>appsscript.json</code> 资讯清单档」→ 回编辑器会多出 <code>appsscript.json</code> → 贴「③ appsscript.json」内容</li>
+        </ul>
+      </li>
+      <li>顶部 <span class="kbd">部署</span> → <span class="kbd">新增部署项目</span> → 类型选 <strong>网路应用程式</strong>
+        <ul style="padding-left:20px; margin-top:4px;">
+          <li>执行身分：<strong>我本人</strong></li>
+          <li>存取权：<strong>只限我本人</strong>（或 <strong>知道连结的任何人</strong> — 看你要不要给外人看）</li>
+          <li>点「部署」→ 授权 → 拿到一个 <code>/exec</code> 结尾的 URL</li>
+        </ul>
+      </li>
+      <li>把 URL 加到浏览器书签就是你的看板入口</li>
+    </ol>
+
+    <div class="tip">
+      ⚠ <strong>已装过想更新代码</strong>：Apps Script 编辑器里重贴 <code>Code.gs</code> → 右上<span class="kbd">部署</span> → <span class="kbd">管理部署项目</span> → 右上铅笔 → 版本选「新版本」→ 部署。URL 不会变。
+    </div>
+  </div>
+
+  {% for fname, content in files.items() %}
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <div class="fname">
+          {% if loop.index == 1 %}① {% elif loop.index == 2 %}② {% else %}③ {% endif %}
+          {{ fname }}
+        </div>
+        <div class="fhint">
+          {% if fname == 'Code.gs' %}后端聚合函数（读 Sheet 分页数据）{% elif fname == 'Dashboard.html' %}前端看板 UI（图表 + KPI 卡）{% else %}清单档（OAuth 授权范围）{% endif %}
+          · {{ content|length }} 字
+        </div>
+      </div>
+      <button class="copy-btn" onclick="copy(this, {{ loop.index0 }})">复制</button>
+    </div>
+    <pre class="code" id="code-{{ loop.index0 }}">{{ content }}</pre>
+  </div>
+  {% endfor %}
+
+</div>
+
+<script>
+async function copy(btn, idx) {
+  const text = document.getElementById('code-' + idx).textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = '✓ 已复制';
+    btn.classList.add('ok');
+    setTimeout(() => {
+      btn.textContent = '复制';
+      btn.classList.remove('ok');
+    }, 1600);
+  } catch (e) {
+    btn.textContent = '✗ 失败';
+    btn.classList.add('err');
+    setTimeout(() => {
+      btn.textContent = '复制';
+      btn.classList.remove('err');
+    }, 2000);
+  }
+}
+</script>
+</body>
+</html>

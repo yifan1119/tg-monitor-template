@@ -665,6 +665,24 @@ def settings_page():
     return render_template("setup.html", d=current, mode="settings")
 
 
+@app.route("/dashboard-install", methods=["GET"])
+@login_required
+def dashboard_install_page():
+    """看板一键复制页：显示 Apps Script 3 个文件 + 安装步骤 + 复制按钮"""
+    apps_script_dir = config.BASE_DIR / "apps-script"
+    files = {}
+    for fname in ("Code.gs", "Dashboard.html", "appsscript.json"):
+        fpath = apps_script_dir / fname
+        files[fname] = fpath.read_text(encoding="utf-8") if fpath.exists() else f"[缺失: {fname}]"
+    env = read_env()
+    return render_template(
+        "dashboard_install.html",
+        files=files,
+        sheet_id=env.get("SHEET_ID", ""),
+        company_display=env.get("COMPANY_DISPLAY", "") or env.get("COMPANY_NAME", ""),
+    )
+
+
 @app.route("/api/test-bot", methods=["POST"])
 def api_test_bot():
     """测试 Bot Token + 预警群（发一则测试消息）"""
