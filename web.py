@@ -939,9 +939,17 @@ def api_oauth_callback():
 
 
 @app.route("/api/oauth/revoke", methods=["POST"])
-@admin_required
 def api_oauth_revoke():
-    """撤销 OAuth 授权"""
+    """撤销 OAuth 授权
+
+    同 /api/oauth/start — setup 未完成时放行(客户可能授权错帐号要重来);
+    setup 完成后只有管理员能撤。
+    """
+    if is_setup_complete():
+        if not flask_session.get("authed"):
+            return jsonify({"ok": False, "msg": "请先登录"}), 401
+        if not is_admin(flask_session.get("username", "")):
+            return jsonify({"ok": False, "msg": "需要管理员权限"}), 403
     try:
         import oauth_helper
         ok, msg = oauth_helper.revoke_token()
