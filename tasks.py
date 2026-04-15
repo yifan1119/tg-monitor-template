@@ -165,6 +165,13 @@ class TaskScheduler:
                 # 分页名一致性检查：手改的分页名会被自动改回 TG 名字
                 await self._enforce_sheet_tab_consistency()
 
+                # 预警分页名一致性:手改「信息删除预警YD」会被自动改回「信息删除预警{COMPANY_DISPLAY}」
+                # 防止客户手贱改名后系统找不到分页 → 写入失败
+                try:
+                    self.sheets.ensure_alert_tabs()
+                except Exception as e:
+                    logger.warning("预警分页一致性巡检失败: %s", e)
+
                 for phone, client in self.listener.clients.items():
                     # 删除检测
                     deleted_msgs = await self.listener.check_deleted(phone, days=config.PATROL_DAYS)
