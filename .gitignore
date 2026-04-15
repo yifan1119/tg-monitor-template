@@ -1,6 +1,14 @@
 # 实例专属机密 — 永远不进 git
 .env
+.env.*
+!.env.example
 service-account.json
+*-service-account.json
+oauth_token.json
+google_oauth_token.json
+token.json
+credentials.json
+client_secret*.json
 
 # 运行时数据
 sessions/*
@@ -10,6 +18,7 @@ data/*
 *.session
 *.session-journal
 data.db
+data.db-*
 
 # Python
 __pycache__/
