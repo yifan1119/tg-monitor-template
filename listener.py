@@ -187,6 +187,10 @@ class Listener:
 
             count = 0
             async for msg in client.iter_messages(entity, limit=20):
+                # 补漏:DB 已有这条 msg_id 就完全跳过,不再重传 Drive
+                # (同一条消息重传不会改已写入 Sheet 的内容,纯粹浪费 Drive 配额 + 阻塞事件循环)
+                if db.get_message(msg.id, account_id):
+                    continue
                 direction = "A" if msg.out else "B"
                 text = msg.text or ""
                 media_type = ""
@@ -264,6 +268,10 @@ class Listener:
                 msg_dt = msg.date.replace(tzinfo=timezone.utc).astimezone(TZ_BJ)
                 if msg_dt < cutoff:
                     break
+                # 已经在 DB 里的消息:直接跳过,不重传 Drive 不重写 Sheet
+                # (关键:阻塞事件循环的「千张老图片重传风暴」就是这里没 skip 造成的)
+                if db.get_message(msg.id, account_id):
+                    continue
 
                 direction = "A" if msg.out else "B"
                 text = msg.text or ""
