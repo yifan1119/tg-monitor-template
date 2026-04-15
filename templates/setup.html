@@ -708,31 +708,44 @@
                value="{{ d.media_folder_id or '' }}"
                placeholder="留空 = 仍显示「[图片]/[文件]」文字占位">
         <div class="hint">
-          填了之后,客户发的<b>图片会直接显示在 Sheet 单元格里</b>(=IMAGE 公式),
-          <b>文件/语音/视频变成可点击下载的链接</b>(=HYPERLINK)。
-          需要客户自己在 Drive 建一个文件夹,把这个文件夹分享给 service account 的 <code>client_email</code>(编辑者权限)。
+          填了之后,客户发的<b>图片会直接显示在 Sheet 单元格里</b>,<b>文件/语音/视频变成可点击下载的链接</b>。
+          留空就只显示「[图片]」「[文件]」等文字占位。
         </div>
-        <details class="howto">
-          <summary>▸ 如何获取 Drive 文件夹 ID 并分享</summary>
+
+        {# 默认展开 → 打开页面就能看到「ID 在哪」,不用点开 #}
+        <div style="background:rgba(42,171,238,0.06);border-left:3px solid var(--accent-cyan,#2aabee);padding:14px 18px;margin-top:12px;border-radius:6px;font-size:13px;line-height:1.85;color:#cfe3f5;">
+          <div style="color:var(--accent-ember,#ff9b3d);font-weight:600;margin-bottom:8px;letter-spacing:0.5px;">▸ Drive 文件夹 ID 在哪?</div>
+
+          <div style="margin-bottom:6px;"><b>1.</b> 打开 <a href="https://drive.google.com" target="_blank" style="color:#7ec9ff;">drive.google.com</a> → 新建一个文件夹(例如 <code>tg-monitor-媒体</code>)</div>
+
+          <div style="margin-bottom:8px;"><b>2.</b> 双击进入这个文件夹,然后看浏览器<b>地址栏</b>:</div>
+
+          {# 视觉化:用框 + 高亮颜色让 ID 那段一眼可见 #}
+          <div style="background:#0f1822;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:10px 14px;margin:6px 0 12px;font-family:Menlo,Consolas,monospace;font-size:12.5px;word-break:break-all;line-height:1.7;">
+            <span style="color:#7c8a9a;">https://drive.google.com/drive/folders/</span><span style="background:rgba(255,155,61,0.25);color:#ffd28a;padding:2px 6px;border-radius:3px;font-weight:600;">1AbcDeFgHiJkLmNoPqRsTuVwXyZ_123</span>
+          </div>
+          <div style="margin-bottom:10px;color:#9eb4c7;">
+            <code>folders/</code> 后面那串<b style="color:#ffd28a;">高亮的字符</b>就是文件夹 ID,复制出来填到上方输入框。
+          </div>
+
+          <div style="margin-bottom:6px;"><b>3.</b> 右键这个文件夹 → <b>共享</b> → 把 service-account.json 里的 <code>client_email</code> 邮箱(就是上方第 03 区你上传的那个 SA 凭证里的邮箱)加为<b>编辑者</b></div>
+
+          <div><b>4.</b> 回到这里,把 ID 填到上方输入框,点 <b>「测试文件夹权限」</b> 验证</div>
+        </div>
+
+        <details class="howto" style="margin-top:8px;">
+          <summary>▸ 启用前请了解的风险</summary>
           <div class="howto-body">
-            <ol>
-              <li><span class="step-label">01</span> 打开 <a href="https://drive.google.com" target="_blank">Google Drive</a> → 新建文件夹(例如 <code>tg-monitor-媒体</code>)</li>
-              <li><span class="step-label">02</span> 进入文件夹,看浏览器地址栏:<br>
-                  <code>https://drive.google.com/drive/folders/<b>1AbcDeFgHiJkLm...</b></code><br>
-                  <code>folders/</code> 后面那串字符就是文件夹 ID</li>
-              <li><span class="step-label">03</span> 右键文件夹 → <b>共享</b> → 把上方 service-account.json 里的 <code>client_email</code> 邮箱加为<b>编辑者</b></li>
-              <li><span class="step-label">04</span> 把 ID 填到上方,点测试按钮验证</li>
-            </ol>
-            <b>⚠️ 风险提示</b>:启用后,客户发来的图片/文件都会上传到这个 Drive 文件夹。
+            启用后,客户发来的图片/文件都会上传到这个 Drive 文件夹:
             <ul style="margin:6px 0 0 16px;color:#bfd6e8;">
-              <li>文件会被设为<b>「任何拥有连结的人可查看」</b>(=IMAGE 才能渲染)</li>
+              <li>文件会被设为<b>「任何拥有连结的人可查看」</b>(=IMAGE 才能在 Sheet 渲染)</li>
               <li>Google 会自动扫描已知病毒,但<b>新型/伪装文件不一定能拦</b></li>
-              <li>占用 Drive 配额(免费 15GB);超过 <code>MEDIA_MAX_MB</code> 的大文件会被跳过</li>
+              <li>占用 Drive 配额(免费 15GB);超过下方「单文件上限」的大文件会被跳过</li>
               <li>不需要这个功能时<b>留空就好</b>,系统会自动 fallback 显示文字「[图片]/[文件]」</li>
             </ul>
           </div>
         </details>
-        <button type="button" class="test-btn" id="testMediaFolderBtn">▸ 测试文件夹权限</button>
+        <button type="button" class="test-btn" id="testMediaFolderBtn" style="margin-top:10px;">▸ 测试文件夹权限</button>
         <span class="test-result" id="testMediaFolderResult"></span>
       </div>
 
