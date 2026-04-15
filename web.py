@@ -664,8 +664,9 @@ def _redirect_to_setup_if_needed():
     # /api/oauth/callback 更是必须放行,否则 Google 回调回来直接被重定向丢 code
     if path.startswith("/api/oauth/"):
         return None
-    # /api/sheets/auto-create 是 setup 流程的一环 — OAuth 完成后 setup 页点「自动建表格」
-    if path.startswith("/api/sheets/"):
+    # /api/sheets/* 和 /api/drive/* 都是 setup 流程的一环(自动建表格 / 自动建文件夹)
+    # setup 未完成时放行,完成后需登录
+    if path.startswith("/api/sheets/") or path.startswith("/api/drive/") or path.startswith("/api/setup/"):
         if not is_setup_complete():
             return None
         if not flask_session.get("authed"):
