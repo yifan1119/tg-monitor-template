@@ -247,6 +247,96 @@
     box-shadow: 0 0 20px rgba(79, 174, 79, 0.3);
   }
 
+  /* v2.6.9: 重启按钮帮助提示 — 弱化按钮 + ⓘ 浮层说明 */
+  .restart-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+  }
+  .restart-wrap .btn-restart {
+    opacity: 0.7;
+  }
+  .restart-wrap:hover .btn-restart {
+    opacity: 1;
+  }
+  .help-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: rgba(42, 171, 238, 0.12);
+    border: 1px solid rgba(42, 171, 238, 0.4);
+    color: #2aabee;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: "JetBrains Mono", monospace;
+    cursor: help;
+    position: relative;
+    user-select: none;
+    transition: all 0.2s;
+  }
+  .help-icon:hover {
+    background: rgba(42, 171, 238, 0.25);
+    box-shadow: 0 0 10px rgba(42, 171, 238, 0.4);
+  }
+  .help-icon::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: 28px;
+    right: -8px;
+    white-space: pre-line;
+    background: rgba(13, 13, 13, 0.97);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(42, 171, 238, 0.45);
+    border-radius: 8px;
+    padding: 14px 16px;
+    width: 340px;
+    font-size: 12px;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    color: #cfe3f5;
+    z-index: 100;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.6), 0 0 20px rgba(42,171,238,0.15);
+    text-align: left;
+    line-height: 1.75;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px);
+    transition: opacity 0.2s, transform 0.2s, visibility 0s 0.2s;
+    pointer-events: none;
+  }
+  .help-icon:hover::after,
+  .help-icon:focus::after {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  .help-icon::before {
+    content: "";
+    position: absolute;
+    top: 22px;
+    right: 0px;
+    width: 12px;
+    height: 12px;
+    background: rgba(13, 13, 13, 0.97);
+    border-left: 1px solid rgba(42, 171, 238, 0.45);
+    border-top: 1px solid rgba(42, 171, 238, 0.45);
+    transform: rotate(45deg);
+    z-index: 101;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s, visibility 0s 0.2s;
+  }
+  .help-icon:hover::before {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.2s;
+  }
+
   /* Steps & form */
   .howto-block {
     padding: 18px 22px 16px;
@@ -514,9 +604,19 @@
                          box-shadow:0 0 6px {{ '#9ef0b8' if sub_on else '#ff9b3d' }};"></span>
           </label>
           {% endfor %}
-          <button class="btn-restart" id="btn-restart" onclick="restartMonitor()">
-            ▸ 重启监听
-          </button>
+          <span class="restart-wrap">
+            <button class="btn-restart" id="btn-restart" onclick="restartMonitor()">
+              ▸ 重启监听
+            </button>
+            <span class="help-icon" tabindex="0" data-tip="正常运维不需要点 — 加号 / 删号 / 改设置都已经自动重启或 hot-reload。
+
+只在以下情况手动用:
+① 加号后 5 秒还没生效(自动重启失败)
+② listener 卡死,消息收不到 / Sheet 不写入
+③ 改了 Drive / OAuth / SHEET_ID(这几个不能 hot-reload)
+④ Telethon session 异常,需要重新登入
+⑤ debug 用 — 想强制走完整启动流程">?</span>
+          </span>
         </div>
       </div>
       <!-- 关闭时的橙色横幅(任一类关掉就显示对应文案) -->
