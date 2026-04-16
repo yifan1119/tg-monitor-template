@@ -1079,6 +1079,69 @@ if (autoCreateSheetBtn) {
   if (el) el.textContent = location.origin + '/api/oauth/callback';
 })();
 
+// ─── 表单快照 / 恢复 ────────────────────────────────────────────────────
+// 跳 Google OAuth 之前把整个表单写进 sessionStorage,跳回来自动回填,
+// 避免用户辛苦填的 Bot Token / TG API / 密码等字段被清空
+const SETUP_SNAPSHOT_KEY = 'tg_setup_snapshot_v1';
+
+function snapshotSetupForm() {
+  const form = document.querySelector('form');
+  if (!form) return;
+  const data = {};
+  form.querySelectorAll('input, select, textarea').forEach(el => {
+    if (!el.name) return;
+    if (el.type === 'checkbox' || el.type === 'radio') {
+      data['__chk__' + el.name + '::' + el.value] = el.checked;
+    } else {
+      data[el.name] = el.value;
+    }
+  });
+  try { sessionStorage.setItem(SETUP_SNAPSHOT_KEY, JSON.stringify(data)); } catch (e) {}
+}
+
+// 页面一加载就尝试恢复(只回填当前为空的字段,不覆盖后端已从 .env 读出来的值)
+(function restoreSetupForm() {
+  let raw;
+  try { raw = sessionStorage.getItem(SETUP_SNAPSHOT_KEY); } catch (e) { return; }
+  if (!raw) return;
+  let data;
+  try { data = JSON.parse(raw); } catch (e) { return; }
+  const form = document.querySelector('form');
+  if (!form) return;
+  let restored = 0;
+  form.querySelectorAll('input, select, textarea').forEach(el => {
+    if (!el.name) return;
+    if (el.type === 'checkbox' || el.type === 'radio') {
+      const key = '__chk__' + el.name + '::' + el.value;
+      if (data[key] !== undefined) el.checked = !!data[key];
+    } else {
+      const saved = data[el.name];
+      // 只在当前元素为空时回填,保证后端 auto-fill(sheet_id/media_folder_id)优先
+      if (saved !== undefined && saved !== '' && !el.value) {
+        el.value = saved;
+        restored++;
+      }
+    }
+  });
+  // OAuth 回来时显示一条友好提示
+  if (restored > 0 && new URLSearchParams(location.search).get('oauth_done') === '1') {
+    const note = document.createElement('div');
+    note.style.cssText = 'background:rgba(126,201,255,0.12);border:1px solid rgba(126,201,255,0.4);color:#7ec9ff;padding:10px 14px;border-radius:6px;margin:0 0 16px 0;font-size:13px;';
+    note.innerHTML = `✓ 已自动恢复你 OAuth 跳转前填写的 ${restored} 项字段`;
+    const f = document.querySelector('form');
+    if (f) f.parentNode.insertBefore(note, f);
+  }
+})();
+
+// setup 表单最终成功提交时清掉 snapshot(避免下次部署串数据)
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.querySelector('form');
+  if (!form) return;
+  form.addEventListener('submit', () => {
+    try { sessionStorage.removeItem(SETUP_SNAPSHOT_KEY); } catch (e) {}
+  });
+});
+
 // setup 模式下:OAuth 按钮 — 先把 Client ID/Secret 暂存到 .env,再跳 Google 授权
 // 跳回来(/setup?oauth_done=1)会保留所有已填字段,体感就是「精灵里一键授权」
 async function startOAuthFromSetup() {
@@ -1095,6 +1158,8 @@ async function startOAuthFromSetup() {
   btn.style.opacity = '0.6';
   msg.textContent = '暂存凭证中,马上跳 Google...';
   msg.style.color = '#7ec9ff';
+  // 关键:跳转前快照整个表单,跳回来能自动回填
+  snapshotSetupForm();
   try {
     const fd = new FormData();
     fd.append('oauth_client_id', cid.trim());
