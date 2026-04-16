@@ -482,7 +482,7 @@
   <!-- Status -->
   <div class="section">
     <div class="section-title">监控状态</div>
-    <div class="card">
+    <div class="card" id="status-card">
       <div class="status-bar">
         <div class="status-left">
           <div class="status-dot {{ 'offline' if not sessions }}"></div>
@@ -490,9 +490,35 @@
             <strong>{{ sessions|length }}</strong> 个账号已登录
           </div>
         </div>
-        <button class="btn-restart" id="btn-restart" onclick="restartMonitor()">
-          ▸ 重启监听
-        </button>
+        <div style="display:flex;align-items:center;gap:18px;">
+          <!-- v2.6.2: 预警推送开关 -->
+          <label id="alerts-toggle-wrap" style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+            <span style="font-size:14px;color:#cfe3f5;">🔔 预警推送</span>
+            <span id="alerts-switch" data-enabled="{{ '1' if alerts_enabled else '0' }}"
+                  style="position:relative;display:inline-block;width:44px;height:22px;
+                         background:{{ '#2aabee' if alerts_enabled else '#465566' }};
+                         border-radius:12px;transition:background 0.2s;">
+              <span id="alerts-switch-knob"
+                    style="position:absolute;top:2px;left:{{ '24px' if alerts_enabled else '2px' }};
+                           width:18px;height:18px;background:#fff;border-radius:50%;
+                           transition:left 0.2s;box-shadow:0 2px 4px rgba(0,0,0,0.3);"></span>
+            </span>
+            <span id="alerts-status-text" style="font-size:13px;color:{{ '#9ef0b8' if alerts_enabled else '#ff9b3d' }};font-weight:600;min-width:28px;">
+              {{ '开启' if alerts_enabled else '关闭' }}
+            </span>
+          </label>
+          <button class="btn-restart" id="btn-restart" onclick="restartMonitor()">
+            ▸ 重启监听
+          </button>
+        </div>
+      </div>
+      <!-- 关闭时的橙色横幅 -->
+      <div id="alerts-disabled-banner" style="display:{{ 'none' if alerts_enabled else 'block' }};
+           margin-top:12px;padding:10px 14px;background:rgba(255,155,61,0.12);
+           border:1px solid rgba(255,155,61,0.5);border-radius:6px;
+           color:#ffd28a;font-size:13px;line-height:1.7;">
+        ⚠ <b>预警推送已关闭</b> · TG 群不会收到关键词 / 未回复 / 删除预警<br>
+        <span style="color:#bfd6e8;font-size:12.5px;">原始消息 + 关键词监听表 + 数据库记录仍正常运作,开启后历史数据完整</span>
       </div>
     </div>
   </div>
@@ -693,6 +719,49 @@ async function removeAccount(phone) {
     alert('移除失败: ' + e.message);
   }
 }
+
+// v2.6.2: 预警推送总开关
+(function setupAlertsToggle() {
+  const wrap = document.getElementById('alerts-toggle-wrap');
+  if (!wrap) return;
+  const sw = document.getElementById('alerts-switch');
+  const knob = document.getElementById('alerts-switch-knob');
+  const txt = document.getElementById('alerts-status-text');
+  const banner = document.getElementById('alerts-disabled-banner');
+  let busy = false;
+  wrap.addEventListener('click', async () => {
+    if (busy) return;
+    busy = true;
+    const current = sw.dataset.enabled === '1';
+    const next = !current;
+    // 乐观更新 UI
+    sw.dataset.enabled = next ? '1' : '0';
+    sw.style.background = next ? '#2aabee' : '#465566';
+    knob.style.left = next ? '24px' : '2px';
+    txt.textContent = next ? '开启' : '关闭';
+    txt.style.color = next ? '#9ef0b8' : '#ff9b3d';
+    banner.style.display = next ? 'none' : 'block';
+    try {
+      const r = await fetch('/api/alerts/toggle', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({enabled: next}),
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.msg || '切换失败');
+    } catch (e) {
+      // 失败时回滚
+      sw.dataset.enabled = current ? '1' : '0';
+      sw.style.background = current ? '#2aabee' : '#465566';
+      knob.style.left = current ? '24px' : '2px';
+      txt.textContent = current ? '开启' : '关闭';
+      txt.style.color = current ? '#9ef0b8' : '#ff9b3d';
+      banner.style.display = current ? 'none' : 'block';
+      alert('切换失败: ' + e.message);
+    }
+    busy = false;
+  });
+})();
 
 async function restartMonitor() {
   const btn = document.getElementById('btn-restart');

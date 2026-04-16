@@ -121,7 +121,11 @@ class AlertBot:
             message_text=text,
         )
         try:
-            await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+            # v2.6.2: 预警推送总开关 — 关闭时跳过 TG 发送,但分表 + DB 照常记录
+            if config.ALERTS_ENABLED:
+                await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+            else:
+                logger.info("[ALERTS_DISABLED] 跳过关键词推送 peer=%s keyword=%s (Sheet 仍写入)", peer["id"], keyword)
             # 写入关键词监听分表: 所属公司,商务人员,外事号,广告主,关键词,消息内容,记录时间
             if self.sheets:
                 for attempt in range(3):
@@ -170,6 +174,10 @@ class AlertBot:
             peer_name=peer["name"],
             message_text=message_text,
         )
+        # v2.6.2: 推送关掉则只记录不推送(alerts 表已在上面 insert_alert,DB 完整)
+        if not config.ALERTS_ENABLED:
+            logger.info("[ALERTS_DISABLED] 跳过未回复推送 peer=%s (alerts 已记录)", peer["id"])
+            return
         try:
             sent = await self.bot.send_message(
                 config.ALERT_GROUP_ID, msg,
@@ -205,6 +213,10 @@ class AlertBot:
             peer_name=peer["name"],
             message_text=message_text,
         )
+        # v2.6.2: 推送关掉则只记录不推送(alerts 表已在上面 insert_alert,DB 完整)
+        if not config.ALERTS_ENABLED:
+            logger.info("[ALERTS_DISABLED] 跳过删除推送 peer=%s (alerts 已记录)", peer["id"])
+            return
         try:
             sent = await self.bot.send_message(
                 config.ALERT_GROUP_ID, msg,
@@ -217,6 +229,10 @@ class AlertBot:
     async def send_daily_report(self):
         """发送每日总结"""
         if not self.bot or not config.ALERT_GROUP_ID:
+            return
+        # v2.6.2: 日报独立开关
+        if not config.DAILY_REPORT_ENABLED:
+            logger.info("[DAILY_REPORT_DISABLED] 跳过日报推送")
             return
 
         from database import TZ_BJ

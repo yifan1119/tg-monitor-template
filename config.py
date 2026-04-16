@@ -24,6 +24,21 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 _group_id = os.environ.get("ALERT_GROUP_ID", "0").strip()
 ALERT_GROUP_ID = int(_group_id) if _group_id else 0
 
+# 预警推送总开关(v2.6.2+)
+# true = 关键词/未回复/删除 三类预警都往 TG 群推(默认,旧部署升级后保持原行为)
+# false = 三类预警全部静音,但:
+#   - 原始消息依旧完整写 Sheets(listener 不看这个开关)
+#   - 关键词监听 Sheet 分表依旧写(方便主管看板回溯)
+#   - alerts DB 表依旧写(开回来时历史完整,不断层)
+# 日报单独受 DAILY_REPORT_ENABLED 控制(默认跟随 ALERTS_ENABLED,可独立关)
+ALERTS_ENABLED = os.environ.get("ALERTS_ENABLED", "true").lower() == "true"
+# 日报推送开关。留空 = 跟随 ALERTS_ENABLED;显式 true/false 则独立
+_daily_env = os.environ.get("DAILY_REPORT_ENABLED", "").strip().lower()
+if _daily_env in ("true", "false"):
+    DAILY_REPORT_ENABLED = (_daily_env == "true")
+else:
+    DAILY_REPORT_ENABLED = ALERTS_ENABLED
+
 # 业务设置
 KEYWORDS = [k.strip() for k in os.environ.get("KEYWORDS", "").split(",") if k.strip()]
 NO_REPLY_MINUTES = int(os.environ.get("NO_REPLY_MINUTES", "30"))

@@ -735,6 +735,13 @@ def settings_page():
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
         "api_id": env.get("API_ID", DEFAULT_API_ID),
         "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
+        # v2.6.2: 预警 / 日报开关(settings 页可改,dashboard 也能切换预警)
+        "alerts_enabled": env.get("ALERTS_ENABLED", "true").lower() != "false",
+        "daily_report_enabled": (
+            env.get("DAILY_REPORT_ENABLED", "").lower() == "true"
+            if env.get("DAILY_REPORT_ENABLED", "").lower() in ("true", "false")
+            else env.get("ALERTS_ENABLED", "true").lower() != "false"
+        ),
         "is_admin": is_admin(me),
         "is_super": is_super(me),
         "me": me,
@@ -1391,7 +1398,60 @@ def logout():
 def index():
     db.init_db()
     sessions = get_sessions()
-    return render_template("index.html", sessions=sessions, company=config.COMPANY_DISPLAY)
+    return render_template(
+        "index.html",
+        sessions=sessions,
+        company=config.COMPANY_DISPLAY,
+        alerts_enabled=config.ALERTS_ENABLED,
+    )
+
+
+# v2.6.2: 预警推送总开关 — 热切换,无需重启容器
+@app.route("/api/alerts/toggle", methods=["POST"])
+@login_required
+def toggle_alerts():
+    """切换预警推送总开关。关闭期间 keyword/no_reply/delete 三类 TG 推送静音,
+    但原始消息 / 关键词监听分表 / alerts DB 表全部照常写入。"""
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get("enabled"))
+    try:
+        write_env({"ALERTS_ENABLED": "true" if enabled else "false"})
+        # 热切换 — 重新加载 config,下一条消息就生效,不用重启容器
+        import importlib
+        importlib.reload(config)
+        logger.info("ALERTS_ENABLED 已切换 → %s", enabled)
+        return jsonify({"ok": True, "enabled": config.ALERTS_ENABLED})
+    except Exception as e:
+        logger.error("切换 ALERTS_ENABLED 失败: %s", e)
+        return jsonify({"ok": False, "msg": str(e)})
+
+
+@app.route("/api/alerts/status", methods=["GET"])
+@login_required
+def alerts_status():
+    """当前预警开关状态(给其他页面查询用)"""
+    return jsonify({
+        "alerts_enabled": config.ALERTS_ENABLED,
+        "daily_report_enabled": config.DAILY_REPORT_ENABLED,
+    })
+
+
+# v2.6.2: 日报独立开关
+@app.route("/api/daily-report/toggle", methods=["POST"])
+@login_required
+def toggle_daily_report():
+    """切换每日零点日报推送开关"""
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get("enabled"))
+    try:
+        write_env({"DAILY_REPORT_ENABLED": "true" if enabled else "false"})
+        import importlib
+        importlib.reload(config)
+        logger.info("DAILY_REPORT_ENABLED 已切换 → %s", enabled)
+        return jsonify({"ok": True, "enabled": config.DAILY_REPORT_ENABLED})
+    except Exception as e:
+        logger.error("切换 DAILY_REPORT_ENABLED 失败: %s", e)
+        return jsonify({"ok": False, "msg": str(e)})
 
 
 @app.route("/api/send-code", methods=["POST"])
