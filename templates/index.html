@@ -248,8 +248,14 @@
   }
 
   /* v2.6.9: 重启按钮帮助提示 — 弱化按钮 + ⓘ 浮层说明
-     v2.6.10: status-card 取消 overflow:hidden,允许 tooltip 溢出 card 边界 */
-  #status-card { overflow: visible; }
+     v2.6.10: status-card 取消 overflow:hidden,允许 tooltip 溢出 card 边界
+     v2.6.11: 下方 card 的 backdrop-filter 会建独立 stacking context 盖住 tooltip,
+              所以给 status-card 提一个高 z-index,让整张卡(含 ⓘ tooltip)永远在上面 */
+  #status-card {
+    overflow: visible;
+    position: relative;
+    z-index: 1000;
+  }
   .restart-wrap {
     display: inline-flex;
     align-items: center;

@@ -350,7 +350,13 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.6.10** (2026-04-16) — 当前稳定版
+- **v2.6.11** (2026-04-16) — 当前稳定版
+  - [FIX] ⓘ 帮助提示浮层下半部分还是被「添加账号」card 盖住 — 因为下方 card 的
+    backdrop-filter 创建了独立 stacking context;给 #status-card 加 z-index:1000
+    让整张状态卡(含 tooltip)永远在最上层
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.6.10** (2026-04-16)
   - [FIX] ⓘ 帮助提示浮层被 status-card 的 overflow:hidden 切掉下半部分 →
     给 #status-card 单独放行 overflow:visible,完整显示
   - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
