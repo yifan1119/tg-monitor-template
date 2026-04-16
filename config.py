@@ -4,7 +4,39 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).parent
-load_dotenv(BASE_DIR / ".env", override=True)
+_ENV_PATH = BASE_DIR / ".env"
+load_dotenv(_ENV_PATH, override=True)
+
+
+def reload_if_env_changed():
+    """v2.6.2: 检测 .env 文件变更,有变化则重新加载并刷新本模块热字段。
+    用于 tg-monitor 容器感知 web 容器改过的开关(两者共用同一个 .env volume)。
+    调用开销 = 一次 os.stat,极低,可以每次发预警前调用。
+    """
+    global _env_mtime_cache, ALERTS_ENABLED, DAILY_REPORT_ENABLED
+    try:
+        m = _ENV_PATH.stat().st_mtime
+    except OSError:
+        return False
+    if m == _env_mtime_cache:
+        return False
+    _env_mtime_cache = m
+    # 重新载入 .env(override=True 覆盖旧值)
+    load_dotenv(_ENV_PATH, override=True)
+    # 只刷新「运行时可切换」字段,其他配置改了本来就要重启容器
+    ALERTS_ENABLED = os.environ.get("ALERTS_ENABLED", "true").lower() == "true"
+    _daily_env_new = os.environ.get("DAILY_REPORT_ENABLED", "").strip().lower()
+    if _daily_env_new in ("true", "false"):
+        DAILY_REPORT_ENABLED = (_daily_env_new == "true")
+    else:
+        DAILY_REPORT_ENABLED = ALERTS_ENABLED
+    return True
+
+
+try:
+    _env_mtime_cache = _ENV_PATH.stat().st_mtime
+except OSError:
+    _env_mtime_cache = 0.0
 
 # Telegram API (有共用预设，但可改)
 API_ID = int(os.environ.get("API_ID", "0") or "0")

@@ -122,6 +122,8 @@ class AlertBot:
         )
         try:
             # v2.6.2: 预警推送总开关 — 关闭时跳过 TG 发送,但分表 + DB 照常记录
+            # 每次先 reload 感知 web 容器改过的 .env(两容器独立进程,靠文件 mtime 同步)
+            config.reload_if_env_changed()
             if config.ALERTS_ENABLED:
                 await self.bot.send_message(config.ALERT_GROUP_ID, msg)
             else:
@@ -175,6 +177,7 @@ class AlertBot:
             message_text=message_text,
         )
         # v2.6.2: 推送关掉则只记录不推送(alerts 表已在上面 insert_alert,DB 完整)
+        config.reload_if_env_changed()
         if not config.ALERTS_ENABLED:
             logger.info("[ALERTS_DISABLED] 跳过未回复推送 peer=%s (alerts 已记录)", peer["id"])
             return
@@ -214,6 +217,7 @@ class AlertBot:
             message_text=message_text,
         )
         # v2.6.2: 推送关掉则只记录不推送(alerts 表已在上面 insert_alert,DB 完整)
+        config.reload_if_env_changed()
         if not config.ALERTS_ENABLED:
             logger.info("[ALERTS_DISABLED] 跳过删除推送 peer=%s (alerts 已记录)", peer["id"])
             return
@@ -231,6 +235,7 @@ class AlertBot:
         if not self.bot or not config.ALERT_GROUP_ID:
             return
         # v2.6.2: 日报独立开关
+        config.reload_if_env_changed()
         if not config.DAILY_REPORT_ENABLED:
             logger.info("[DAILY_REPORT_DISABLED] 跳过日报推送")
             return
