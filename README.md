@@ -350,7 +350,12 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.6.9** (2026-04-16) — 当前稳定版
+- **v2.6.10** (2026-04-16) — 当前稳定版
+  - [FIX] ⓘ 帮助提示浮层被 status-card 的 overflow:hidden 切掉下半部分 →
+    给 #status-card 单独放行 overflow:visible,完整显示
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.6.9** (2026-04-16)
   - [UX] 「重启监听」按钮加 ⓘ 帮助提示 + 弱化样式 — 暗示客户「正常不用点」,
     悬停 ⓘ 看完整说明(5 种实际需要手动重启的场景)
   - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`

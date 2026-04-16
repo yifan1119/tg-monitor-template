@@ -247,7 +247,9 @@
     box-shadow: 0 0 20px rgba(79, 174, 79, 0.3);
   }
 
-  /* v2.6.9: 重启按钮帮助提示 — 弱化按钮 + ⓘ 浮层说明 */
+  /* v2.6.9: 重启按钮帮助提示 — 弱化按钮 + ⓘ 浮层说明
+     v2.6.10: status-card 取消 overflow:hidden,允许 tooltip 溢出 card 边界 */
+  #status-card { overflow: visible; }
   .restart-wrap {
     display: inline-flex;
     align-items: center;
