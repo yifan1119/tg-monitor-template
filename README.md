@@ -244,6 +244,39 @@ git pull && docker compose -p tg-demo up -d --build
 docker ps | grep tg-.*-demo
 ```
 
+### 升级(推荐用 update.sh — 带回滚保护)
+
+```bash
+cd /root/tg-monitor-demo
+./update.sh
+```
+
+`update.sh` 会自动:
+1. 把当前版本 sha 写入 `.last_commit`(回滚用)
+2. 检测到本地修改的 tracked 文件 → 自动 `git stash` 保护(不会无声丢失)
+3. `git fetch + git reset --hard origin/main`
+4. `docker compose up -d --build` 重建镜像
+5. 健康检查 60 秒,**失败自动回退到升级前版本**(含 stash 还原)
+
+### 升级失败 / 想回退
+
+```bash
+# 一键回到上一版(读 .last_commit)
+bash rollback.sh
+
+# 回到指定 commit
+bash rollback.sh <sha>
+
+# 列出最近 10 个 commit 让你选
+bash rollback.sh --list
+```
+
+`rollback.sh` 行为:
+- 二次确认后再动手(交互终端)
+- 先把当前 sha 也存进 `.last_commit`,**再跑一次 rollback.sh 可以前进回原本版本**
+- 检测到本地修改自动 stash
+- `git reset --hard <目标 sha>` + 重建容器 + 健康检查
+
 ### 备份(重要)
 
 这 3 个东西丢了会很痛:

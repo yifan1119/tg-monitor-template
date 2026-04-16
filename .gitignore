@@ -27,3 +27,6 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# update.sh / rollback.sh 运行时记录(每台机不一样,不进 git)
+.last_commit
