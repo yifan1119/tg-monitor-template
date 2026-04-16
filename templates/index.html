@@ -300,7 +300,7 @@
     border: 1px solid rgba(42, 171, 238, 0.45);
     border-radius: 8px;
     padding: 14px 16px;
-    width: 340px;
+    width: 380px;
     font-size: 12px;
     font-weight: 400;
     text-transform: none;
@@ -616,14 +616,17 @@
             <button class="btn-restart" id="btn-restart" onclick="restartMonitor()">
               ▸ 重启监听
             </button>
-            <span class="help-icon" tabindex="0" data-tip="正常运维不需要点 — 加号 / 删号 / 改设置都已经自动重启或 hot-reload。
+            <span class="help-icon" tabindex="0" data-tip="99% 时间不用点这按钮。
 
-只在以下情况手动用:
-① 加号后 5 秒还没生效(自动重启失败)
-② listener 卡死,消息收不到 / Sheet 不写入
-③ 改了 Drive / OAuth / SHEET_ID(这几个不能 hot-reload)
-④ Telethon session 异常,需要重新登入
-⑤ debug 用 — 想强制走完整启动流程">?</span>
+平常加 / 删帐号、改关键词、改设置,系统会自己生效,你只管点保存就行。
+
+只有这几种情况要手动点:
+① 新加的帐号过了 10 秒还没开始工作
+② 突然不推预警了 / 表格不写入了
+③ 改完 Google 帐号 / 表格 ID 之后
+④ 系统看起来怪怪的,点一下试试(常常能修)
+
+※ 如果某个外事号说「未授权」或长时间收不到消息 → 不是按这里,要去下面重新加一次号(走验证码流程)。">?</span>
           </span>
         </div>
       </div>
