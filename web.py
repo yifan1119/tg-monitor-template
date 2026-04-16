@@ -337,6 +337,30 @@ def _test_sheets_access(sheet_id):
         return False, f"{type(e).__name__}: {err}"
 
 
+_restart_debounce_lock = __import__("threading").Lock()
+_restart_debounce_timer = {"t": None}
+
+def _schedule_listener_restart(delay=4.0):
+    """v2.6.3: 帐号增删后自动重启 tg-monitor 容器,debounce 合并 N 秒内的连续操作。
+    用例:
+      - verify_code 成功 → 调用一次 → 4 秒后才真正 restart
+      - 用户在 4 秒内继续 verify_code(批量加号) → 计时器被重置 → 仍只重启一次
+      - remove_session 同理
+    避免每加一个号就重启一次容器。
+    """
+    import threading
+    def _do_restart():
+        ok, msg = _start_tg_monitor()
+        print(f"[auto-restart] {'ok' if ok else 'FAILED'}: {msg}")
+    with _restart_debounce_lock:
+        if _restart_debounce_timer["t"] is not None:
+            _restart_debounce_timer["t"].cancel()
+        t = threading.Timer(delay, _do_restart)
+        t.daemon = True
+        _restart_debounce_timer["t"] = t
+        t.start()
+
+
 def _start_tg_monitor():
     """通过 docker API 重启 tg-monitor 容器（install.sh 已建好，只需 restart 就会读新 .env）"""
     try:
@@ -1507,10 +1531,14 @@ def verify_code():
         run_async(_disconnect(client))
         del _pending[phone]
 
+        # v2.6.3: 帐号添加成功 → 后台自动重启监听(debounce 4 秒,批量加号只触发一次)
+        _schedule_listener_restart()
+
         return jsonify({
             "ok": True,
             "name": me.first_name or "",
             "username": me.username or "",
+            "auto_restart": True,
         })
     except SessionPasswordNeededError:
         _pending[phone]["need_password"] = True
@@ -1544,10 +1572,14 @@ def verify_password():
         run_async(_disconnect(client))
         del _pending[phone]
 
+        # v2.6.3: 同上,二步验证通过后也触发自动重启
+        _schedule_listener_restart()
+
         return jsonify({
             "ok": True,
             "name": me.first_name or "",
             "username": me.username or "",
+            "auto_restart": True,
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
@@ -1713,10 +1745,14 @@ def remove_session():
             except Exception as e:
                 print(f"删 Sheets 分页失败（可忽略）: {e}")
 
+    # v2.6.3: 删除帐号也触发自动重启,避免 listener 还在监听已删 session
+    _schedule_listener_restart()
+
     return jsonify({
         "ok": True,
         "deleted_db": deleted_db,
         "deleted_sheet": deleted_sheet,
+        "auto_restart": True,
     })
 
 
