@@ -35,7 +35,9 @@ else
         echo "✗ 无法自动获取公网 IP,请手动指定:./enable_https.sh your-domain.com"
         exit 1
     fi
-    DOMAIN="${IP//./-}.nip.io"
+    # nip.io 两种格式都支持:带 . 或带 -。用 . 更直观,也避开某些浏览器 DoH 把 - 格式
+    # 当成长子域名导致解析异常的情况
+    DOMAIN="${IP}.nip.io"
     echo "▸ 自动用 nip.io 域名: $DOMAIN  (会解析到 $IP)"
 fi
 
