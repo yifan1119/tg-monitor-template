@@ -100,6 +100,9 @@ class Listener:
                 await self.on_deleted(account_id, peer, dict(row))
 
     async def _handle_message(self, event, account_id, phone, direction):
+        # v2.6.8: 进消息前先 reload .env,让 KEYWORDS / NO_REPLY_MINUTES 等设置改完
+        # 不用等容器重启即时生效。开销=一次 os.stat,可忽略。
+        config.reload_if_env_changed()
         try:
             if direction == "B":
                 sender = await event.get_sender()

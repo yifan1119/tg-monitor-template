@@ -21,9 +21,12 @@ def reload_if_env_changed():
     用于 tg-monitor 容器感知 web 容器改过的开关(两者共用同一个 .env volume)。
     调用开销 = 一次 os.stat,极低,可以每次发预警前调用。
     v2.6.6: 同步刷新三个独立子开关(关键词/未回复/删除)和日报开关。
+    v2.6.8: 同步刷新 KEYWORDS / NO_REPLY_MINUTES / PEER_ROLE_LABEL / OPERATOR_LABEL / COMPANY_DISPLAY,
+    设置页改完不用等容器重启,下一条消息进来就生效。
     """
     global _env_mtime_cache, ALERTS_ENABLED, DAILY_REPORT_ENABLED
     global ALERT_KEYWORD_ENABLED, ALERT_NO_REPLY_ENABLED, ALERT_DELETE_ENABLED
+    global KEYWORDS, NO_REPLY_MINUTES, PEER_ROLE_LABEL, OPERATOR_LABEL, COMPANY_DISPLAY
     try:
         m = _ENV_PATH.stat().st_mtime
     except OSError:
@@ -43,6 +46,16 @@ def reload_if_env_changed():
         DAILY_REPORT_ENABLED = (_daily_env_new == "true")
     else:
         DAILY_REPORT_ENABLED = ALERTS_ENABLED
+    # v2.6.8: 业务字段 hot-reload
+    KEYWORDS = [k.strip() for k in os.environ.get("KEYWORDS", "").split(",") if k.strip()]
+    try:
+        NO_REPLY_MINUTES = int(os.environ.get("NO_REPLY_MINUTES", "30"))
+    except ValueError:
+        pass
+    PEER_ROLE_LABEL = os.environ.get("PEER_ROLE_LABEL", "广告主")
+    OPERATOR_LABEL = os.environ.get("OPERATOR_LABEL", "").strip() or "商务人员"
+    _comp_name = os.environ.get("COMPANY_NAME", "")
+    COMPANY_DISPLAY = os.environ.get("COMPANY_DISPLAY", _comp_name)
     return True
 
 

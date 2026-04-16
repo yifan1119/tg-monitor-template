@@ -350,7 +350,13 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.6.7** (2026-04-16) — 当前稳定版
+- **v2.6.8** (2026-04-16) — 当前稳定版
+  - [NEW] KEYWORDS / NO_REPLY_MINUTES / PEER_ROLE_LABEL / OPERATOR_LABEL / COMPANY_DISPLAY
+    全部改成 hot-reload — 设置页改完保存秒级生效,不用等 tg-monitor 容器重启
+  - [架构] listener._handle_message 进来时先 reload_if_env_changed,新消息进来即时 pickup .env 变更
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.6.7** (2026-04-16)
   - [NEW] 删除消息预警改成「实时」— 注册 events.MessageDeleted handler,对方点
     「同时为对方删除」后秒级触发(原来 60s 巡检,延迟 1~10 分钟)
   - [架构] 60s 巡检保留作兜底:listener 启动前的删除 / 实时事件漏接都靠它补
