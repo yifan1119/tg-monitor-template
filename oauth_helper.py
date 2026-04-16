@@ -221,6 +221,22 @@ def auto_create_sheet(title):
         return sid
     except Exception as e:
         logger.warning("auto_create_sheet 失败: %s", e)
+        # 识别「API 没启用」的典型错误,往上抛出带链接的友好提示
+        msg = str(e)
+        if "SERVICE_DISABLED" in msg or "has not been used in project" in msg or \
+           "Google Sheets API has not been" in msg or "Drive API has not been" in msg:
+            which = "Sheets API" if "sheets" in msg.lower() else ("Drive API" if "drive" in msg.lower() else "Drive/Sheets API")
+            raise RuntimeError(
+                f"Google {which} 没启用。去 Google Cloud Console 启用:\n"
+                "• https://console.cloud.google.com/apis/library/drive.googleapis.com\n"
+                "• https://console.cloud.google.com/apis/library/sheets.googleapis.com\n"
+                "各点「启用」,等 10 秒再重试"
+            ) from e
+        if "insufficient" in msg.lower() or "insufficientPermissions" in msg:
+            raise RuntimeError(
+                "OAuth 授权范围不够。去 myaccount.google.com/permissions 撤销旧授权,"
+                "重新点「连接 Google Drive」即可(会要求 Sheets 新权限)"
+            ) from e
         return ""
 
 

@@ -619,11 +619,10 @@
             </ol>
             <b>三、获取群 Chat ID</b>
             <ol>
-              <li><span class="step-label">01</span> 在该群里发一条消息</li>
-              <li><span class="step-label">02</span> 浏览器打开(替换 <code>TOKEN</code>): <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code></li>
-              <li><span class="step-label">03</span> 返回的 JSON 找 <code>"chat":{"id": -1003789...}</code>,这串负数就是 Chat ID</li>
+              <li><span class="step-label">01</span> 把 <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a> 拉进预警群</li>
+              <li><span class="step-label">02</span> 它会自动发一条消息,里面的 <code>Id:</code> 那串负数就是 Chat ID(通常以 <code>-100</code> 开头)</li>
+              <li><span class="step-label">03</span> 拿到 ID 后可以把 @userinfobot 从群里踢掉</li>
             </ol>
-            或用 <a href="https://t.me/RawDataBot" target="_blank">@RawDataBot</a> / <a href="https://t.me/getidsbot" target="_blank">@getidsbot</a> 更快获取。
           </div>
         </details>
       </div>
@@ -718,6 +717,16 @@
 
           <div style="margin-bottom:10px;"><b>1.</b> 打开 <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#7ec9ff;">Google Cloud Console → 凭据</a> (用同一个 Google 帐号)</div>
 
+          <div style="background:rgba(255,155,61,0.08);border:1px solid rgba(255,155,61,0.4);border-radius:6px;padding:10px 14px;margin:4px 0 12px;">
+            <div style="color:#ffd28a;font-weight:600;margin-bottom:6px;">⚠ <b>1.5.</b> 必做:启用 Drive API + Sheets API(不启用会「建 Spreadsheet 失败」)</div>
+            <div style="color:#cfe3f5;font-size:12.5px;line-height:1.85;">
+              新建项目默认关的,各点一次「<b>启用</b>」就行:<br>
+              · <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" style="color:#7ec9ff;">启用 Google Drive API</a><br>
+              · <a href="https://console.cloud.google.com/apis/library/sheets.googleapis.com" target="_blank" style="color:#7ec9ff;">启用 Google Sheets API</a><br>
+              <span style="color:#9eb4c7;">点进去后顶部选对项目(跟凭据同一个) → 按「启用」→ 等 10 秒生效</span>
+            </div>
+          </div>
+
           <div style="margin-bottom:10px;"><b>2.</b> 顶部 <b>+ 创建凭据</b> → 选 <b>OAuth 客户端 ID</b></div>
 
           <div style="margin-bottom:10px;"><b>3.</b> 应用类型选 <b style="color:#ffd28a;">「Web application / Web 应用」</b> <span style="color:#ff9bb0;">⚠ 不是「桌面」</span></div>
@@ -738,6 +747,7 @@
           <div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.1);">
             <b style="color:#ff9b3d;">▸ 常见报错</b>
             <ul style="margin:6px 0 0 16px;color:#bfd6e8;font-size:12.5px;">
+              <li><b>建 Spreadsheet 失败 / SERVICE_DISABLED / 403</b>:第 1.5 步两个 API 没启用,照上面两个链接点一下「启用」就好</li>
               <li><b>redirect_uri_mismatch</b>:第 4 步填的跟当前 URL 不完全一致。<code>http</code> vs <code>https</code>、端口、IP 都要对得上</li>
               <li><b>access_denied</b>:授权帐号没加到第 6 步的「测试用户」名单</li>
               <li><b>没拿到 refresh_token</b>:到 <a href="https://myaccount.google.com/permissions" target="_blank" style="color:#7ec9ff;">myaccount.google.com/permissions</a> 撤销旧授权再重试</li>
@@ -1046,7 +1056,13 @@ if (autoCreateSheetBtn) {
         res.innerHTML = tag + link;
         res.className = 'test-result ok';
       } else {
-        res.textContent = '✗ ' + (data.msg || '建立失败');
+        // 把 \n 换成 <br>,把 URL 转成可点链接(server 端返回的友好提示可能多行带链接)
+        const raw = data.msg || '建立失败';
+        const esc = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const html = esc
+          .replace(/\n/g, '<br>')
+          .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" style="color:#7ec9ff;">$1</a>');
+        res.innerHTML = '✗ ' + html;
         res.className = 'test-result err';
       }
     } catch (e) {
