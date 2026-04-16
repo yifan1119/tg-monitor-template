@@ -159,6 +159,11 @@ DEVICE_NAME = os.environ.get("DEVICE_NAME", "shencha")  # TG 设备名称
 # 对话方角色称谓（不同部门可能叫「广告主」「客户」「合作方」等）
 PEER_ROLE_LABEL = os.environ.get("PEER_ROLE_LABEL", "广告主")
 
+# 操作人员称谓(v2.6.4+,不同中心可能叫「商务人员」「业务员」「负责人」「客服」等)
+# 影响:Sheet 每个外事号分页 A2 标签 / 三个预警表头 B 列 / TG 预警消息「商务人员:xxx」字样
+# 留空 = 默认「商务人员」(向后兼容,旧部署不受影响)
+OPERATOR_LABEL = os.environ.get("OPERATOR_LABEL", "").strip() or "商务人员"
+
 # 媒体文件直显（图片/文件/语音/视频上传到 Drive 后展示在 Sheets）
 # - MEDIA_FOLDER_ID：OAuth 授权完成后由 setup 精灵自动在客户 Drive 根目录建 "tg-monitor-媒体"
 #   文件夹并把 ID 写回 .env。留空 = 不上传，仍显示文字占位。

@@ -46,18 +46,19 @@ class SheetsWriter:
     @property
     def ALERT_HEADERS(self):
         role = config.PEER_ROLE_LABEL
+        op = config.OPERATOR_LABEL
         return {
-            "信息未回复预警": ["所属公司", "商务人员", "外事号", role, "未回复消息", "记录时间"],
-            "关键词监听":   ["所属公司", "商务人员", "外事号", role, "关键词", "消息内容", "记录时间"],
-            "信息删除预警": ["所属公司", "商务人员", "外事号", role, "删除前消息内容", "记录时间"],
+            "信息未回复预警": ["所属公司", op, "外事号", role, "未回复消息", "记录时间"],
+            "关键词监听":   ["所属公司", op, "外事号", role, "关键词", "消息内容", "记录时间"],
+            "信息删除预警": ["所属公司", op, "外事号", role, "删除前消息内容", "记录时间"],
         }
 
-    # 各列宽度（按表头文本映射，像素）— 角色列用 PEER_ROLE_LABEL 做 key
+    # 各列宽度（按表头文本映射，像素）— 角色列 + 操作人员列都用动态 label 做 key
     @property
     def ALERT_COL_WIDTHS(self):
         return {
             "所属公司":       160,
-            "商务人员":       100,
+            config.OPERATOR_LABEL: 100,
             "外事号":         100,
             config.PEER_ROLE_LABEL: 160,
             "未回复消息":     350,
@@ -86,6 +87,16 @@ class SheetsWriter:
                     logger.info("告警分页角色列标签同步 [%s] %s → %s", ws.title, first_row[role_idx], config.PEER_ROLE_LABEL)
                 except Exception as e:
                     logger.warning("告警分页角色列标签同步失败 [%s]: %s", ws.title, e)
+            # v2.6.4: 操作人员列(第 2 列, index=1)label 同步,逻辑跟角色列一致
+            op_idx = 1
+            if len(first_row) > op_idx and first_row[op_idx] and first_row[op_idx] != config.OPERATOR_LABEL:
+                try:
+                    self._rate_limit()
+                    cell = f"{chr(65 + op_idx)}1"  # B1
+                    ws.update(cell, [[config.OPERATOR_LABEL]])
+                    logger.info("告警分页操作人员列标签同步 [%s] %s → %s", ws.title, first_row[op_idx], config.OPERATOR_LABEL)
+                except Exception as e:
+                    logger.warning("告警分页操作人员列标签同步失败 [%s]: %s", ws.title, e)
             return
         try:
             self._rate_limit()
@@ -214,7 +225,7 @@ class SheetsWriter:
         self._rate_limit()
         ws.update("A1:B3", [
             ["", ""],
-            ["商务人员", account["operator"] or ""],
+            [config.OPERATOR_LABEL, account["operator"] or ""],
             ["中心/部门", account["company"] or ""],
         ])
         self._rate_limit()
@@ -222,18 +233,23 @@ class SheetsWriter:
         ws.format("A2:A3", {"textFormat": {"bold": True}})
 
     def sync_headers(self):
-        """从 Sheets 读取表头，同步更新数据库（商务人员、所属公司）"""
+        """从 Sheets 读取表头，同步更新数据库（商务人员、所属公司）
+
+        v2.6.4: 同时检查 A2 单元格 label 是否跟 OPERATOR_LABEL 一致,不一致就 update。
+        覆盖客户改 OPERATOR_LABEL 后,把现有所有外事号分页 A2 字样从「商务人员」改成新 label 的需求。
+        """
         accounts = db.get_conn().execute("SELECT * FROM accounts").fetchall()
         for account in accounts:
             ws = self.get_or_create_sheet(account)
             if not ws:
                 continue
-            # 读取行2-3的商务人员和所属公司
+            # 读取行2-3的 A 列(label) + B 列(value)
             self._rate_limit()
-            header_data = ws.get("B2:B3")
+            header_data = ws.get("A2:B3")
             if header_data:
-                operator = header_data[0][0] if len(header_data) > 0 and len(header_data[0]) > 0 else ""
-                company = header_data[1][0] if len(header_data) > 1 and len(header_data[1]) > 0 else ""
+                a2_label = header_data[0][0] if len(header_data) > 0 and len(header_data[0]) > 0 else ""
+                operator = header_data[0][1] if len(header_data) > 0 and len(header_data[0]) > 1 else ""
+                company  = header_data[1][1] if len(header_data) > 1 and len(header_data[1]) > 1 else ""
                 # 更新数据库
                 if operator != (account["operator"] or "") or company != (account["company"] or ""):
                     db.get_conn().execute(
@@ -241,7 +257,16 @@ class SheetsWriter:
                         (operator, company, account["id"])
                     )
                     db.get_conn().commit()
-                    logger.info("从 Sheets 同步: 商务人员=%s, 所属公司=%s", operator, company)
+                    logger.info("从 Sheets 同步: 操作人员=%s, 所属公司=%s", operator, company)
+                # v2.6.4: 同步 A2 label(操作人员标签)
+                if a2_label and a2_label != config.OPERATOR_LABEL:
+                    try:
+                        self._rate_limit()
+                        ws.update("A2", [[config.OPERATOR_LABEL]])
+                        logger.info("外事号分页操作人员标签同步 [%s] %s → %s",
+                                    ws.title, a2_label, config.OPERATOR_LABEL)
+                    except Exception as e:
+                        logger.warning("外事号分页 A2 标签同步失败 [%s]: %s", ws.title, e)
 
     def setup_dialog_columns(self, ws, peer, col_group):
         """设置某个对话框的表头 (行5-6) + 整列置中 + 斑马纹 (与舒舒格式一致)"""

@@ -196,7 +196,7 @@ def write_env(updates):
     # 固定顺序，读起来舒服
     order = [
         "API_ID", "API_HASH",
-        "COMPANY_NAME", "COMPANY_DISPLAY", "PEER_ROLE_LABEL",
+        "COMPANY_NAME", "COMPANY_DISPLAY", "PEER_ROLE_LABEL", "OPERATOR_LABEL",
         "SHEET_ID", "MEDIA_FOLDER_ID", "MEDIA_RETENTION_DAYS", "MEDIA_MAX_MB",
         "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
         "BOT_TOKEN", "ALERT_GROUP_ID",
@@ -425,7 +425,7 @@ def _create_sheet_tab(name, operator="", company=""):
 
         # 文字内容: label A2/A3 + value B2/B3 + 对话槽标题 row5-6
         ws.update("A2:B3", [
-            ["商务人员", operator],
+            [config.OPERATOR_LABEL, operator],
             ["中心/部门", company],
         ])
         # C6 留空（第一条消息进来时 setup_dialog_columns 会填真实 peer 名）
@@ -718,6 +718,7 @@ def setup_page():
         "company_name": env.get("COMPANY_NAME", ""),
         "company_display": env.get("COMPANY_DISPLAY", ""),
         "peer_role_label": env.get("PEER_ROLE_LABEL", "广告主"),
+        "operator_label": env.get("OPERATOR_LABEL", "商务人员"),
         "bot_token": env.get("BOT_TOKEN", ""),
         "alert_group_id": env.get("ALERT_GROUP_ID", ""),
         "sheet_id": env.get("SHEET_ID", ""),
@@ -746,6 +747,7 @@ def settings_page():
         "company_name": env.get("COMPANY_NAME", ""),
         "company_display": env.get("COMPANY_DISPLAY", ""),
         "peer_role_label": env.get("PEER_ROLE_LABEL", "广告主"),
+        "operator_label": env.get("OPERATOR_LABEL", "商务人员"),
         "bot_token": env.get("BOT_TOKEN", ""),
         "alert_group_id": env.get("ALERT_GROUP_ID", ""),
         "sheet_id": env.get("SHEET_ID", ""),
@@ -1225,6 +1227,7 @@ def _save_settings(is_first):
         "COMPANY_NAME": company_name,
         "COMPANY_DISPLAY": form.get("company_display", "").strip() or company_name,
         "PEER_ROLE_LABEL": form.get("peer_role_label", "").strip() or "广告主",
+        "OPERATOR_LABEL": form.get("operator_label", "").strip()[:10] or "商务人员",
         "BOT_TOKEN": bot_token,
         "ALERT_GROUP_ID": alert_group_id,
         "SHEET_ID": sheet_id,
@@ -1427,6 +1430,7 @@ def index():
         sessions=sessions,
         company=config.COMPANY_DISPLAY,
         alerts_enabled=config.ALERTS_ENABLED,
+        operator_label=config.OPERATOR_LABEL,
     )
 
 
