@@ -12,10 +12,13 @@ TZ_BJ = timezone(timedelta(hours=8))
 
 
 class Listener:
-    def __init__(self, on_new_message=None, on_keyword=None):
+    def __init__(self, on_new_message=None, on_keyword=None, on_deleted=None):
         self.clients = {}  # phone -> TelegramClient
         self.on_new_message = on_new_message  # callback(account, peer, message_row)
         self.on_keyword = on_keyword  # callback(account, peer, keyword, text)
+        # v2.6.7: 实时删除事件回调 — 收到 events.MessageDeleted 后
+        # 反查 DB 拿到 (peer, message_dict),交给上层 (main.py) 推 TG + 写 Sheet
+        self.on_deleted = on_deleted  # callback(account_id, peer, message_dict)
 
     async def add_account(self, phone):
         session_path = str(config.SESSION_DIR / phone.replace("+", ""))
@@ -54,8 +57,47 @@ class Listener:
                 return
             await self._handle_message(event, _aid, _phone, direction="A")
 
+        # v2.6.7: 实时删除监听 — 对方点「同时为对方删除」时秒级触发
+        # 协议层 deleted_ids 不带 peer_id(私聊限制),所以靠 (account_id, msg_id) 反查 DB
+        @client.on(events.MessageDeleted)
+        async def on_deleted_event(event, _aid=account_id, _phone=phone):
+            try:
+                await self._handle_deleted(event, _aid, _phone)
+            except Exception as e:
+                print(f"  ⚠️ [{_phone}] MessageDeleted handler 异常: {e}")
+
         self.clients[phone] = client
         return account
+
+    async def _handle_deleted(self, event, account_id, phone):
+        """v2.6.7: 处理实时删除事件
+        - 私聊场景:event.deleted_ids 是 [msg_id, ...],无 peer_id
+        - 群组/频道:event.chat_id 有值,但本产品只监控私聊,这种忽略
+        - 反查 DB:用 (account_id, msg_id) 找到 peer + 原文
+        - 找不到的(listener 启动前的消息 / 群组事件):直接跳过,巡检兜底
+        """
+        deleted_ids = event.deleted_ids or []
+        if not deleted_ids:
+            return
+        conn = db.get_conn()
+        for msg_id in deleted_ids:
+            row = conn.execute(
+                "SELECT * FROM messages WHERE account_id=? AND msg_id=? AND deleted=0",
+                (account_id, msg_id)
+            ).fetchone()
+            if not row:
+                # DB 没记录 / 已经标记过 → 跳过(巡检会兜底)
+                continue
+            peer = conn.execute(
+                "SELECT * FROM peers WHERE id=?", (row["peer_id"],)
+            ).fetchone()
+            if not peer:
+                continue
+            # 先标记防巡检重推 — has_alert_today 还会做第二层去重
+            db.mark_deleted(msg_id, account_id)
+            print(f"  🗑️ [{phone}] 实时侦测删除: {(row['text'] or '')[:30]}")
+            if self.on_deleted:
+                await self.on_deleted(account_id, peer, dict(row))
 
     async def _handle_message(self, event, account_id, phone, direction):
         try:

@@ -52,8 +52,33 @@ async def main():
 
     # 4. 初始化监听器
     logger.info("初始化监听器...")
+
+    # v2.6.7: 实时删除回调 — 跟巡检 _patrol_loop 对齐:
+    #   1) bot 侧推 TG 预警 + 写删除预警分表 + insert_alert (send_delete_alert 内部全包了)
+    #   2) Sheets 侧把外事号分页里那条消息划线/标灰 (mark_deleted_in_sheet)
+    # listener 内部已经先 mark_deleted,这里不用再标
+    async def _on_realtime_deleted(account_id, peer, msg_dict):
+        try:
+            if bot.bot:
+                await bot.send_delete_alert(
+                    account_id, peer, msg_dict.get("text", ""), msg_dict.get("msg_id")
+                )
+        except Exception as e:
+            logger.warning("实时删除推送失败 peer=%s: %s", peer["id"], e)
+        try:
+            account = db.get_conn().execute(
+                "SELECT * FROM accounts WHERE id=?", (account_id,)
+            ).fetchone()
+            if account:
+                ws = sheets.get_or_create_sheet(account)
+                if ws:
+                    sheets.mark_deleted_in_sheet(ws, msg_dict)
+        except Exception as e:
+            logger.warning("实时删除 Sheet 标记失败 peer=%s: %s", peer["id"], e)
+
     listener = Listener(
         on_keyword=bot.send_keyword_alert if bot.bot else None,
+        on_deleted=_on_realtime_deleted,
     )
 
     # 5. 自动扫描 sessions 目录，登录所有账号

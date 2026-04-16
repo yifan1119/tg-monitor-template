@@ -350,7 +350,14 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.6.6** (2026-04-16) — 当前稳定版
+- **v2.6.7** (2026-04-16) — 当前稳定版
+  - [NEW] 删除消息预警改成「实时」— 注册 events.MessageDeleted handler,对方点
+    「同时为对方删除」后秒级触发(原来 60s 巡检,延迟 1~10 分钟)
+  - [架构] 60s 巡检保留作兜底:listener 启动前的删除 / 实时事件漏接都靠它补
+  - [防重] 实时 handler 先 mark_deleted 再推送,巡检看到 deleted=1 自动跳过
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.6.6** (2026-04-16)
   - [NEW] 三类预警拆成独立开关 — 关键词 / 未回复 / 删除消息 各自一个 hot-toggle
   - [UI] Dashboard 顶部改成三个 chip,任一类关掉都会显示橙色横幅说明
   - [UI] Settings 推送开关区改成三行独立勾选,顺带保留日报开关
