@@ -762,7 +762,23 @@ def settings_page():
         "api_id": env.get("API_ID", DEFAULT_API_ID),
         "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
         # v2.6.2: 预警 / 日报开关(settings 页可改,dashboard 也能切换预警)
+        # v2.6.6: 三个独立子开关 — 留空跟随 ALERTS_ENABLED 总开关
         "alerts_enabled": env.get("ALERTS_ENABLED", "true").lower() != "false",
+        "alert_keyword_enabled": (
+            env.get("ALERT_KEYWORD_ENABLED", "").lower() == "true"
+            if env.get("ALERT_KEYWORD_ENABLED", "").lower() in ("true", "false")
+            else env.get("ALERTS_ENABLED", "true").lower() != "false"
+        ),
+        "alert_no_reply_enabled": (
+            env.get("ALERT_NO_REPLY_ENABLED", "").lower() == "true"
+            if env.get("ALERT_NO_REPLY_ENABLED", "").lower() in ("true", "false")
+            else env.get("ALERTS_ENABLED", "true").lower() != "false"
+        ),
+        "alert_delete_enabled": (
+            env.get("ALERT_DELETE_ENABLED", "").lower() == "true"
+            if env.get("ALERT_DELETE_ENABLED", "").lower() in ("true", "false")
+            else env.get("ALERTS_ENABLED", "true").lower() != "false"
+        ),
         "daily_report_enabled": (
             env.get("DAILY_REPORT_ENABLED", "").lower() == "true"
             if env.get("DAILY_REPORT_ENABLED", "").lower() in ("true", "false")
@@ -1430,27 +1446,76 @@ def index():
         sessions=sessions,
         company=config.COMPANY_DISPLAY,
         alerts_enabled=config.ALERTS_ENABLED,
+        # v2.6.6: 三个独立子开关传给 dashboard
+        alert_keyword_enabled=config.ALERT_KEYWORD_ENABLED,
+        alert_no_reply_enabled=config.ALERT_NO_REPLY_ENABLED,
+        alert_delete_enabled=config.ALERT_DELETE_ENABLED,
         operator_label=config.OPERATOR_LABEL,
     )
 
 
 # v2.6.2: 预警推送总开关 — 热切换,无需重启容器
+# v2.6.6: 改成「全开/全关」一键操作 — 同时显式写入 3 个独立子开关,避免 fallback 歧义
 @app.route("/api/alerts/toggle", methods=["POST"])
 @login_required
 def toggle_alerts():
-    """切换预警推送总开关。关闭期间 keyword/no_reply/delete 三类 TG 推送静音,
-    但原始消息 / 关键词监听分表 / alerts DB 表全部照常写入。"""
+    """一键开关三类预警推送(关键词 + 未回复 + 删除)。
+    会同时把 ALERTS_ENABLED 和 3 个独立子开关都写成同一个值。"""
     data = request.get_json(silent=True) or {}
     enabled = bool(data.get("enabled"))
+    val = "true" if enabled else "false"
     try:
-        write_env({"ALERTS_ENABLED": "true" if enabled else "false"})
-        # 热切换 — 重新加载 config,下一条消息就生效,不用重启容器
+        write_env({
+            "ALERTS_ENABLED": val,
+            "ALERT_KEYWORD_ENABLED": val,
+            "ALERT_NO_REPLY_ENABLED": val,
+            "ALERT_DELETE_ENABLED": val,
+        })
         import importlib
         importlib.reload(config)
-        logger.info("ALERTS_ENABLED 已切换 → %s", enabled)
-        return jsonify({"ok": True, "enabled": config.ALERTS_ENABLED})
+        logger.info("ALERTS_ENABLED + 3 子开关 已切换 → %s", enabled)
+        return jsonify({
+            "ok": True,
+            "enabled": config.ALERTS_ENABLED,
+            "alert_keyword_enabled": config.ALERT_KEYWORD_ENABLED,
+            "alert_no_reply_enabled": config.ALERT_NO_REPLY_ENABLED,
+            "alert_delete_enabled": config.ALERT_DELETE_ENABLED,
+        })
     except Exception as e:
         logger.error("切换 ALERTS_ENABLED 失败: %s", e)
+        return jsonify({"ok": False, "msg": str(e)})
+
+
+# v2.6.6: 三个独立预警子开关 — 关键词 / 未回复 / 删除
+_ALERT_SUBSWITCH_KEYS = {
+    "keyword":  "ALERT_KEYWORD_ENABLED",
+    "no_reply": "ALERT_NO_REPLY_ENABLED",
+    "delete":   "ALERT_DELETE_ENABLED",
+}
+
+
+@app.route("/api/alerts/subswitch/toggle", methods=["POST"])
+@login_required
+def toggle_alert_subswitch():
+    """切换单个预警子开关。body = {"type": "keyword|no_reply|delete", "enabled": bool}"""
+    data = request.get_json(silent=True) or {}
+    sub_type = (data.get("type") or "").strip().lower()
+    enabled = bool(data.get("enabled"))
+    env_key = _ALERT_SUBSWITCH_KEYS.get(sub_type)
+    if not env_key:
+        return jsonify({"ok": False, "msg": f"未知预警类型: {sub_type}"})
+    try:
+        write_env({env_key: "true" if enabled else "false"})
+        import importlib
+        importlib.reload(config)
+        logger.info("%s 已切换 → %s", env_key, enabled)
+        return jsonify({
+            "ok": True,
+            "type": sub_type,
+            "enabled": getattr(config, env_key),
+        })
+    except Exception as e:
+        logger.error("切换 %s 失败: %s", env_key, e)
         return jsonify({"ok": False, "msg": str(e)})
 
 
@@ -1460,6 +1525,9 @@ def alerts_status():
     """当前预警开关状态(给其他页面查询用)"""
     return jsonify({
         "alerts_enabled": config.ALERTS_ENABLED,
+        "alert_keyword_enabled": config.ALERT_KEYWORD_ENABLED,
+        "alert_no_reply_enabled": config.ALERT_NO_REPLY_ENABLED,
+        "alert_delete_enabled": config.ALERT_DELETE_ENABLED,
         "daily_report_enabled": config.DAILY_REPORT_ENABLED,
     })
 

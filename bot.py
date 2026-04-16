@@ -123,11 +123,12 @@ class AlertBot:
         try:
             # v2.6.2: 预警推送总开关 — 关闭时跳过 TG 发送,但分表 + DB 照常记录
             # 每次先 reload 感知 web 容器改过的 .env(两容器独立进程,靠文件 mtime 同步)
+            # v2.6.6: 拆出独立子开关 ALERT_KEYWORD_ENABLED
             config.reload_if_env_changed()
-            if config.ALERTS_ENABLED:
+            if config.ALERT_KEYWORD_ENABLED:
                 await self.bot.send_message(config.ALERT_GROUP_ID, msg)
             else:
-                logger.info("[ALERTS_DISABLED] 跳过关键词推送 peer=%s keyword=%s (Sheet 仍写入)", peer["id"], keyword)
+                logger.info("[ALERT_KEYWORD_DISABLED] 跳过关键词推送 peer=%s keyword=%s (Sheet 仍写入)", peer["id"], keyword)
             # 写入关键词监听分表: 所属公司,商务人员,外事号,广告主,关键词,消息内容,记录时间
             if self.sheets:
                 for attempt in range(3):
@@ -177,9 +178,10 @@ class AlertBot:
             message_text=message_text,
         )
         # v2.6.2: 推送关掉则只记录不推送(alerts 表已在上面 insert_alert,DB 完整)
+        # v2.6.6: 拆出独立子开关 ALERT_NO_REPLY_ENABLED
         config.reload_if_env_changed()
-        if not config.ALERTS_ENABLED:
-            logger.info("[ALERTS_DISABLED] 跳过未回复推送 peer=%s (alerts 已记录)", peer["id"])
+        if not config.ALERT_NO_REPLY_ENABLED:
+            logger.info("[ALERT_NO_REPLY_DISABLED] 跳过未回复推送 peer=%s (alerts 已记录)", peer["id"])
             return
         try:
             sent = await self.bot.send_message(
@@ -217,9 +219,10 @@ class AlertBot:
             message_text=message_text,
         )
         # v2.6.2: 推送关掉则只记录不推送(alerts 表已在上面 insert_alert,DB 完整)
+        # v2.6.6: 拆出独立子开关 ALERT_DELETE_ENABLED
         config.reload_if_env_changed()
-        if not config.ALERTS_ENABLED:
-            logger.info("[ALERTS_DISABLED] 跳过删除推送 peer=%s (alerts 已记录)", peer["id"])
+        if not config.ALERT_DELETE_ENABLED:
+            logger.info("[ALERT_DELETE_DISABLED] 跳过删除推送 peer=%s (alerts 已记录)", peer["id"])
             return
         try:
             sent = await self.bot.send_message(

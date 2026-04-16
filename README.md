@@ -350,7 +350,15 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.6.5** (2026-04-16) — 当前稳定版
+- **v2.6.6** (2026-04-16) — 当前稳定版
+  - [NEW] 三类预警拆成独立开关 — 关键词 / 未回复 / 删除消息 各自一个 hot-toggle
+  - [UI] Dashboard 顶部改成三个 chip,任一类关掉都会显示橙色横幅说明
+  - [UI] Settings 推送开关区改成三行独立勾选,顺带保留日报开关
+  - [API] 新增 `/api/alerts/subswitch/toggle` (body: type=keyword|no_reply|delete, enabled);旧 `/api/alerts/toggle` 改成「一键全开/全关」
+  - [兼容] `ALERTS_ENABLED` 仍作为 fallback,旧部署升级后默认行为不变
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.6.5** (2026-04-16)
   - [FIX] 改 PEER_ROLE_LABEL 后,现有外事号分页内每个对话槽 row 6(B6/E6/H6/K6/...)的角色字样
     现在也会自动同步,补 v2.6.4 之前就有的同步缺口
   - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`

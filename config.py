@@ -8,12 +8,22 @@ _ENV_PATH = BASE_DIR / ".env"
 load_dotenv(_ENV_PATH, override=True)
 
 
+def _resolve_subswitch(env_key, fallback):
+    """v2.6.6: 三态 env 解析。留空=跟随 fallback 总开关;显式 true/false 则独立。"""
+    v = os.environ.get(env_key, "").strip().lower()
+    if v in ("true", "false"):
+        return v == "true"
+    return fallback
+
+
 def reload_if_env_changed():
     """v2.6.2: 检测 .env 文件变更,有变化则重新加载并刷新本模块热字段。
     用于 tg-monitor 容器感知 web 容器改过的开关(两者共用同一个 .env volume)。
     调用开销 = 一次 os.stat,极低,可以每次发预警前调用。
+    v2.6.6: 同步刷新三个独立子开关(关键词/未回复/删除)和日报开关。
     """
     global _env_mtime_cache, ALERTS_ENABLED, DAILY_REPORT_ENABLED
+    global ALERT_KEYWORD_ENABLED, ALERT_NO_REPLY_ENABLED, ALERT_DELETE_ENABLED
     try:
         m = _ENV_PATH.stat().st_mtime
     except OSError:
@@ -25,6 +35,9 @@ def reload_if_env_changed():
     load_dotenv(_ENV_PATH, override=True)
     # 只刷新「运行时可切换」字段,其他配置改了本来就要重启容器
     ALERTS_ENABLED = os.environ.get("ALERTS_ENABLED", "true").lower() == "true"
+    ALERT_KEYWORD_ENABLED = _resolve_subswitch("ALERT_KEYWORD_ENABLED", ALERTS_ENABLED)
+    ALERT_NO_REPLY_ENABLED = _resolve_subswitch("ALERT_NO_REPLY_ENABLED", ALERTS_ENABLED)
+    ALERT_DELETE_ENABLED = _resolve_subswitch("ALERT_DELETE_ENABLED", ALERTS_ENABLED)
     _daily_env_new = os.environ.get("DAILY_REPORT_ENABLED", "").strip().lower()
     if _daily_env_new in ("true", "false"):
         DAILY_REPORT_ENABLED = (_daily_env_new == "true")
@@ -62,8 +75,16 @@ ALERT_GROUP_ID = int(_group_id) if _group_id else 0
 #   - 原始消息依旧完整写 Sheets(listener 不看这个开关)
 #   - 关键词监听 Sheet 分表依旧写(方便主管看板回溯)
 #   - alerts DB 表依旧写(开回来时历史完整,不断层)
-# 日报单独受 DAILY_REPORT_ENABLED 控制(默认跟随 ALERTS_ENABLED,可独立关)
+# v2.6.6+ 拆出三个独立子开关,旧 ALERTS_ENABLED 继续作为 fallback,旧部署无感升级
 ALERTS_ENABLED = os.environ.get("ALERTS_ENABLED", "true").lower() == "true"
+
+# v2.6.6: 三个独立子开关 — 关键词 / 未回复 / 删除消息
+# 留空 = 跟随 ALERTS_ENABLED 总开关(旧部署默认行为)
+# 显式 true/false = 独立控制,不再受总开关影响
+ALERT_KEYWORD_ENABLED = _resolve_subswitch("ALERT_KEYWORD_ENABLED", ALERTS_ENABLED)
+ALERT_NO_REPLY_ENABLED = _resolve_subswitch("ALERT_NO_REPLY_ENABLED", ALERTS_ENABLED)
+ALERT_DELETE_ENABLED = _resolve_subswitch("ALERT_DELETE_ENABLED", ALERTS_ENABLED)
+
 # 日报推送开关。留空 = 跟随 ALERTS_ENABLED;显式 true/false 则独立
 _daily_env = os.environ.get("DAILY_REPORT_ENABLED", "").strip().lower()
 if _daily_env in ("true", "false"):
