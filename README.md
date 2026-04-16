@@ -359,12 +359,3 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
   - [UX] Chat ID 获取改 @userinfobot(一步到位)
 
 - **v2.6** (2026-04-15) — 统一霓虹科技风 UI + 多用户 RBAC + 一键 HTTPS(基线版)
-
-详细 roadmap(v2.7 ~ v3.0)见开发文档。
-
----
-
-## 许可 / 联系
-
-- Repo: [github.com/yifan1119/tg-monitor-template](https://github.com/yifan1119/tg-monitor-template)
-- 二次开发 / 商业授权请提 Issue 联系
