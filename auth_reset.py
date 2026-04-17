@@ -231,6 +231,14 @@ def consume_reset_code(code: str, username: str) -> bool:
         return False
     if float(info.get("expires_at", 0)) < time.time():
         return False
+    # v2.10.2: 尝试次数上限 — 错 5 次直接锁死这条 pending,需重新申请
+    if int(info.get("attempts", 0)) >= 5:
+        info["used"] = True
+        info["locked_reason"] = "max_attempts"
+        pending[username] = info
+        save_pending_resets(pending)
+        audit_log("reset_code_locked", {"username": username, "reason": "max_attempts"})
+        return False
     info["attempts"] = int(info.get("attempts", 0)) + 1
     if info.get("code") != code:
         pending[username] = info

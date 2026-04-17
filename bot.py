@@ -366,7 +366,8 @@ class AlertBot:
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
-            logger.info(f"版本更新通知已推送: {latest_short}")
+            _short = state.get("latest_short", "")
+            logger.info(f"版本更新通知已推送: {_short}")
         except Exception as e:
             logger.error(f"版本更新通知推送失败: {e}")
 

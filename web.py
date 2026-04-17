@@ -553,7 +553,30 @@ def super_required(f):
 
 
 app = Flask(__name__, template_folder="templates")
-app.secret_key = os.environ.get("WEB_SECRET_KEY", "tg-monitor-web-2026")
+# v2.10.2: Flask secret 随机化 — 每个部署一个,持久化到 data/.flask_secret
+#   优先 env var (install.sh/update.sh 写的),否则首次启动随机生成持久化
+def _load_or_gen_secret():
+    env_key = os.environ.get("WEB_SECRET_KEY", "").strip()
+    if env_key and env_key != "tg-monitor-web-2026":
+        return env_key
+    import secrets as _secrets
+    from pathlib import Path as _Path
+    sf = _Path("/app/data/.flask_secret")
+    try:
+        if sf.exists():
+            val = sf.read_text().strip()
+            if val:
+                return val
+        key = _secrets.token_hex(32)
+        sf.parent.mkdir(parents=True, exist_ok=True)
+        sf.write_text(key)
+        try: sf.chmod(0o600)
+        except Exception: pass
+        return key
+    except Exception:
+        # fallback 到一次性 runtime key(容器重启会让现有 session 失效,但不会用固定值)
+        return _secrets.token_hex(32)
+app.secret_key = _load_or_gen_secret()
 
 # 反代场景(Caddy 加 HTTPS 给 OAuth 用):识别 X-Forwarded-* 头,让 request.host_url 拿到 https://
 # 没反代时这个不会有副作用,因为浏览器不会自己加这些头
