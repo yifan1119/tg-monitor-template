@@ -543,13 +543,6 @@
         <div class="kpi-sub" id="kpi-messages-sub">—</div>
       </div>
     </div>
-    <div class="alert-switches">
-      <span style="font-size:11px;color:#7c8a9a;letter-spacing:1px;">🔔 预警开关:</span>
-      <span class="sw-chip" id="sw-keyword">🔑 关键词</span>
-      <span class="sw-chip" id="sw-no_reply">⏰ 未回复</span>
-      <span class="sw-chip" id="sw-delete">🗑 删除消息</span>
-      <span class="sw-chip" id="sw-daily" style="margin-left:auto;">📅 日报</span>
-    </div>
   </div>
 
   <!-- ===== Row: 账号矩阵 + 实时告警流 ===== -->
@@ -743,12 +736,6 @@ function renderSystem(d) {
     `↓${m.in} ↑${m.out}` +
     (m.media > 0 ? ` · 🖼${m.media}` : '') +
     (m.deleted > 0 ? ` · 🗑${m.deleted}` : ''));
-  // 三个开关
-  const sw = sys.alert_switches;
-  el('sw-keyword').classList.toggle('off', !sw.keyword);
-  el('sw-no_reply').classList.toggle('off', !sw.no_reply);
-  el('sw-delete').classList.toggle('off', !sw.delete);
-  el('sw-daily').classList.toggle('off', !sys.daily_report_enabled);
 }
 
 function renderAccounts(accounts) {
@@ -1081,7 +1068,7 @@ poll();
 
     document.getElementById('upg-soft').onclick=doSoftUpgrade;
     document.getElementById('upg-ssh').onclick=async function(){
-      try{ await navigator.clipboard.writeText(cmds); this.textContent=\'✓ 已复制\'; setTimeout(()=>{this.textContent='📋 复制 SSH 命令';},2000);}catch(e){ prompt('复制以下命令:', cmds); }
+      try{ await navigator.clipboard.writeText(cmds); this.textContent='✓ 已复制'; setTimeout(()=>{this.textContent='📋 复制 SSH 命令';},2000);}catch(e){ prompt('复制以下命令:', cmds); }
     };
   }
 

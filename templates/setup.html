@@ -1973,7 +1973,7 @@ bindPushToggle('toggle_daily_report_enabled', 'daily_report_enabled_status', '/a
 
     document.getElementById('upg-soft').onclick=doSoftUpgrade;
     document.getElementById('upg-ssh').onclick=async function(){
-      try{ await navigator.clipboard.writeText(cmds); this.textContent=\'✓ 已复制\'; setTimeout(()=>{this.textContent='📋 复制 SSH 命令';},2000);}catch(e){ prompt('复制以下命令:', cmds); }
+      try{ await navigator.clipboard.writeText(cmds); this.textContent='✓ 已复制'; setTimeout(()=>{this.textContent='📋 复制 SSH 命令';},2000);}catch(e){ prompt('复制以下命令:', cmds); }
     };
   }
 

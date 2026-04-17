@@ -26,6 +26,38 @@ class AlertBot:
         self._register_handlers()
 
     def _register_handlers(self):
+        @self.dp.message(F.text == "/start")
+        async def on_start(message):
+            await message.reply(
+                "👋 这是 TG 监控的预警 Bot。\n"
+                "如果你要绑定账号做密码找回,请在网页设置页获取绑定码,\n"
+                "然后发 /bind BIND-XXXXXX"
+            )
+
+        @self.dp.message(F.text.startswith("/bind"))
+        async def on_bind(message):
+            if message.chat.type != "private":
+                await message.reply("请私聊我发送此指令。")
+                return
+            parts = message.text.strip().split(maxsplit=1)
+            if len(parts) != 2:
+                await message.reply("用法: /bind BIND-XXXXXX")
+                return
+            code = parts[1].strip().upper()
+            import auth_reset
+            tg_user_id = message.from_user.id
+            tg_username = (message.from_user.username
+                           or message.from_user.full_name
+                           or str(tg_user_id))
+            bound_user = auth_reset.try_complete_bind(code, tg_user_id, tg_username)
+            if bound_user:
+                await message.reply(
+                    f"✅ 已绑定到帐号 {bound_user}\n"
+                    "以后忘记密码可在登入页点「忘记密码」通过我私信收到验证码。"
+                )
+            else:
+                await message.reply("❌ 绑定码无效或已过期。请回网页刷新获取新绑定码。")
+
         @self.dp.callback_query(F.data.startswith("approve:") | F.data.startswith("reject:"))
         async def on_audit(callback: CallbackQuery):
             data = callback.data

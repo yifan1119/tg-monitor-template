@@ -294,10 +294,163 @@
   {% if error %}
   <div class="error">{{ error }}</div>
   {% endif %}
+  {% if reset_msg %}
+  <div class="error" style="color:#4fae4f;background:rgba(79,174,79,0.1);border-color:rgba(79,174,79,0.3);">{{ reset_msg }}</div>
+  {% endif %}
+  <div style="margin-top:14px;text-align:right;">
+    <a href="#" id="forgot-link" style="font-size:11px;color:var(--accent-red);letter-spacing:1.5px;text-decoration:none;text-transform:uppercase;">忘记密码？</a>
+  </div>
   <div class="sys-status">
     <span><span class="led"></span>系统在线</span>
     <span>v2.6.12 · 加密连线</span>
   </div>
 </form>
+
+<!-- 忘记密码 Modal -->
+<div id="forgot-modal" style="display:none;position:fixed;inset:0;z-index:100;
+     background:rgba(0,0,0,0.75);backdrop-filter:blur(6px);
+     align-items:center;justify-content:center;">
+  <div style="position:relative;width:420px;max-width:92vw;
+              background:rgba(13,13,13,0.92);border:1px solid rgba(42,171,238,0.3);
+              border-radius:14px;padding:32px 32px 28px;
+              box-shadow:0 0 60px rgba(42,171,238,0.2);
+              font-family:'JetBrains Mono',monospace;color:#fff;">
+    <button id="forgot-close" type="button"
+            style="position:absolute;top:10px;right:14px;background:none;border:none;
+                   color:#6d7f8f;font-size:22px;cursor:pointer;">×</button>
+    <div style="font-family:'Orbitron',sans-serif;font-size:16px;letter-spacing:2px;
+                color:#2aabee;margin-bottom:4px;">RESET PASSWORD</div>
+    <div style="font-size:11px;color:#6d7f8f;letter-spacing:1.5px;margin-bottom:22px;text-transform:uppercase;">▸ 通过 TG 私信接收验证码</div>
+
+    <!-- Step 1 -->
+    <div id="forgot-step1">
+      <input id="forgot-username" type="text" placeholder="账号" autocomplete="username"
+             style="width:100%;padding:13px 14px;border-radius:10px;
+                    border:1px solid rgba(42,171,238,0.2);background:rgba(5,5,5,0.6);
+                    color:#fff;font-family:inherit;font-size:14px;letter-spacing:2px;
+                    outline:none;text-align:center;margin-bottom:12px;">
+      <button id="forgot-send" type="button" class="login-btn" style="margin-top:4px;">▸ 发送验证码</button>
+    </div>
+
+    <!-- Step 2 -->
+    <div id="forgot-step2" style="display:none;">
+      <div style="font-size:11px;color:#64abde;margin-bottom:12px;letter-spacing:1px;">
+        已通过 TG 私信发送 6 位验证码(5 分钟有效)
+      </div>
+      <input id="forgot-code" type="text" placeholder="6 位验证码" maxlength="6"
+             style="width:100%;padding:13px 14px;border-radius:10px;
+                    border:1px solid rgba(42,171,238,0.2);background:rgba(5,5,5,0.6);
+                    color:#fff;font-family:inherit;font-size:15px;letter-spacing:6px;
+                    outline:none;text-align:center;margin-bottom:10px;">
+      <input id="forgot-newpwd" type="password" placeholder="新密码 (≥8 位)"
+             style="width:100%;padding:13px 14px;border-radius:10px;
+                    border:1px solid rgba(42,171,238,0.2);background:rgba(5,5,5,0.6);
+                    color:#fff;font-family:inherit;font-size:14px;letter-spacing:2px;
+                    outline:none;text-align:center;margin-bottom:10px;">
+      <input id="forgot-newpwd2" type="password" placeholder="确认新密码"
+             style="width:100%;padding:13px 14px;border-radius:10px;
+                    border:1px solid rgba(42,171,238,0.2);background:rgba(5,5,5,0.6);
+                    color:#fff;font-family:inherit;font-size:14px;letter-spacing:2px;
+                    outline:none;text-align:center;margin-bottom:14px;">
+      <button id="forgot-submit" type="button" class="login-btn">▸ 重置密码</button>
+    </div>
+
+    <div id="forgot-msg" style="margin-top:14px;font-size:12px;text-align:center;
+                                 min-height:18px;letter-spacing:1px;"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const modal = document.getElementById('forgot-modal');
+  const link = document.getElementById('forgot-link');
+  const closeBtn = document.getElementById('forgot-close');
+  const step1 = document.getElementById('forgot-step1');
+  const step2 = document.getElementById('forgot-step2');
+  const msgEl = document.getElementById('forgot-msg');
+  const unameInput = document.getElementById('forgot-username');
+  const sendBtn = document.getElementById('forgot-send');
+  const submitBtn = document.getElementById('forgot-submit');
+  let currentUser = '';
+
+  function setMsg(text, ok){
+    msgEl.textContent = text || '';
+    msgEl.style.color = ok ? '#4fae4f' : '#ff6b6b';
+  }
+  function open(){
+    modal.style.display = 'flex';
+    step1.style.display = 'block';
+    step2.style.display = 'none';
+    unameInput.value = '';
+    document.getElementById('forgot-code').value = '';
+    document.getElementById('forgot-newpwd').value = '';
+    document.getElementById('forgot-newpwd2').value = '';
+    setMsg('', true);
+    setTimeout(()=>unameInput.focus(), 100);
+  }
+  function close(){ modal.style.display='none'; }
+
+  link.addEventListener('click', (e)=>{ e.preventDefault(); open(); });
+  closeBtn.addEventListener('click', close);
+  modal.addEventListener('click', (e)=>{ if (e.target === modal) close(); });
+
+  sendBtn.addEventListener('click', async ()=>{
+    const u = unameInput.value.trim();
+    if (!u) { setMsg('请输入账号', false); return; }
+    sendBtn.disabled = true;
+    setMsg('发送中...', true);
+    try {
+      const r = await fetch('/api/auth/forgot_password', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username: u}),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        currentUser = u;
+        step1.style.display = 'none';
+        step2.style.display = 'block';
+        setMsg('验证码已发送,请查看 TG 私信', true);
+        setTimeout(()=>document.getElementById('forgot-code').focus(), 100);
+      } else {
+        setMsg(j.error || '发送失败', false);
+      }
+    } catch(e) {
+      setMsg('网络错误', false);
+    } finally {
+      sendBtn.disabled = false;
+    }
+  });
+
+  submitBtn.addEventListener('click', async ()=>{
+    const code = document.getElementById('forgot-code').value.trim();
+    const p1 = document.getElementById('forgot-newpwd').value;
+    const p2 = document.getElementById('forgot-newpwd2').value;
+    if (!code || code.length !== 6) { setMsg('验证码必须 6 位', false); return; }
+    if (p1.length < 8) { setMsg('新密码至少 8 位', false); return; }
+    if (p1 !== p2) { setMsg('两次密码不一致', false); return; }
+    submitBtn.disabled = true;
+    setMsg('提交中...', true);
+    try {
+      const r = await fetch('/api/auth/reset_password', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username: currentUser, code: code, new_password: p1}),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        setMsg('✅ 密码已重置,正在跳转登入...', true);
+        setTimeout(()=>{ window.location.href = '/login?reset=1'; }, 1200);
+      } else {
+        setMsg(j.error || '重置失败', false);
+      }
+    } catch(e) {
+      setMsg('网络错误', false);
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+})();
+</script>
 </body>
 </html>

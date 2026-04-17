@@ -8,12 +8,14 @@
 #   curl -fsSL https://raw.githubusercontent.com/yifan1119/tg-monitor-template/main/update.sh | bash
 #
 # 行为:
-#   1. 升级前自动:
+#   1. 先 fetch,比对远端 SHA,已是最新 → 直接退出,不动本地任何东西
+#   2. 需要升级时:
 #        - 把当前 commit sha 写入 .last_commit (rollback.sh 用)
 #        - 检测到本地修改的 tracked 文件 → 自动 git stash 保护
-#   2. git fetch + git reset --hard origin/main
-#   3. docker compose up -d --build 重建镜像
-#   4. 健康检查 60 秒,失败 → 自动回退到升级前 sha (含 stash 还原)
+#        - .env 自动补新字段 (METRICS_TOKEN / INSTALL_DIR / VPS_PUBLIC_IP)
+#   3. git reset --hard origin/main
+#   4. docker compose up -d --build 重建镜像
+#   5. 健康检查 60 秒,失败 → 自动回退到升级前 sha (含 stash 还原)
 #
 #   保留:.env / data/ / sessions/ / data/google_oauth_token.json
 #   untracked 文件不会被动 (你的本地新增文件安全)
@@ -54,9 +56,22 @@ echo "  部门: ${COMPANY_NAME}"
 echo "  路径: ${INSTALL_DIR}"
 echo ""
 
-# ===== 1. 记录升级前 sha (rollback.sh 读这个文件) =====
+# ===== 1. 先 fetch 比对远端,已是最新直接退出(不动本地) =====
+echo "📥 检查远端版本..."
+git fetch origin
 OLD_SHA=$(git rev-parse HEAD)
 OLD_SHORT=$(git rev-parse --short HEAD)
+REMOTE_SHA=$(git rev-parse origin/main)
+REMOTE_SHORT=$(git rev-parse --short origin/main)
+
+if [ "$OLD_SHA" = "$REMOTE_SHA" ]; then
+    echo ""
+    echo "ℹ 当前已是最新版 (${OLD_SHORT}),无需升级"
+    echo "  如需强制重建容器: docker compose -p tg-${COMPANY_NAME} up -d --build"
+    exit 0
+fi
+
+echo "  本地: ${OLD_SHORT}  →  远端: ${REMOTE_SHORT}"
 echo "$OLD_SHA" > .last_commit
 echo "📌 升级前版本: ${OLD_SHORT}"
 
@@ -78,37 +93,33 @@ fi
 # ===== 3. 拉最新代码 =====
 echo ""
 echo "📥 拉取最新代码..."
-git fetch origin
 git reset --hard origin/main
 NEW_SHA=$(git rev-parse HEAD)
 NEW_SHORT=$(git rev-parse --short HEAD)
 echo "  ✅ 代码已同步到 ${NEW_SHORT}"
 
-# 没变化:不用动 docker
-if [ "$OLD_SHA" = "$NEW_SHA" ]; then
-    echo ""
-    echo "ℹ 已经是最新版,无需重建容器"
-    # stash 还原(因为没升级,本地修改要还回去)
-    if [ -n "$STASH_TAG" ]; then
-        STASH_REF=$(git stash list | grep "$STASH_TAG" | head -1 | awk -F: '{print $1}')
-        if [ -n "$STASH_REF" ]; then
-            git stash pop "$STASH_REF" >/dev/null 2>&1 && \
-              echo "📦 本地修改已还原 (${STASH_TAG})"
-        fi
-    fi
-    exit 0
-fi
-
 # ===== 3.5 .env migrate — 老部署升级时自动补新字段 =====
 #   v2.8.0: METRICS_TOKEN (中央台接入)
 if [ -f ".env" ] && ! grep -q "^METRICS_TOKEN=" .env; then
     NEW_TOKEN=$(openssl rand -hex 24 2>/dev/null || head -c 48 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 48)
-    # 末尾若无换行先补一个,避免追加时和上一行粘连
     [ -n "$(tail -c 1 .env)" ] && echo "" >> .env
     echo "" >> .env
     echo "# 中央台接入 Token (v2.8+; 设置页可重置)" >> .env
     echo "METRICS_TOKEN=${NEW_TOKEN}" >> .env
     echo "  ✅ 已为本部署生成 METRICS_TOKEN (登入后在设置页「中央台接入」复制)"
+fi
+
+#   v2.10.0: INSTALL_DIR + VPS_PUBLIC_IP (驾驶舱 + 升级按钮用)
+if [ -f ".env" ] && ! grep -q "^INSTALL_DIR=" .env; then
+    [ -n "$(tail -c 1 .env)" ] && echo "" >> .env
+    echo "INSTALL_DIR=${INSTALL_DIR}" >> .env
+    echo "  ✅ 已补 INSTALL_DIR=${INSTALL_DIR}"
+fi
+if [ -f ".env" ] && ! grep -q "^VPS_PUBLIC_IP=" .env; then
+    VPS_IP=$(curl -s --max-time 3 ifconfig.me 2>/dev/null || curl -s --max-time 3 ipinfo.io/ip 2>/dev/null || hostname -I | awk '{print $1}')
+    [ -n "$(tail -c 1 .env)" ] && echo "" >> .env
+    echo "VPS_PUBLIC_IP=${VPS_IP}" >> .env
+    echo "  ✅ 已补 VPS_PUBLIC_IP=${VPS_IP}"
 fi
 
 # ===== 4. 重建容器 =====
@@ -143,7 +154,6 @@ if [ -n "$WEB_PORT" ]; then
         echo "🐳 重建旧版本容器..."
         docker compose -p "tg-${COMPANY_NAME}" up -d --build
 
-        # 还原 stash
         if [ -n "$STASH_TAG" ]; then
             STASH_REF=$(git stash list | grep "$STASH_TAG" | head -1 | awk -F: '{print $1}')
             if [ -n "$STASH_REF" ]; then

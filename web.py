@@ -51,6 +51,9 @@ def load_users():
                 "password_hash": v.get("password_hash", ""),
                 "is_admin": bool(v.get("is_admin", False)) or is_super,  # super 必定也是 admin
                 "is_super": is_super,
+                "tg_user_id": v.get("tg_user_id"),
+                "tg_username": v.get("tg_username"),
+                "tg_bound_at": v.get("tg_bound_at"),
             }
     return normalized
 
@@ -1391,6 +1394,141 @@ def api_users_change_password():
     return jsonify({"ok": True, "msg": "密码已更新"})
 
 
+# ============ TG 绑定 / 密码重置 ============
+import auth_reset  # noqa: E402
+
+_bot_username_cache = {"name": None, "ts": 0.0}
+
+
+def get_bot_username():
+    """查询 bot 的 @username,缓存 1 小时"""
+    now = _time.time()
+    if _bot_username_cache["name"] and now - _bot_username_cache["ts"] < 3600:
+        return _bot_username_cache["name"]
+    token = os.environ.get("BOT_TOKEN", "") or config.BOT_TOKEN
+    if not token:
+        return None
+    try:
+        url = f"https://api.telegram.org/bot{token}/getMe"
+        with urllib.request.urlopen(url, timeout=6) as resp:
+            j = json.loads(resp.read().decode("utf-8"))
+        if j.get("ok"):
+            name = j["result"].get("username")
+            if name:
+                _bot_username_cache["name"] = name
+                _bot_username_cache["ts"] = now
+                return name
+    except Exception as e:
+        logger.warning("getMe 失败: %s", e)
+    return None
+
+
+@app.route("/api/auth/bind_status", methods=["GET"])
+@login_required
+def api_bind_status():
+    me = flask_session.get("username", "")
+    users = load_users()
+    u = users.get(me, {})
+    bot_username = get_bot_username()
+    if u.get("tg_user_id"):
+        return jsonify({
+            "ok": True,
+            "bound": True,
+            "tg_username": u.get("tg_username") or "",
+            "tg_user_id": u.get("tg_user_id"),
+            "bot_username": bot_username,
+            "pending_code": None,
+            "pending_expires_in": None,
+        })
+    # 生成 / 复用 pending 绑定码
+    code = auth_reset.create_bind_pending(me)
+    pending = auth_reset.load_pending_binds()
+    info = pending.get(code, {})
+    expires_in = max(0, int(float(info.get("expires_at", 0)) - _time.time()))
+    return jsonify({
+        "ok": True,
+        "bound": False,
+        "tg_username": None,
+        "bot_username": bot_username,
+        "pending_code": code,
+        "pending_expires_in": expires_in,
+    })
+
+
+@app.route("/api/auth/unbind", methods=["POST"])
+@login_required
+def api_unbind():
+    me = flask_session.get("username", "")
+    if not me:
+        return jsonify({"ok": False, "msg": "未登录"}), 401
+    ok = auth_reset.unbind_user(me)
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/auth/forgot_password", methods=["POST"])
+def api_forgot_password():
+    ip = _client_ip()
+    # 复用现有 IP 锁定: 如果 IP 已被锁,拒绝
+    if _lockout_remaining(ip) > 0:
+        return jsonify({"ok": False, "error": "此 IP 请求次数过多,请稍后再试"}), 429
+    data = request.get_json(silent=True) or request.form
+    username = (data.get("username") or "").strip()
+    if not username:
+        return jsonify({"ok": False, "error": "请输入用户名"})
+    users = load_users()
+    u = users.get(username)
+    # 无论账号是否存在都返回 ok: true (防枚举),但实际只在绑定了 TG 时才发码
+    if not u or not u.get("tg_user_id"):
+        auth_reset.audit_log("reset_request_unbound", {"username": username, "ip": ip,
+                                                        "found": bool(u)})
+        # 轻微记一次失败,避免无限轰炸(但不触发完全锁定)
+        _record_login_attempt(ip, False)
+        return jsonify({"ok": True})  # silent
+    code = auth_reset.create_reset_pending(username)
+    if code is None:
+        return jsonify({"ok": False, "error": "请求过于频繁,请 60 秒后再试"})
+    token = os.environ.get("BOT_TOKEN", "") or config.BOT_TOKEN
+    sent = auth_reset.tg_send_dm(
+        token, u["tg_user_id"],
+        f"您的密码重置验证码: {code}\n5 分钟有效。如非本人操作请忽略。"
+    )
+    auth_reset.audit_log("reset_request_sent", {
+        "username": username, "ip": ip, "tg_user_id": u["tg_user_id"],
+        "dm_sent": sent,
+    })
+    if not sent:
+        return jsonify({"ok": False, "error": "验证码发送失败,请先在 TG 私聊 Bot 发 /start 后重试"})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/reset_password", methods=["POST"])
+def api_reset_password():
+    ip = _client_ip()
+    if _lockout_remaining(ip) > 0:
+        return jsonify({"ok": False, "error": "此 IP 请求次数过多,请稍后再试"}), 429
+    data = request.get_json(silent=True) or request.form
+    username = (data.get("username") or "").strip()
+    code = (data.get("code") or "").strip()
+    new_pwd = data.get("new_password") or ""
+    if not username or not code or not new_pwd:
+        return jsonify({"ok": False, "error": "参数不完整"})
+    if len(new_pwd) < 8:
+        return jsonify({"ok": False, "error": "新密码至少 8 位"})
+    if not auth_reset.consume_reset_code(code, username):
+        _record_login_attempt(ip, False)
+        auth_reset.audit_log("reset_fail", {"username": username, "ip": ip})
+        return jsonify({"ok": False, "error": "验证码错误或已过期"})
+    users = load_users()
+    if username not in users:
+        auth_reset.audit_log("reset_fail_nouser", {"username": username, "ip": ip})
+        return jsonify({"ok": False, "error": "账号不存在"})
+    users[username]["password_hash"] = generate_password_hash(new_pwd)
+    save_users(users)
+    _record_login_attempt(ip, True)  # 清掉此 IP 的失败记录
+    auth_reset.audit_log("reset_success", {"username": username, "ip": ip})
+    return jsonify({"ok": True})
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login_page():
     ip = _client_ip()
@@ -1431,7 +1569,8 @@ def login_page():
         return render_template("login.html",
                                error=f"此 IP 已被锁定,请 {mins} 分钟后再试",
                                company=config.COMPANY_DISPLAY)
-    return render_template("login.html", error=None, company=config.COMPANY_DISPLAY)
+    reset_msg = "密码已重置,请用新密码登入" if request.args.get("reset") == "1" else None
+    return render_template("login.html", error=None, reset_msg=reset_msg, company=config.COMPANY_DISPLAY)
 
 
 @app.route("/logout")
