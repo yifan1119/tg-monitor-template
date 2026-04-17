@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.6.1(2026-04-16) — 外部 Caddy 自动兼容 / 表单防丢失 / OAuth 流程优化
+> 📌 **最新版**:v2.10.1(2026-04-18) — 驾驶舱总览 / TG 绑定 + 忘记密码 / 一键升级按钮 / 自动回滚 + .env 迁移
 
 ---
 
@@ -35,6 +35,11 @@
 - Web 后台 + 设置精灵,零命令行配置
 - **一键 HTTPS**:自动 Caddy + Let's Encrypt + nip.io 域名
 - **智能兼容 VPS 现有 Caddy**:自动识别并接入外部反代,不抢端口
+- **驾驶舱总览** `/dashboard`:账号矩阵 / 实时告警流 / 今日数据 / 系统状态一屏看完 (v2.10)
+- **一键热升级按钮**:web 后台点一下自动拉新版 + 重建 + 健康检查 + 失败回滚 (v2.10)
+- **TG 绑定 + 忘记密码**:管理员私聊 bot 绑定 TG,忘记密码时 DM 发验证码改密 (v2.10.1)
+- **中央台接入**:每部署自动生成 METRICS_TOKEN,`/api/v1/metrics` Bearer 上报数据 (v2.8)
+- **自动版本通知**:每 6h 查 GitHub 新版,Dashboard 横幅 + TG Bot 推送 (v2.9)
 
 ---
 
@@ -383,7 +388,48 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.6.12** (2026-04-16) — 当前稳定版
+- **v2.10.1** (2026-04-18) — 当前稳定版
+  - [NEW] TG 绑定 + 忘记密码:管理员在账号管理页绑定 TG (私聊 bot 发 `/bind XXXXXX`),
+    登入页点「忘记密码」→ bot DM 6 位验证码 → 输入验证码改新密码
+  - [FIX] `update.sh` 先比对远端 SHA 才 stash,已是最新直接退出不动本地
+    — 避免 OLD==NEW 时 stash pop 覆盖新版文件(v2.10.0 实测踩过)
+  - [NEW] `update.sh` 自动补 v2.10 新字段:`INSTALL_DIR` / `VPS_PUBLIC_IP` 老部署升级无感
+  - [UX] 驾驶舱移除无功能的「预警开关」pill(账号管理页已有,避免重复误导)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.0** (2026-04-18)
+  - [NEW] 驾驶舱 `/dashboard`:账号矩阵 + 实时告警流 + 今日 KPI + 系统状态(5s 轮询)
+  - [NEW] 一键热升级按钮:web 后台「检查更新」→ 有新版弹 modal → 点升级自动跑
+    update.sh(`INSTALL_DIR` + 用户 IP 白名单校验,60s 健康检查,失败自动回滚)
+  - [NEW] `.env` 新增 `INSTALL_DIR` + `VPS_PUBLIC_IP`(upgrader 用)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.9.2** (2026-04-17)
+  - [FIX] 移除本地实验泄漏到 main 的「驾驶舱」链接(v2.10 正式上后重新加回)
+
+- **v2.9.1** (2026-04-17)
+  - [UX] 版本更新通知文案改白话(去掉 commit sha / release tag 等技术词)
+  - [调参] GitHub 检查频率 1h → 6h(避免打扰 + 留 rate limit)
+
+- **v2.9.0** (2026-04-17)
+  - [NEW] 自动版本更新检测:update_checker 每 6 小时查 GitHub main branch
+  - [NEW] 发现新版 → Dashboard 顶部横幅 + TG Bot 群组推送(含 commit message + 升级命令)
+  - [NEW] `/api/update/check` 手动触发检查
+
+- **v2.8.1** (2026-04-17)
+  - [FIX] `METRICS_TOKEN` 兜底迁移:update.sh 没补到的老部署,web.py 启动时再补一次
+
+- **v2.8.0** (2026-04-17)
+  - [NEW] 中央台接入:`/api/v1/metrics` 用 Bearer token 鉴权,每部署独立 `METRICS_TOKEN`
+  - [NEW] 设置页「中央台接入」板块:一键复制 token,可重置
+  - [NEW] update.sh 自动为老部署生成 `METRICS_TOKEN`
+
+- **v2.7.0** (2026-04-17)
+  - [NEW] `update.sh` 加回滚保护:升级失败 60s 健康检查不过 → 自动 `git reset` 到升级前 sha + 重建容器
+  - [NEW] `rollback.sh`:手动一键回退上个版本(读 `.last_commit`)
+  - [NEW] 本地修改自动 stash 保护,保留 `.env` / `data/` / `sessions/`
+
+- **v2.6.12** (2026-04-16)
   - [UX] ⓘ 帮助提示文案改成客户白话(去掉 listener / hot-reload / SHEET_ID 等技术词)
   - [FIX] 删掉「Telethon session 异常」这条 — 写错了,session 死掉重启监听修不了,
     要重新走加号流程;改成 ※ 备注引导客户去重新加号
