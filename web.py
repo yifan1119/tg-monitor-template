@@ -1981,6 +1981,42 @@ def api_metrics_token_regenerate():
     return jsonify({"ok": True, "token": new_token})
 
 
+# ===================================================================
+# v2.9.0 — 版本更新检查 (Dashboard 横幅 + 手动触发)
+# ===================================================================
+@app.route("/api/update/status", methods=["GET"])
+@login_required
+def api_update_status():
+    """Dashboard 读这个拿横幅数据"""
+    try:
+        import update_checker
+        state = update_checker.load_state()
+        env = read_env()
+        company = env.get("COMPANY_NAME", "")
+        state["company_name"] = company
+        state["upgrade_cmd"] = f"cd /root/tg-monitor-{company} && bash update.sh"
+        return jsonify({"ok": True, "state": state})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/update/check_now", methods=["POST"])
+@login_required
+def api_update_check_now():
+    """手动触发一次 check(不推 TG,只刷状态)— Dashboard 右上角「检查更新」按钮调"""
+    try:
+        import update_checker
+        has_update, state = update_checker.check_once()
+        env = read_env()
+        company = env.get("COMPANY_NAME", "")
+        state["company_name"] = company
+        state["upgrade_cmd"] = f"cd /root/tg-monitor-{company} && bash update.sh"
+        return jsonify({"ok": True, "has_update": has_update, "state": state})
+    except Exception as e:
+        logger.exception("update check_now failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     db.init_db()
     print("🌐 登录管理介面启动: http://localhost:5001")

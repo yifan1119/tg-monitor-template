@@ -577,6 +577,105 @@
   </div>
 </div>
 
+{# v2.9.0: 版本更新横幅 #}
+<div id="update-banner" style="display:none;margin:0 22px 18px;padding:14px 18px;border-radius:8px;
+     background:linear-gradient(135deg,rgba(255,184,70,0.12),rgba(42,171,238,0.08));
+     border:1px solid rgba(255,184,70,0.35);color:#ffd78a;font-size:13px;line-height:1.7;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;">
+    <div style="flex:1;min-width:260px;">
+      <div style="font-weight:600;font-size:14px;color:#ffb946;margin-bottom:6px;">
+        🆕 TG 监控有新版可升级
+      </div>
+      <div style="color:#e6d5b0;">
+        当前 <code id="ub-local" style="color:#9cc9e8;"></code>
+        → 最新 <code id="ub-latest" style="color:#7fffbf;"></code>
+        <span id="ub-subject" style="color:#bfd6e8;"></span>
+      </div>
+      <div id="ub-commits" style="margin-top:6px;font-size:12px;color:#bfd6e8;"></div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button type="button" id="ub-copy-btn"
+              style="padding:8px 14px;background:rgba(42,171,238,0.15);border:1px solid rgba(42,171,238,0.5);
+                     color:#2aabee;border-radius:4px;cursor:pointer;font-size:12px;font-family:inherit;">
+        📋 复制升级命令
+      </button>
+      <button type="button" id="ub-dismiss"
+              style="padding:8px 12px;background:transparent;border:1px solid rgba(191,214,232,0.3);
+                     color:#bfd6e8;border-radius:4px;cursor:pointer;font-size:12px;font-family:inherit;">
+        本次忽略
+      </button>
+    </div>
+  </div>
+  <div style="margin-top:8px;padding:8px 10px;background:rgba(0,0,0,0.3);border-radius:4px;
+              font-family:'JetBrains Mono',monospace;font-size:11px;color:#9cc9e8;word-break:break-all;">
+    <span id="ub-cmd"></span>
+  </div>
+  <div style="margin-top:6px;font-size:11px;color:#8ba3b8;">
+    ✓ update.sh 有回滚保护,挂了自动退回旧版 · 升级期间 web 会短暂重启(30 秒内恢复)
+  </div>
+</div>
+
+<script>
+(function(){
+  const banner = document.getElementById('update-banner');
+  const ubLocal = document.getElementById('ub-local');
+  const ubLatest = document.getElementById('ub-latest');
+  const ubSubject = document.getElementById('ub-subject');
+  const ubCommits = document.getElementById('ub-commits');
+  const ubCmd = document.getElementById('ub-cmd');
+  const copyBtn = document.getElementById('ub-copy-btn');
+  const dismissBtn = document.getElementById('ub-dismiss');
+
+  async function check(){
+    try {
+      const r = await fetch('/api/update/status');
+      const j = await r.json();
+      if (!j.ok || !j.state || !j.state.has_update) { banner.style.display='none'; return; }
+      const s = j.state;
+      // 本次会话忽略过就不再显示
+      if (sessionStorage.getItem('ub-dismissed') === s.latest_sha) { banner.style.display='none'; return; }
+      ubLocal.textContent = s.local_short || '?';
+      ubLatest.textContent = s.latest_short || '?';
+      ubSubject.textContent = ' — ' + (s.latest_subject || '');
+      ubCmd.textContent = s.upgrade_cmd || '';
+      const commits = s.new_commits || [];
+      if (commits.length) {
+        ubCommits.textContent = '含 ' + commits.length + ' 个 commit: ' +
+          commits.slice(-3).map(c => c.sha + ' ' + c.subject).join(' · ') +
+          (commits.length > 3 ? ' ...' : '');
+      } else {
+        ubCommits.textContent = '';
+      }
+      banner.style.display = 'block';
+    } catch(e) { banner.style.display='none'; }
+  }
+
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(ubCmd.textContent);
+      copyBtn.textContent = '✓ 已复制';
+      setTimeout(()=>{copyBtn.textContent='📋 复制升级命令';}, 2000);
+    } catch(e) {
+      const r = document.createRange(); r.selectNode(ubCmd);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(r);
+      document.execCommand('copy');
+      copyBtn.textContent = '✓ 已选中,Ctrl+C 复制';
+    }
+  };
+
+  dismissBtn.onclick = () => {
+    const j = JSON.parse(sessionStorage.getItem('ub-latest-state') || '{}');
+    sessionStorage.setItem('ub-dismissed', j.latest_sha || 'yes');
+    banner.style.display = 'none';
+  };
+
+  check();
+  // 10 分钟前端主动刷一次(tasks.py 后台每小时也会刷)
+  setInterval(check, 10*60*1000);
+})();
+</script>
+
 <div class="container">
   <!-- Status -->
   <div class="section">

@@ -32,6 +32,7 @@ class TaskScheduler:
             self._daily_report_loop(),
             self._peer_name_consistency_loop(),
             self._media_cleanup_loop(),
+            self._update_check_loop(),
         )
 
     async def stop(self):
@@ -324,6 +325,18 @@ class TaskScheduler:
                 logger.info("每日媒体清理完成: 删 %d 失败 %d", deleted, failed)
             except Exception as e:
                 logger.error("每日媒体清理失败: %s", e)
+
+    async def _update_check_loop(self):
+        """v2.9.0: 每小时查 GitHub 有没有新版,有就推 TG 通知(同版本只推一次)。
+        启动 30 秒后第一次 check,之后每小时一次。"""
+        import update_checker
+        await asyncio.sleep(30)  # 启动后稍等一下,让 listener/bot 都就位
+        while self._running:
+            try:
+                await update_checker.check_and_notify(self.bot)
+            except Exception as e:
+                logger.warning(f"update check loop error: {e}")
+            await asyncio.sleep(3600)  # 1 小时
 
     async def _daily_report_loop(self):
         """每天北京时间 00:00 发日报"""

@@ -606,4 +606,23 @@ def snapshot():
         "sheets": sheets_health(),
         "bot": bot_health(),
         "config": config_snapshot(),
+        "update": _update_info(),
     }
+
+
+def _update_info():
+    """v2.9.0: 版本更新信息(从 update_checker 状态文件读,中央台也能看到)"""
+    try:
+        import update_checker
+        state = update_checker.load_state()
+        return {
+            "has_update": bool(state.get("has_update")),
+            "local_short": state.get("local_short", ""),
+            "latest_short": state.get("latest_short", ""),
+            "latest_subject": state.get("latest_subject", ""),
+            "new_commits": state.get("new_commits", []),
+            "last_check": state.get("last_check", ""),
+            "error": state.get("error", ""),
+        }
+    except Exception:
+        return {"has_update": False}

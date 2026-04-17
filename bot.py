@@ -290,6 +290,50 @@ class AlertBot:
         except Exception as e:
             logger.error("发送日报失败: %s", e)
 
+    async def send_update_notice(self, state: dict):
+        """v2.9.0: 发现 GitHub 有新版 → 推送到预警群(同版本只推一次,update_checker 控制去重)"""
+        if not self.bot or not config.ALERT_GROUP_ID:
+            return
+
+        latest_short = state.get("latest_short", "?")
+        latest_subject = state.get("latest_subject", "")
+        local_short = state.get("local_short", "?")
+        new_commits = state.get("new_commits", [])
+
+        company = getattr(config, "COMPANY_NAME", "")
+        company_display = getattr(config, "COMPANY_DISPLAY", company)
+
+        lines = [
+            f"🆕 TG 监控有新版本",
+            "",
+            f"部门:{company_display}",
+            f"当前:<code>{local_short}</code>",
+            f"最新:<code>{latest_short}</code>  {latest_subject}",
+        ]
+        if new_commits:
+            lines.append("")
+            lines.append(f"更新内容({len(new_commits)} 条):")
+            for c in new_commits[-8:]:
+                lines.append(f"  • <code>{c['sha']}</code> {c['subject']}")
+            if len(new_commits) > 8:
+                lines.append(f"  ...(还有 {len(new_commits)-8} 条,登入管理页看完整列表)")
+        lines.append("")
+        lines.append("升级方式(复制到 VPS 跑):")
+        lines.append(f"<code>cd /root/tg-monitor-{company} && bash update.sh</code>")
+        lines.append("")
+        lines.append("✓ 有回滚保护,挂了自动退回旧版")
+
+        msg = "\n".join(lines)
+        try:
+            await self.bot.send_message(
+                config.ALERT_GROUP_ID, msg,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            logger.info(f"版本更新通知已推送: {latest_short}")
+        except Exception as e:
+            logger.error(f"版本更新通知推送失败: {e}")
+
     async def start(self):
         """启动 Bot 轮询"""
         if not self.dp:
