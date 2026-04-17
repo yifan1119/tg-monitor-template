@@ -583,15 +583,9 @@
      border:1px solid rgba(255,184,70,0.35);color:#ffd78a;font-size:13px;line-height:1.7;">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;">
     <div style="flex:1;min-width:260px;">
-      <div style="font-weight:600;font-size:14px;color:#ffb946;margin-bottom:6px;">
-        🆕 TG 监控有新版可升级
-      </div>
-      <div style="color:#e6d5b0;">
-        当前 <code id="ub-local" style="color:#9cc9e8;"></code>
-        → 最新 <code id="ub-latest" style="color:#7fffbf;"></code>
-        <span id="ub-subject" style="color:#bfd6e8;"></span>
-      </div>
-      <div id="ub-commits" style="margin-top:6px;font-size:12px;color:#bfd6e8;"></div>
+      <div id="ub-title" style="font-weight:600;font-size:15px;color:#ffb946;margin-bottom:6px;"></div>
+      <div id="ub-body" style="color:#e6d5b0;margin-bottom:4px;"></div>
+      <div id="ub-more" style="margin-top:6px;font-size:12px;color:#bfd6e8;"></div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
       <button type="button" id="ub-copy-btn"
@@ -610,51 +604,60 @@
               font-family:'JetBrains Mono',monospace;font-size:11px;color:#9cc9e8;word-break:break-all;">
     <span id="ub-cmd"></span>
   </div>
-  <div style="margin-top:6px;font-size:11px;color:#8ba3b8;">
-    ✓ update.sh 有回滚保护,挂了自动退回旧版 · 升级期间 web 会短暂重启(30 秒内恢复)
+  <div style="margin-top:6px;font-size:11px;color:#8ba3b8;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+    <span>✓ 升级失败会自动退回旧版,不用担心停机 · 升级期间网页会短暂刷新(约 30 秒)</span>
+    <span>
+      <span id="ub-version-meta" style="color:#6a7f93;"></span>
+      <a href="#" id="ub-recheck" style="color:#9cc9e8;margin-left:8px;">立即检查</a>
+    </span>
   </div>
 </div>
 
 <script>
 (function(){
   const banner = document.getElementById('update-banner');
-  const ubLocal = document.getElementById('ub-local');
-  const ubLatest = document.getElementById('ub-latest');
-  const ubSubject = document.getElementById('ub-subject');
-  const ubCommits = document.getElementById('ub-commits');
+  const ubTitle = document.getElementById('ub-title');
+  const ubBody = document.getElementById('ub-body');
+  const ubMore = document.getElementById('ub-more');
   const ubCmd = document.getElementById('ub-cmd');
+  const ubMeta = document.getElementById('ub-version-meta');
   const copyBtn = document.getElementById('ub-copy-btn');
   const dismissBtn = document.getElementById('ub-dismiss');
+  const recheckLink = document.getElementById('ub-recheck');
 
-  async function check(){
+  function render(s) {
+    if (!s || !s.has_update) { banner.style.display='none'; return; }
+    if (sessionStorage.getItem('ub-dismissed') === s.latest_sha) { banner.style.display='none'; return; }
+    ubTitle.textContent = s.latest_user_title || '📦 有新版本可升级';
+    ubBody.textContent  = s.latest_user_body  || '';
+    ubCmd.textContent   = s.upgrade_cmd || '';
+    ubMeta.textContent  = '版本 ' + (s.local_short||'?') + ' → ' + (s.latest_short||'?');
+    const commits = s.new_commits || [];
+    if (commits.length > 1) {
+      ubMore.innerHTML = '<b style="color:#9cc9e8;">本次涵盖 ' + commits.length + ' 个版本:</b> ' +
+        commits.slice(-4).map(c => (c.user_title || '更新')).join(' · ');
+    } else {
+      ubMore.textContent = '';
+    }
+    banner.dataset.latestSha = s.latest_sha || '';
+    banner.style.display = 'block';
+  }
+
+  async function check(force){
     try {
-      const r = await fetch('/api/update/status');
+      const url = force ? '/api/update/check_now' : '/api/update/status';
+      const r = await fetch(url, {method: force ? 'POST' : 'GET'});
       const j = await r.json();
-      if (!j.ok || !j.state || !j.state.has_update) { banner.style.display='none'; return; }
-      const s = j.state;
-      // 本次会话忽略过就不再显示
-      if (sessionStorage.getItem('ub-dismissed') === s.latest_sha) { banner.style.display='none'; return; }
-      ubLocal.textContent = s.local_short || '?';
-      ubLatest.textContent = s.latest_short || '?';
-      ubSubject.textContent = ' — ' + (s.latest_subject || '');
-      ubCmd.textContent = s.upgrade_cmd || '';
-      const commits = s.new_commits || [];
-      if (commits.length) {
-        ubCommits.textContent = '含 ' + commits.length + ' 个 commit: ' +
-          commits.slice(-3).map(c => c.sha + ' ' + c.subject).join(' · ') +
-          (commits.length > 3 ? ' ...' : '');
-      } else {
-        ubCommits.textContent = '';
-      }
-      banner.style.display = 'block';
-    } catch(e) { banner.style.display='none'; }
+      if (!j.ok) return;
+      render(j.state);
+    } catch(e) {}
   }
 
   copyBtn.onclick = async () => {
     try {
       await navigator.clipboard.writeText(ubCmd.textContent);
-      copyBtn.textContent = '✓ 已复制';
-      setTimeout(()=>{copyBtn.textContent='📋 复制升级命令';}, 2000);
+      copyBtn.textContent = '✓ 已复制,去服务器粘贴';
+      setTimeout(()=>{copyBtn.textContent='📋 复制升级命令';}, 2500);
     } catch(e) {
       const r = document.createRange(); r.selectNode(ubCmd);
       window.getSelection().removeAllRanges();
@@ -665,14 +668,18 @@
   };
 
   dismissBtn.onclick = () => {
-    const j = JSON.parse(sessionStorage.getItem('ub-latest-state') || '{}');
-    sessionStorage.setItem('ub-dismissed', j.latest_sha || 'yes');
+    sessionStorage.setItem('ub-dismissed', banner.dataset.latestSha || 'yes');
     banner.style.display = 'none';
   };
 
-  check();
-  // 10 分钟前端主动刷一次(tasks.py 后台每小时也会刷)
-  setInterval(check, 10*60*1000);
+  recheckLink.onclick = (e) => {
+    e.preventDefault();
+    recheckLink.textContent = '检查中...';
+    check(true).finally(()=>{ recheckLink.textContent='立即检查'; });
+  };
+
+  check(false);
+  setInterval(()=>check(false), 10*60*1000);
 })();
 </script>
 

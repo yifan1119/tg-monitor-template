@@ -295,33 +295,37 @@ class AlertBot:
         if not self.bot or not config.ALERT_GROUP_ID:
             return
 
-        latest_short = state.get("latest_short", "?")
-        latest_subject = state.get("latest_subject", "")
-        local_short = state.get("local_short", "?")
         new_commits = state.get("new_commits", [])
+        latest_title = state.get("latest_user_title") or "📦 有新版本可升级"
+        latest_body = state.get("latest_user_body") or ""
 
         company = getattr(config, "COMPANY_NAME", "")
         company_display = getattr(config, "COMPANY_DISPLAY", company)
 
-        lines = [
-            f"🆕 TG 监控有新版本",
-            "",
-            f"部门:{company_display}",
-            f"当前:<code>{local_short}</code>",
-            f"最新:<code>{latest_short}</code>  {latest_subject}",
-        ]
-        if new_commits:
+        lines = [f"<b>{latest_title}</b>", "", f"部门:{company_display}"]
+        if latest_body:
             lines.append("")
-            lines.append(f"更新内容({len(new_commits)} 条):")
-            for c in new_commits[-8:]:
-                lines.append(f"  • <code>{c['sha']}</code> {c['subject']}")
-            if len(new_commits) > 8:
-                lines.append(f"  ...(还有 {len(new_commits)-8} 条,登入管理页看完整列表)")
+            lines.append(latest_body)
+
+        # 如果中间跨了多个版本,把每个版本的白话也列出来
+        if len(new_commits) > 1:
+            lines.append("")
+            lines.append(f"<b>本次更新涵盖 {len(new_commits)} 个版本:</b>")
+            for c in new_commits[-6:]:
+                t = c.get("user_title", "") or "更新"
+                b = c.get("user_body", "")
+                lines.append(f"  {t}")
+                if b:
+                    lines.append(f"    {b}")
+            if len(new_commits) > 6:
+                lines.append(f"  ...(还有 {len(new_commits)-6} 个,登入管理页看完整列表)")
+
         lines.append("")
-        lines.append("升级方式(复制到 VPS 跑):")
+        lines.append("<b>如何升级</b>(复制这行到服务器跑):")
         lines.append(f"<code>cd /root/tg-monitor-{company} && bash update.sh</code>")
         lines.append("")
-        lines.append("✓ 有回滚保护,挂了自动退回旧版")
+        lines.append("✓ 有回滚保护,万一有问题会自动退回旧版")
+        lines.append("✓ 升级期间网页会短暂刷新,大约 30 秒恢复")
 
         msg = "\n".join(lines)
         try:

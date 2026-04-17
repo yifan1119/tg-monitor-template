@@ -19,7 +19,44 @@ REPO = "yifan1119/tg-monitor-template"
 BRANCH = "main"
 STATE_PATH = config.DATA_DIR / "update_status.json"
 GIT_DIR = Path("/app/repo/.git")  # host 代码目录,容器里是 :ro 挂载
+REPO_ROOT = Path("/app/repo")
 TZ_BJ = timezone(timedelta(hours=8))
+RELEASE_NOTES_URL = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/release_notes.json"
+
+
+def _fetch_release_notes():
+    """从 GitHub raw 拉最新白话说明 — 本地可能还是旧的,remote 才是权威"""
+    try:
+        headers = {"User-Agent": "tg-monitor-update-checker"}
+        req = urllib.request.Request(RELEASE_NOTES_URL, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read().decode())
+    except Exception as e:
+        logger.warning(f"fetch release_notes failed: {e}")
+    # fallback:读本地的
+    try:
+        f = REPO_ROOT / "release_notes.json"
+        if f.exists():
+            return json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _notes_for(short_sha: str, all_notes: dict, commit_subject: str = "") -> dict:
+    """给一个 commit 短 sha,拿白话说明;没有就从 commit subject 尝试匹配版本号"""
+    if short_sha in all_notes:
+        return all_notes[short_sha]
+    # 从 commit subject 找 v2.x.x 这种版本号
+    import re
+    m = re.search(r"v\d+\.\d+\.\d+", commit_subject or "")
+    if m and m.group(0) in all_notes:
+        return all_notes[m.group(0)]
+    meta = all_notes.get("_meta", {})
+    return {
+        "title": "📦 常规更新",
+        "body": meta.get("fallback_text", "本次是内部优化,不影响现有功能。"),
+    }
 
 
 def _read_local_sha() -> str:
@@ -129,7 +166,18 @@ def check_once():
     state["has_update"] = has_update
 
     if has_update:
-        state["new_commits"] = _fetch_commits_between(local, remote["sha"])
+        commits = _fetch_commits_between(local, remote["sha"])
+        notes = _fetch_release_notes()
+        # 给每条 commit 挂上白话说明
+        for c in commits:
+            n = _notes_for(c["sha"], notes, c.get("subject", ""))
+            c["user_title"] = n.get("title", "")
+            c["user_body"] = n.get("body", "")
+        # 顶层也挂一个"最新版"的白话说明(给 TG 推送主标题用)
+        latest_note = _notes_for(remote["short"], notes, remote["subject"])
+        state["latest_user_title"] = latest_note.get("title", "")
+        state["latest_user_body"] = latest_note.get("body", "")
+        state["new_commits"] = commits
     else:
         state["new_commits"] = []
 
