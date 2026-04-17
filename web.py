@@ -788,8 +788,8 @@ def settings_page():
         "is_admin": is_admin(me),
         "is_super": is_super(me),
         "me": me,
-        # v2.8.0: 中央台接入 Token
-        "metrics_token": env.get("METRICS_TOKEN", ""),
+        # v2.8.0: 中央台接入 Token(兜底:空就自动生成并写回,保证打开设置页永远有值)
+        "metrics_token": _ensure_metrics_token(env),
         "metrics_access_count_24h": _metrics_access_count(24),
         "metrics_last_access": _metrics_last_access(),
     }
@@ -1903,11 +1903,29 @@ def _gen_metrics_token() -> str:
     return _secrets.token_hex(24)
 
 
+def _ensure_metrics_token(env: dict = None) -> str:
+    """确保 METRICS_TOKEN 存在 — 空就生成并写回 .env。
+    任何读 token 的地方都走这个,update.sh 忘补或 .env 手改丢了都兜得住。
+    """
+    if env is None:
+        env = read_env()
+    token = (env.get("METRICS_TOKEN") or "").strip()
+    if token:
+        return token
+    new_token = _gen_metrics_token()
+    try:
+        write_env({"METRICS_TOKEN": new_token})
+        logger.info("METRICS_TOKEN was missing — auto-generated and persisted")
+    except Exception as e:
+        logger.warning(f"METRICS_TOKEN auto-gen persist failed: {e}")
+    return new_token
+
+
 @app.route("/api/v1/metrics", methods=["GET"])
 def api_v1_metrics():
     """中央台拉数据接口 — Bearer token 鉴权,返回 dashboard_api.snapshot()"""
     env = read_env()
-    token = env.get("METRICS_TOKEN", "").strip()
+    token = _ensure_metrics_token(env)
     auth = request.headers.get("Authorization", "")
     provided = ""
     if auth.lower().startswith("bearer "):
@@ -1915,9 +1933,6 @@ def api_v1_metrics():
     else:
         provided = request.args.get("token", "").strip()
 
-    if not token:
-        _metrics_log_access(False, "no_token_configured")
-        return jsonify({"ok": False, "error": "metrics token not configured"}), 503
     if not provided or not _secrets.compare_digest(provided, token):
         _metrics_log_access(False, "unauthorized")
         return jsonify({"ok": False, "error": "unauthorized"}), 401

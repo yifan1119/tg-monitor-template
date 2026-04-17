@@ -99,6 +99,18 @@ if [ "$OLD_SHA" = "$NEW_SHA" ]; then
     exit 0
 fi
 
+# ===== 3.5 .env migrate — 老部署升级时自动补新字段 =====
+#   v2.8.0: METRICS_TOKEN (中央台接入)
+if [ -f ".env" ] && ! grep -q "^METRICS_TOKEN=" .env; then
+    NEW_TOKEN=$(openssl rand -hex 24 2>/dev/null || head -c 48 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 48)
+    # 末尾若无换行先补一个,避免追加时和上一行粘连
+    [ -n "$(tail -c 1 .env)" ] && echo "" >> .env
+    echo "" >> .env
+    echo "# 中央台接入 Token (v2.8+; 设置页可重置)" >> .env
+    echo "METRICS_TOKEN=${NEW_TOKEN}" >> .env
+    echo "  ✅ 已为本部署生成 METRICS_TOKEN (登入后在设置页「中央台接入」复制)"
+fi
+
 # ===== 4. 重建容器 =====
 echo ""
 echo "🐳 重建 Docker 镜像并重启容器..."
