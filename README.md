@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.1(2026-04-18) — 驾驶舱总览 / TG 绑定 + 忘记密码 / 一键升级按钮 / 自动回滚 + .env 迁移
+> 📌 **最新版**:v2.10.2(2026-04-18) — Codex review 加固:修 bot 推送 NameError / 验证码 5 次上限 / Flask secret 随机化
 
 ---
 
@@ -388,7 +388,16 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.1** (2026-04-18) — 当前稳定版
+- **v2.10.2** (2026-04-18) — 当前稳定版
+  - [FIX] bot.py `send_update_notice()` `latest_short` 未定义 → NameError 炸栈
+    (改用 `state.get` 读取;py3.11 不支持嵌套同引号 f-string)
+  - [SEC] `auth_reset.consume_reset_code()` 加尝试次数上限 (错 5 次锁死该 pending)
+    防暴力猜码,锁死时写 audit_log `reset_code_locked`,用户需重新申请
+  - [SEC] Flask `secret_key` 移除硬编码,改为每部署随机生成持久化到 `data/.flask_secret`
+    老部署首次启动自动生成,已有登入 session 会失效需重登一次
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.1** (2026-04-18)
   - [NEW] TG 绑定 + 忘记密码:管理员在账号管理页绑定 TG (私聊 bot 发 `/bind XXXXXX`),
     登入页点「忘记密码」→ bot DM 6 位验证码 → 输入验证码改新密码
   - [FIX] `update.sh` 先比对远端 SHA 才 stash,已是最新直接退出不动本地
