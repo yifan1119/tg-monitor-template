@@ -1020,9 +1020,118 @@
   </div>
   {% endif %}
 
+  {# ========== v2.8.0 中央台接入 Token(仅管理员) ========== #}
+  {% if mode == 'settings' and d.is_admin %}
+  <div class="section" style="margin-top:24px;border-left-color:var(--accent-blue);">
+    <div class="section-title" style="color:var(--accent-blue);">
+      07 · 🛰️ 中央台接入
+    </div>
+
+    <div style="background:rgba(42,171,238,0.06);border-left:3px solid var(--accent-blue);padding:12px 16px;margin-bottom:16px;font-size:12px;color:#bfd6e8;line-height:1.8;">
+      <div style="color:var(--accent-ember);font-weight:600;margin-bottom:6px;letter-spacing:1px;">▸ 这是什么</div>
+      中央监控台通过这个 Token 来拉取本机指标(只读 / 每 15 秒一次),汇总到总控大屏。
+      <br>把下面的 Token 复制给中央台管理员就行,不用动任何命令。
+      <br><br>
+      <div style="color:var(--accent-ember);font-weight:600;margin-bottom:6px;letter-spacing:1px;">▸ 安全性</div>
+      · Token 只读,拿到它只能 <strong>看指标</strong>,不能改配置、不能改账号、不能发消息<br>
+      · 如果怀疑泄漏,点下方「🔄 重置 Token」立刻作废旧的(需再次输入密码)<br>
+      · 重置后记得把新 Token 交给中央台,否则它拉不到数据
+    </div>
+
+    <div class="field">
+      <label>Token</label>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="text" id="metricsTokenInput" value="{{ d.metrics_token }}"
+               readonly
+               style="flex:1;min-width:280px;font-family:'JetBrains Mono',monospace;letter-spacing:1px;-webkit-text-security:disc;text-security:disc;">
+        <button type="button" class="test-btn" id="revealTokenBtn">👁 显示</button>
+        <button type="button" class="test-btn" id="copyTokenBtn">📋 复制</button>
+        <button type="button" class="test-btn" id="regenTokenBtn"
+                style="background:rgba(255,77,94,0.15);border-color:rgba(255,77,94,0.5);color:#ff9bb0;">
+          🔄 重置 Token
+        </button>
+      </div>
+      <div class="hint">
+        24 小时调用次数:<code id="metricsCount24">{{ d.metrics_access_count_24h }}</code> 次 ·
+        最近一次:<code id="metricsLastAccess">{{ d.metrics_last_access or '从未' }}</code>
+      </div>
+      <span class="test-result" id="metricsTokenResult"></span>
+    </div>
+
+    <div class="field">
+      <label>调用示例(中央台侧)</label>
+      <code style="display:block;padding:10px 12px;background:rgba(0,0,0,0.3);border-radius:4px;font-size:11px;color:#9cc9e8;word-break:break-all;">
+        curl -H "Authorization: Bearer &lt;TOKEN&gt;" http://&lt;本机IP&gt;:{{ d.web_port or '5001' }}/api/v1/metrics
+      </code>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    const inp = document.getElementById('metricsTokenInput');
+    const revealBtn = document.getElementById('revealTokenBtn');
+    const copyBtn = document.getElementById('copyTokenBtn');
+    const regenBtn = document.getElementById('regenTokenBtn');
+    const result = document.getElementById('metricsTokenResult');
+    let revealed = false;
+
+    revealBtn.onclick = () => {
+      revealed = !revealed;
+      inp.style.webkitTextSecurity = revealed ? 'none' : 'disc';
+      inp.style.textSecurity = revealed ? 'none' : 'disc';
+      revealBtn.textContent = revealed ? '🙈 隐藏' : '👁 显示';
+    };
+
+    copyBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(inp.value);
+        result.textContent = '✓ 已复制到剪贴板';
+        result.style.color = '#6ee7b7';
+        setTimeout(()=>{result.textContent='';},2500);
+      } catch(e) {
+        inp.select(); document.execCommand('copy');
+        result.textContent = '✓ 已复制';
+        result.style.color = '#6ee7b7';
+      }
+    };
+
+    regenBtn.onclick = async () => {
+      if (!confirm('重置后旧 Token 立即失效,中央台必须换用新 Token。继续?')) return;
+      const pwd = prompt('再次输入你的登入密码以确认:');
+      if (!pwd) return;
+      result.textContent = '重置中...';
+      result.style.color = '#9cc9e8';
+      try {
+        const r = await fetch('/api/settings/metrics_token/regenerate', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({password: pwd})
+        });
+        const j = await r.json();
+        if (j.ok) {
+          inp.value = j.token;
+          revealed = true;
+          inp.style.webkitTextSecurity = 'none';
+          inp.style.textSecurity = 'none';
+          revealBtn.textContent = '🙈 隐藏';
+          result.textContent = '✓ 已重置 — 请复制新 Token 交给中央台';
+          result.style.color = '#6ee7b7';
+        } else {
+          result.textContent = '✗ ' + (j.error || '重置失败');
+          result.style.color = '#ff9bb0';
+        }
+      } catch(e) {
+        result.textContent = '✗ 网络错误:' + e.message;
+        result.style.color = '#ff9bb0';
+      }
+    };
+  })();
+  </script>
+  {% endif %}
+
   <div class="sys-status">
     <span><span class="led"></span>系统在线</span>
-    <span>TG 监控 · v2.6.12</span>
+    <span>TG 监控 · v2.8.0</span>
   </div>
 </div>
 

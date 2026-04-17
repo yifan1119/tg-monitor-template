@@ -201,6 +201,7 @@ def write_env(updates):
         "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
         "BOT_TOKEN", "ALERT_GROUP_ID",
         "WEB_PORT", "WEB_PASSWORD",
+        "METRICS_TOKEN",
         "KEYWORDS", "NO_REPLY_MINUTES",
         "WORK_HOUR_START", "WORK_HOUR_END",
         "PATROL_DAYS", "HISTORY_DAYS",
@@ -787,6 +788,10 @@ def settings_page():
         "is_admin": is_admin(me),
         "is_super": is_super(me),
         "me": me,
+        # v2.8.0: 中央台接入 Token
+        "metrics_token": env.get("METRICS_TOKEN", ""),
+        "metrics_access_count_24h": _metrics_access_count(24),
+        "metrics_last_access": _metrics_last_access(),
     }
     return render_template("setup.html", d=current, mode="settings")
 
@@ -1826,6 +1831,139 @@ def remove_session():
         "deleted_sheet": deleted_sheet,
         "auto_restart": True,
     })
+
+
+# ===================================================================
+# v2.8.0 — 中央台接入:只读 metrics API (Bearer token 鉴权)
+# ===================================================================
+import secrets as _secrets
+from datetime import datetime as _dt, timedelta as _td
+
+_METRICS_ACCESS_LOG_PATH = config.DATA_DIR / "metrics_access.log"
+_METRICS_LOG_MAX = 200
+
+
+def _metrics_log_access(ok: bool, reason: str = ""):
+    """记录一次 metrics API 访问 — 保留最近 200 条"""
+    try:
+        _METRICS_ACCESS_LOG_PATH.parent.mkdir(exist_ok=True)
+        entries = []
+        if _METRICS_ACCESS_LOG_PATH.exists():
+            try:
+                entries = json.loads(_METRICS_ACCESS_LOG_PATH.read_text(encoding="utf-8"))
+                if not isinstance(entries, list):
+                    entries = []
+            except Exception:
+                entries = []
+        entries.append({
+            "ts": _dt.utcnow().isoformat() + "Z",
+            "ip": request.headers.get("X-Forwarded-For", request.remote_addr or ""),
+            "ok": bool(ok),
+            "reason": reason or ("ok" if ok else "unauthorized"),
+        })
+        entries = entries[-_METRICS_LOG_MAX:]
+        _METRICS_ACCESS_LOG_PATH.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"metrics access log write failed: {e}")
+
+
+def _metrics_load_log():
+    try:
+        if not _METRICS_ACCESS_LOG_PATH.exists():
+            return []
+        return json.loads(_METRICS_ACCESS_LOG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _metrics_access_count(hours: int = 24) -> int:
+    entries = _metrics_load_log()
+    cutoff = _dt.utcnow() - _td(hours=hours)
+    count = 0
+    for e in entries:
+        if not e.get("ok"):
+            continue
+        try:
+            ts = _dt.fromisoformat(e["ts"].rstrip("Z"))
+            if ts >= cutoff:
+                count += 1
+        except Exception:
+            pass
+    return count
+
+
+def _metrics_last_access():
+    entries = [e for e in _metrics_load_log() if e.get("ok")]
+    if not entries:
+        return ""
+    return entries[-1].get("ts", "")
+
+
+def _gen_metrics_token() -> str:
+    return _secrets.token_hex(24)
+
+
+@app.route("/api/v1/metrics", methods=["GET"])
+def api_v1_metrics():
+    """中央台拉数据接口 — Bearer token 鉴权,返回 dashboard_api.snapshot()"""
+    env = read_env()
+    token = env.get("METRICS_TOKEN", "").strip()
+    auth = request.headers.get("Authorization", "")
+    provided = ""
+    if auth.lower().startswith("bearer "):
+        provided = auth[7:].strip()
+    else:
+        provided = request.args.get("token", "").strip()
+
+    if not token:
+        _metrics_log_access(False, "no_token_configured")
+        return jsonify({"ok": False, "error": "metrics token not configured"}), 503
+    if not provided or not _secrets.compare_digest(provided, token):
+        _metrics_log_access(False, "unauthorized")
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    try:
+        import dashboard_api
+        data = dashboard_api.snapshot()
+        data["company_name"] = env.get("COMPANY_NAME", "")
+        data["company_display"] = env.get("COMPANY_DISPLAY", "")
+        _metrics_log_access(True, "ok")
+        return jsonify(data)
+    except Exception as e:
+        logger.exception("metrics snapshot failed")
+        _metrics_log_access(False, f"snapshot_error:{e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/v1/metrics/access_log", methods=["GET"])
+@login_required
+def api_v1_metrics_access_log():
+    """设置页面用 — 展示 metrics API 最近调用记录"""
+    entries = _metrics_load_log()
+    return jsonify({
+        "ok": True,
+        "count_24h": _metrics_access_count(24),
+        "last_access": _metrics_last_access(),
+        "recent": entries[-20:][::-1],
+    })
+
+
+@app.route("/api/settings/metrics_token/regenerate", methods=["POST"])
+@login_required
+def api_metrics_token_regenerate():
+    """重置 METRICS_TOKEN — 仅管理员 + 需再次输入密码确认"""
+    me = flask_session.get("username", "")
+    if not is_admin(me):
+        return jsonify({"ok": False, "error": "仅管理员可重置"}), 403
+    data = request.get_json(silent=True) or request.form
+    password = (data.get("password") or "").strip()
+    if not password or not verify_user(me, password):
+        return jsonify({"ok": False, "error": "密码错误"}), 401
+
+    new_token = _gen_metrics_token()
+    write_env({"METRICS_TOKEN": new_token})
+    logger.info(f"METRICS_TOKEN regenerated by {me}")
+    return jsonify({"ok": True, "token": new_token})
 
 
 if __name__ == "__main__":

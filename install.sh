@@ -153,6 +153,8 @@ fi
 # 5. 生成骨架 .env（保留已有凭证字段不覆盖）
 if [ ! -f ".env" ]; then
     echo "📝 生成骨架 .env..."
+    # 生成随机 METRICS_TOKEN (优先 openssl, fallback /dev/urandom)
+    NEW_TOKEN=$(openssl rand -hex 24 2>/dev/null || head -c 48 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 48)
     cat > .env << EOF
 # ========== ${COMPANY_NAME} ==========
 # 首次设置未完成 — 请打开 http://<VPS>:${WEB_PORT}/setup 完成设置精灵
@@ -168,6 +170,9 @@ COMPANY_DISPLAY=${COMPANY_NAME}
 # Web 后台端口
 WEB_PORT=${WEB_PORT}
 WEB_PASSWORD=tg@monitor2026
+
+# 中央台接入 Token (中央控制台用这个 token 拉本机指标; 设置页可重置)
+METRICS_TOKEN=${NEW_TOKEN}
 
 # 以下字段由设置精灵填写
 SHEET_ID=
@@ -193,6 +198,14 @@ else
         sed -i.bak "s/^WEB_PORT=.*/WEB_PORT=${WEB_PORT}/" .env && rm -f .env.bak
     else
         echo "WEB_PORT=${WEB_PORT}" >> .env
+    fi
+    # v2.8: 老部署缺 METRICS_TOKEN 自动补一个
+    if ! grep -q "^METRICS_TOKEN=" .env; then
+        NEW_TOKEN=$(openssl rand -hex 24 2>/dev/null || head -c 48 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 48)
+        echo "" >> .env
+        echo "# 中央台接入 Token (v2.8+; 设置页可重置)" >> .env
+        echo "METRICS_TOKEN=${NEW_TOKEN}" >> .env
+        echo "   ✅ 已为老部署生成 METRICS_TOKEN"
     fi
 fi
 
@@ -298,6 +311,10 @@ for d in /root/tg-monitor-*/; do
     mark=$([ "$running" = "1" ] && echo "✅" || echo "⚠️ ")
     echo "     ${mark} ${name}  →  http://${VPS_IP}:${port}"
 done
+echo ""
+echo "  🛰️  中央台接入(v2.8+):"
+echo "    登入后打开设置页底部「中央台接入」区块 → 复制 Token 交给控制台"
+echo "    Token 生成位置: .env 的 METRICS_TOKEN 字段(设置页可随时重置)"
 echo ""
 echo "  常用指令:"
 echo "    cd ${INSTALL_DIR}"
