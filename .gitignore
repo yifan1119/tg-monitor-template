@@ -30,3 +30,7 @@ venv/
 
 # update.sh / rollback.sh 运行时记录(每台机不一样,不进 git)
 .last_commit
+
+# 本地实验备份(不进 git)
+.dashboard-backup-*
+.metrics-backup/

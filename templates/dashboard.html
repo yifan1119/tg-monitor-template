@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TG 监控 · 驾驶舱</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --accent-red: #2aabee;
+    --accent-ember: #64abde;
+    --accent-deep: #3390ec;
+    --accent-lime: #4fae4f;
+    --accent-warn: #f5a623;
+    --accent-danger: #ff6b6b;
+    --bg-0: #050505;
+    --bg-1: #0d0d0d;
+    --text: #ffffff;
+    --text-dim: #6d7f8f;
+    --text-bright: #ffffff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    background: var(--bg-0);
+    color: var(--text);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    position: relative;
+    overflow-x: hidden;
+  }
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: 0;
+    background:
+      radial-gradient(circle at 15% 20%, rgba(51,144,236,0.25), transparent 50%),
+      radial-gradient(circle at 85% 80%, rgba(42,171,238,0.20), transparent 55%),
+      radial-gradient(circle at 50% 50%, rgba(100,171,222,0.08), transparent 60%),
+      linear-gradient(135deg, #050505 0%, #0d0d0d 50%, #050505 100%);
+    animation: bgShift 30s ease-in-out infinite;
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; z-index: 0;
+    background:
+      linear-gradient(rgba(42,171,238,0.04) 1px, transparent 1px) 0 0 / 40px 40px,
+      linear-gradient(90deg, rgba(42,171,238,0.04) 1px, transparent 1px) 0 0 / 40px 40px;
+    mask-image: radial-gradient(ellipse at center, black 40%, transparent 90%);
+    -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 90%);
+    pointer-events: none;
+  }
+  @keyframes bgShift { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.08); } }
+  .scanline {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: linear-gradient(to bottom, transparent 0%, rgba(42,171,238,0.08) 50%, transparent 100%);
+    height: 2px; width: 100%;
+    animation: scan 30s linear infinite;
+  }
+  @keyframes scan { 0% { transform: translateY(-10vh); } 100% { transform: translateY(110vh); } }
+
+  /* Header (沿用 index.html) */
+  .header {
+    position: relative; z-index: 10;
+    background: rgba(13, 13, 13, 0.85);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    border-bottom: 1px solid rgba(42, 171, 238, 0.22);
+    padding: 0 32px;
+    height: 64px;
+    display: flex; align-items: center; justify-content: space-between;
+    box-shadow: 0 4px 30px rgba(42, 171, 238, 0.08);
+  }
+  .header-left { display: flex; align-items: center; gap: 14px; }
+  .header-icon {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, #2aabee, #3390ec, #64abde);
+    background-size: 200% 200%;
+    border-radius: 10px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: "Orbitron", sans-serif;
+    font-size: 14px; font-weight: 900; color: #fff;
+    box-shadow: 0 0 20px rgba(42, 171, 238, 0.4);
+    animation: gradientMove 18s ease infinite;
+  }
+  @keyframes gradientMove { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+  .header h1 {
+    font-family: "Orbitron", sans-serif;
+    font-size: 16px; font-weight: 700;
+    letter-spacing: 3px;
+    background: linear-gradient(90deg, #2aabee, #3390ec, #64abde, #3390ec, #2aabee);
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: textFlow 20s linear infinite;
+  }
+  @keyframes textFlow { 0% { background-position: 0% 50%; } 100% { background-position: 300% 50%; } }
+  .company-tag {
+    margin-left: 10px;
+    padding: 3px 10px;
+    border: 1px solid rgba(42, 171, 238, 0.3);
+    border-radius: 20px;
+    font-size: 10px; letter-spacing: 2px;
+    color: var(--accent-red);
+    background: rgba(42, 171, 238, 0.08);
+    text-transform: uppercase;
+  }
+  .header-right { display: flex; gap: 12px; align-items: center; }
+  .header-right a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: all 0.2s;
+  }
+  .header-right a:hover {
+    color: var(--accent-red);
+    background: rgba(42, 171, 238, 0.08);
+  }
+  .header-right a.active {
+    color: var(--accent-red);
+    background: rgba(42, 171, 238, 0.12);
+    border: 1px solid rgba(42, 171, 238, 0.4);
+  }
+
+  /* 实时刷新指示器 */
+  .live-indicator {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-left: 8px;
+    font-size: 10px; color: var(--text-dim);
+    letter-spacing: 1px;
+  }
+  .live-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent-lime);
+    box-shadow: 0 0 6px var(--accent-lime);
+    animation: liveBlink 2s ease-in-out infinite;
+  }
+  .live-dot.stale { background: var(--text-dim); box-shadow: none; }
+  .live-dot.error { background: var(--accent-danger); box-shadow: 0 0 6px var(--accent-danger); }
+  @keyframes liveBlink { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  /* Layout */
+  .container {
+    position: relative; z-index: 10;
+    max-width: 1400px; margin: 0 auto; padding: 22px 22px 60px;
+  }
+  .section-title {
+    font-family: "Orbitron", sans-serif;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    color: var(--text-bright);
+    margin-bottom: 10px; margin-top: 18px;
+    padding-left: 4px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-title::before {
+    content: "▸";
+    color: var(--accent-red);
+    text-shadow: 0 0 8px var(--accent-red);
+  }
+
+  .card {
+    background: rgba(5, 5, 5, 0.5);
+    backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgba(42, 171, 238, 0.12);
+    border-left: 3px solid var(--accent-red);
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+    box-shadow: 0 4px 25px rgba(0, 0, 0, 0.35);
+  }
+  .card::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(42,171,238,0.5), rgba(51,144,236,0.4), transparent);
+    pointer-events: none;
+  }
+  .card-head {
+    padding: 11px 18px;
+    border-bottom: 1px dashed rgba(42, 171, 238, 0.15);
+    display: flex; justify-content: space-between; align-items: center;
+    font-family: "Orbitron", sans-serif;
+    font-size: 11px; letter-spacing: 2px;
+    color: var(--text-bright);
+    text-transform: uppercase;
+  }
+  .card-head .badge {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    text-transform: none;
+  }
+
+  /* Card 1: 系统状态 KPI 行 */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 10px;
+    padding: 16px 20px;
+  }
+  .kpi {
+    border-right: 1px dashed rgba(42, 171, 238, 0.12);
+    padding-right: 10px;
+  }
+  .kpi:last-child { border-right: none; }
+  .kpi-label {
+    font-size: 10px; color: var(--text-dim);
+    letter-spacing: 1.5px; text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .kpi-val {
+    font-family: "Orbitron", sans-serif;
+    font-size: 22px; font-weight: 700;
+    color: var(--accent-red);
+    text-shadow: 0 0 10px rgba(42, 171, 238, 0.4);
+  }
+  .kpi-val.green { color: var(--accent-lime); text-shadow: 0 0 10px rgba(79,174,79,0.4); }
+  .kpi-val.warn  { color: var(--accent-warn); text-shadow: 0 0 10px rgba(245,166,35,0.4); }
+  .kpi-val.danger{ color: var(--accent-danger); text-shadow: 0 0 10px rgba(255,107,107,0.4); }
+  .kpi-val.dim   { color: var(--text-dim); }
+  .kpi-sub {
+    font-size: 10px; color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  .alert-switches {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 18px;
+    border-top: 1px dashed rgba(42, 171, 238, 0.15);
+    font-size: 11px;
+  }
+  .sw-chip {
+    padding: 4px 10px; border-radius: 14px;
+    font-size: 11px;
+    background: rgba(42,171,238,0.15);
+    border: 1px solid rgba(42,171,238,0.4);
+    color: #cfe3f5;
+  }
+  .sw-chip.off {
+    background: rgba(70,85,102,0.18);
+    border-color: rgba(70,85,102,0.5);
+    color: #7c8a9a;
+  }
+
+  /* Grid */
+  .grid-2 { display: grid; grid-template-columns: 2fr 1.2fr; gap: 16px; margin-top: 18px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 18px; }
+  @media (max-width: 1100px) {
+    .grid-2 { grid-template-columns: 1fr; }
+    .grid-3 { grid-template-columns: 1fr; }
+    .kpi-row { grid-template-columns: repeat(3, 1fr); }
+  }
+
+  /* Card 2: 账号矩阵 */
+  .account-mini-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    padding: 14px 18px 16px;
+  }
+  @media (max-width: 700px) {
+    .account-mini-grid { grid-template-columns: 1fr; }
+  }
+  .account-mini {
+    background: rgba(13, 13, 13, 0.6);
+    border: 1px solid rgba(42, 171, 238, 0.12);
+    border-left: 2px solid var(--accent-lime);
+    border-radius: 8px;
+    padding: 11px 13px;
+    transition: all 0.2s;
+  }
+  .account-mini:hover { border-color: rgba(42, 171, 238, 0.4); }
+  .account-mini.warn { border-left-color: var(--accent-warn); }
+  .account-mini.dead { border-left-color: var(--accent-danger); opacity: 0.7; }
+  .am-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .am-avatar {
+    width: 28px; height: 28px; border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: "Orbitron", sans-serif;
+    font-size: 11px; font-weight: 700; color: #fff;
+    background: linear-gradient(135deg, #2aabee, #3390ec);
+    flex-shrink: 0;
+  }
+  .am-name { font-size: 12px; color: var(--text-bright); font-weight: 600; }
+  .am-phone { font-size: 10px; color: var(--text-dim); }
+  .am-stat {
+    display: flex; gap: 12px;
+    font-size: 10px; color: var(--text-dim);
+    letter-spacing: 0.5px;
+    flex-wrap: wrap;
+  }
+  .am-stat b {
+    color: var(--accent-ember);
+    font-family: "Orbitron", sans-serif;
+    font-size: 11px;
+    margin-right: 2px;
+  }
+  .am-pulse {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--accent-lime);
+    flex-shrink: 0;
+  }
+  .am-pulse.warn { color: var(--accent-warn); }
+  .am-pulse.dead { color: var(--accent-danger); }
+
+  .empty-block {
+    padding: 40px 20px; text-align: center;
+    color: var(--text-dim); font-size: 11px;
+    letter-spacing: 2px; text-transform: uppercase;
+  }
+
+  /* Card 3: 实时告警流 */
+  .alert-stream {
+    list-style: none;
+    max-height: 380px;
+    overflow-y: auto;
+    padding: 6px 0;
+  }
+  .alert-stream::-webkit-scrollbar { width: 6px; }
+  .alert-stream::-webkit-scrollbar-thumb { background: rgba(42,171,238,0.2); border-radius: 3px; }
+  .alert-row {
+    display: grid;
+    grid-template-columns: 60px 70px 1fr 36px;
+    gap: 8px;
+    padding: 7px 16px;
+    font-size: 11px;
+    border-bottom: 1px dashed rgba(42, 171, 238, 0.08);
+    align-items: center;
+  }
+  .alert-row:hover { background: rgba(42, 171, 238, 0.04); }
+  .a-time { color: var(--text-dim); font-size: 10px; }
+  .a-type {
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 9px;
+    letter-spacing: 1px;
+    text-align: center;
+  }
+  .a-type.kw       { background: rgba(42,171,238,0.15);  color: var(--accent-red);    border: 1px solid rgba(42,171,238,0.35); }
+  .a-type.no_reply { background: rgba(245,166,35,0.12); color: var(--accent-warn);   border: 1px solid rgba(245,166,35,0.35); }
+  .a-type.deleted  { background: rgba(255,107,107,0.12); color: var(--accent-danger); border: 1px solid rgba(255,107,107,0.35); }
+  .a-msg {
+    color: var(--text-bright);
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  .a-msg .acc { color: var(--accent-ember); margin-right: 6px; }
+  .a-msg .peer { color: var(--text-dim); margin-right: 6px; }
+  .a-act { font-size: 9px; color: var(--text-dim); text-align: right; }
+  .a-act.ok { color: var(--accent-lime); }
+
+  /* Card 4: 24h chart */
+  .chart-wrap { padding: 16px 20px; }
+  .chart-bars {
+    display: flex; align-items: flex-end; gap: 2px;
+    height: 130px; padding-bottom: 4px;
+    border-bottom: 1px dashed rgba(42, 171, 238, 0.2);
+  }
+  .chart-col {
+    flex: 1;
+    display: flex; flex-direction: column-reverse;
+    gap: 1px;
+    cursor: help;
+    min-width: 6px;
+  }
+  .chart-seg { width: 100%; transition: opacity 0.2s; }
+  .chart-col:hover .chart-seg { opacity: 0.7; }
+  .chart-seg.kw  { background: linear-gradient(180deg, var(--accent-red), rgba(42,171,238,0.4)); }
+  .chart-seg.nr  { background: linear-gradient(180deg, var(--accent-warn), rgba(245,166,35,0.4)); }
+  .chart-seg.del { background: linear-gradient(180deg, var(--accent-danger), rgba(255,107,107,0.4)); }
+  /* 灰色消息背景柱(放在告警之下,半透明) */
+  .chart-col { position: relative; }
+  .chart-msgbg {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(180deg, rgba(125,170,210,0.18), rgba(125,170,210,0.05));
+    border-top: 1px solid rgba(125,170,210,0.35);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .chart-seg { position: relative; z-index: 1; }
+
+  /* 槽位进度条(账号矩阵内) */
+  .slot-bar {
+    height: 4px; background: rgba(42,171,238,0.10);
+    border-radius: 2px; overflow: hidden;
+    margin-top: 6px; position: relative;
+  }
+  .slot-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-red), #4fae4f);
+    transition: width 0.4s;
+  }
+  .slot-bar-fill.warn { background: linear-gradient(90deg, var(--accent-warn), var(--accent-danger)); }
+  .am-stat .io-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(42,171,238,0.06);
+    padding: 1px 6px; border-radius: 8px;
+    color: #9ec5e6; font-family: "JetBrains Mono", monospace;
+  }
+
+  /* Top 5 广告主榜单 */
+  .top-list { padding: 8px 14px; font-size: 11px; }
+  .top-row {
+    display: grid;
+    grid-template-columns: 18px 1fr auto;
+    align-items: center; gap: 8px;
+    padding: 7px 0;
+    border-bottom: 1px dashed rgba(42, 171, 238, 0.08);
+  }
+  .top-row:last-child { border-bottom: none; }
+  .top-rank {
+    text-align: center; font-weight: 700;
+    font-family: "JetBrains Mono", monospace;
+    color: var(--text-dim); font-size: 10px;
+  }
+  .top-rank.gold { color: #f5c542; }
+  .top-rank.silver { color: #c8d4dd; }
+  .top-rank.bronze { color: #d8965e; }
+  .top-name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-bright);
+  }
+  .top-name small {
+    color: var(--text-dim); margin-left: 6px; font-size: 9px;
+  }
+  .top-val {
+    font-family: "JetBrains Mono", monospace;
+    color: var(--accent-red); font-weight: 600;
+  }
+  .top-val.muted { color: var(--text-dim); font-size: 10px; }
+  .top-val.warn { color: var(--accent-warn); }
+  .chart-x {
+    display: flex; justify-content: space-between;
+    font-size: 9px; color: var(--text-dim);
+    margin-top: 6px;
+    letter-spacing: 0.5px;
+  }
+  .chart-legend {
+    display: flex; gap: 14px;
+    margin-top: 10px;
+    font-size: 10px; color: var(--text-dim);
+  }
+  .chart-legend i {
+    display: inline-block;
+    width: 10px; height: 10px; border-radius: 2px;
+    margin-right: 4px; vertical-align: middle;
+  }
+
+  /* Card 5/6/7: KV list */
+  .kv-list { padding: 12px 18px; font-size: 11px; }
+  .kv-row {
+    display: flex; justify-content: space-between;
+    padding: 5px 0;
+    border-bottom: 1px dashed rgba(42, 171, 238, 0.08);
+    gap: 10px;
+  }
+  .kv-row:last-child { border-bottom: none; }
+  .kv-k { color: var(--text-dim); letter-spacing: 1px; flex-shrink: 0; }
+  .kv-v {
+    color: var(--text-bright);
+    font-family: "JetBrains Mono", monospace;
+    text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .kv-v.green { color: var(--accent-lime); }
+  .kv-v.warn  { color: var(--accent-warn); }
+  .kv-v.dim   { color: var(--text-dim); font-size: 10px; }
+
+  .keyword-chips { padding: 12px 18px; }
+  .kw-chip {
+    display: inline-block;
+    padding: 3px 8px;
+    margin: 2px 3px 2px 0;
+    background: rgba(42, 171, 238, 0.12);
+    border: 1px solid rgba(42, 171, 238, 0.3);
+    border-radius: 12px;
+    font-size: 10px;
+    color: var(--accent-red);
+    letter-spacing: 0.5px;
+  }
+</style>
+</head>
+<body>
+<div class="scanline"></div>
+
+<div class="header">
+  <div class="header-left">
+    <div class="header-icon">TG</div>
+    <h1>TG MONITOR</h1>
+    {% if company %}<span class="company-tag">{{ company }}</span>{% endif %}
+    <span class="live-indicator">
+      <span class="live-dot" id="live-dot"></span>
+      <span id="live-text">SYNC...</span>
+    </span>
+  </div>
+  <div class="header-right">
+    <a href="/dashboard" class="active">📊 驾驶舱</a>
+    <a href="/">账号管理</a>
+    <a href="/settings">⚙ 设置</a>
+    <a href="#" id="upgrade-btn" title="检查并升级" style="position:relative;">🔄 升级<span id="upgrade-dot" style="display:none;position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:#ffb946;box-shadow:0 0 6px #ffb946;"></span></a>
+    <a href="/logout">登出 ▸</a>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ===== Card 1: 系统状态条 ===== -->
+  <div class="section-title">系统状态</div>
+  <div class="card">
+    <div class="kpi-row">
+      <div class="kpi">
+        <div class="kpi-label">监听</div>
+        <div class="kpi-val dim" id="kpi-listener">—</div>
+        <div class="kpi-sub" id="kpi-listener-sub">检测中...</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">账号</div>
+        <div class="kpi-val" id="kpi-accounts">—</div>
+        <div class="kpi-sub" id="kpi-accounts-sub">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">代码版本</div>
+        <div class="kpi-val" style="font-size:18px;font-family:'JetBrains Mono',monospace;" id="kpi-config">—</div>
+        <div class="kpi-sub" id="kpi-config-sub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">今日告警</div>
+        <div class="kpi-val" id="kpi-alerts-total">—</div>
+        <div class="kpi-sub" id="kpi-alerts-sub">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Sheet 写入</div>
+        <div class="kpi-val" id="kpi-sheets">—</div>
+        <div class="kpi-sub" id="kpi-sheets-sub">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">今日消息</div>
+        <div class="kpi-val" id="kpi-messages">—</div>
+        <div class="kpi-sub" id="kpi-messages-sub">—</div>
+      </div>
+    </div>
+    <div class="alert-switches">
+      <span style="font-size:11px;color:#7c8a9a;letter-spacing:1px;">🔔 预警开关:</span>
+      <span class="sw-chip" id="sw-keyword">🔑 关键词</span>
+      <span class="sw-chip" id="sw-no_reply">⏰ 未回复</span>
+      <span class="sw-chip" id="sw-delete">🗑 删除消息</span>
+      <span class="sw-chip" id="sw-daily" style="margin-left:auto;">📅 日报</span>
+    </div>
+  </div>
+
+  <!-- ===== Row: 账号矩阵 + 实时告警流 ===== -->
+  <div class="grid-2">
+    <div>
+      <div class="section-title">账号矩阵</div>
+      <div class="card">
+        <div class="card-head">
+          <span>外事号 · 心跳 · 槽位 · 今日告警</span>
+          <span class="badge" id="acc-meta">—</span>
+        </div>
+        <div class="account-mini-grid" id="account-grid">
+          <div class="empty-block">读取中...</div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-title">实时告警流</div>
+      <div class="card">
+        <div class="card-head">
+          <span>最近 50 条</span>
+          <span class="badge">⏵ 倒序</span>
+        </div>
+        <ul class="alert-stream" id="alert-stream">
+          <li class="empty-block">读取中...</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Row: 广告主活跃榜 (24h) ===== -->
+  <div class="grid-2">
+    <div>
+      <div class="section-title">活跃 Top 5 (24h 入站)</div>
+      <div class="card">
+        <div class="card-head">
+          <span>谁在频繁发消息</span>
+          <span class="badge" id="top-active-meta">—</span>
+        </div>
+        <div class="top-list" id="top-active-list">
+          <div class="empty-block">读取中...</div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">沉默 Top 5 (>24h 无入站)</div>
+      <div class="card">
+        <div class="card-head">
+          <span>该主动 ping 的客户</span>
+          <span class="badge" id="top-silent-meta">—</span>
+        </div>
+        <div class="top-list" id="top-silent-list">
+          <div class="empty-block">读取中...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Row: 24h 趋势图 ===== -->
+  <div class="section-title">24 小时趋势</div>
+  <div class="card">
+    <div class="chart-wrap">
+      <div class="chart-bars" id="chart-bars">
+        <div class="empty-block" style="width:100%;">加载中...</div>
+      </div>
+      <div class="chart-x" id="chart-x"></div>
+      <div class="chart-legend">
+        <span><i style="background:var(--accent-red);"></i>关键词</span>
+        <span><i style="background:var(--accent-warn);"></i>未回复</span>
+        <span><i style="background:var(--accent-danger);"></i>删除</span>
+        <span><i style="background:rgba(125,170,210,0.4);border:1px solid rgba(125,170,210,0.6);"></i>消息量(背景)</span>
+        <span style="margin-left:auto;color:var(--text-dim);" id="chart-meta">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Row: 配置 / Sheets / Bot 三栏 ===== -->
+  <div class="grid-3">
+    <div>
+      <div class="section-title">配置快照</div>
+      <div class="card">
+        <div class="kv-list">
+          <div class="kv-row"><span class="kv-k">公司显示</span><span class="kv-v" id="cfg-company">—</span></div>
+          <div class="kv-row"><span class="kv-k">对方角色</span><span class="kv-v" id="cfg-peer">—</span></div>
+          <div class="kv-row"><span class="kv-k">商务人员</span><span class="kv-v" id="cfg-operator">—</span></div>
+          <div class="kv-row"><span class="kv-k">未回复阈值</span><span class="kv-v" id="cfg-noreply">— 分钟</span></div>
+          <div class="kv-row"><span class="kv-k">媒体上传</span><span class="kv-v" id="cfg-media">—</span></div>
+          <div class="kv-row"><span class="kv-k">关键词数</span><span class="kv-v" id="cfg-kw-count">— 个</span></div>
+        </div>
+        <div class="keyword-chips" id="keyword-chips"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-title">Sheet 写入健康</div>
+      <div class="card">
+        <div class="kv-list">
+          <div class="kv-row"><span class="kv-k">今日写入</span><span class="kv-v" id="sh-today">—</span></div>
+          <div class="kv-row"><span class="kv-k">待写入</span><span class="kv-v" id="sh-pending">—</span></div>
+          <div class="kv-row"><span class="kv-k">最近写入</span><span class="kv-v" id="sh-last">—</span></div>
+          <div class="kv-row"><span class="kv-k">Sheet ID</span><span class="kv-v dim" id="sh-id">—</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-title">Bot 推送健康</div>
+      <div class="card">
+        <div class="kv-list">
+          <div class="kv-row"><span class="kv-k">今日 关键词</span><span class="kv-v" id="bot-kw">—</span></div>
+          <div class="kv-row"><span class="kv-k">今日 未回复</span><span class="kv-v" id="bot-nr">—</span></div>
+          <div class="kv-row"><span class="kv-k">今日 删除</span><span class="kv-v" id="bot-del">—</span></div>
+          <div class="kv-row"><span class="kv-k">最近推送</span><span class="kv-v" id="bot-last">—</span></div>
+          <div class="kv-row"><span class="kv-k">Bot Token</span><span class="kv-v dim" id="bot-token">—</span></div>
+          <div class="kv-row"><span class="kv-k">预警群</span><span class="kv-v dim" id="bot-group">—</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const POLL_INTERVAL = 5000;
+let pollFails = 0;
+
+const TYPE_LABEL = {keyword: '🔑 关键词', no_reply: '⏰ 未回复', deleted: '🗑 删除'};
+
+function el(id) { return document.getElementById(id); }
+function setText(id, val) { const e = el(id); if (e) e.textContent = val; }
+function setHTML(id, val) { const e = el(id); if (e) e.innerHTML = val; }
+function escapeHTML(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function setLive(state, text) {
+  const dot = el('live-dot');
+  const txt = el('live-text');
+  if (!dot) return;
+  dot.classList.remove('stale', 'error');
+  if (state === 'stale') dot.classList.add('stale');
+  if (state === 'error') dot.classList.add('error');
+  if (txt) txt.textContent = text;
+}
+
+function renderSystem(d) {
+  const sys = d.system;
+  // 监听
+  if (sys.listener.alive) {
+    el('kpi-listener').className = 'kpi-val green';
+    setText('kpi-listener', '● ONLINE');
+    setText('kpi-listener-sub', sys.listener.health || '—');
+  } else {
+    el('kpi-listener').className = 'kpi-val danger';
+    setText('kpi-listener', '○ OFFLINE');
+    setText('kpi-listener-sub', sys.listener.status || 'down');
+  }
+  // 账号
+  setText('kpi-accounts', sys.accounts_online + ' / ' + sys.accounts_total);
+  let acc_sub_parts = [];
+  if (sys.accounts_warn > 0) acc_sub_parts.push(sys.accounts_warn + ' 慢');
+  if (sys.accounts_dead > 0) acc_sub_parts.push(sys.accounts_dead + ' 死');
+  if (acc_sub_parts.length === 0 && sys.accounts_total > 0) acc_sub_parts.push('全部正常');
+  if (sys.accounts_total === 0) acc_sub_parts.push('未登录账号');
+  setText('kpi-accounts-sub', acc_sub_parts.join(' · '));
+  el('kpi-accounts').className =
+    (sys.accounts_dead > 0) ? 'kpi-val danger' :
+    (sys.accounts_warn > 0) ? 'kpi-val warn' :
+    (sys.accounts_total > 0 ? 'kpi-val green' : 'kpi-val dim');
+  // 代码版本
+  setText('kpi-config', sys.config_version.sha || sys.config_version.label || '—');
+  setText('kpi-config-sub', sys.config_version.subject || sys.config_version.label || '—');
+  // 告警
+  setText('kpi-alerts-total', d.alerts_today.total);
+  const at = d.alerts_today;
+  setText('kpi-alerts-sub',
+    `🔑${at.keyword} ⏰${at.no_reply} 🗑${at.deleted} · 推${at.sent}/静${at.silenced}`);
+  // Sheets
+  setText('kpi-sheets', d.sheets.today_writes);
+  setText('kpi-sheets-sub',
+    (d.sheets.pending > 0 ? `${d.sheets.pending} 待写入 · ` : '') +
+    (d.sheets.last_write_human || '—'));
+  // 今日消息
+  const m = d.messages_today || {in:0, out:0, media:0, deleted:0, total:0};
+  setText('kpi-messages', m.total);
+  setText('kpi-messages-sub',
+    `↓${m.in} ↑${m.out}` +
+    (m.media > 0 ? ` · 🖼${m.media}` : '') +
+    (m.deleted > 0 ? ` · 🗑${m.deleted}` : ''));
+  // 三个开关
+  const sw = sys.alert_switches;
+  el('sw-keyword').classList.toggle('off', !sw.keyword);
+  el('sw-no_reply').classList.toggle('off', !sw.no_reply);
+  el('sw-delete').classList.toggle('off', !sw.delete);
+  el('sw-daily').classList.toggle('off', !sys.daily_report_enabled);
+}
+
+function renderAccounts(accounts) {
+  const grid = el('account-grid');
+  if (!accounts || accounts.length === 0) {
+    grid.innerHTML = '<div class="empty-block">未添加任何账号 — 去 [账号管理] 添加</div>';
+    setText('acc-meta', '');
+    return;
+  }
+  setText('acc-meta', accounts.length + ' 个账号');
+  const html = accounts.map((a, i) => {
+    const cls = a.heartbeat_status === 'dead' ? 'dead' :
+                a.heartbeat_status === 'warn' ? 'warn' : '';
+    const pulseLabel = a.heartbeat_status === 'dead' ?
+        '🔴 ' + (a.last_heartbeat_human === '—' ? '从未活动' : a.last_heartbeat_human) :
+      a.heartbeat_status === 'warn' ?
+        '⚠ ' + a.last_heartbeat_human :
+        '● ' + a.last_heartbeat_human;
+    const pulseCls = a.heartbeat_status === 'dead' ? 'dead' :
+                     a.heartbeat_status === 'warn' ? 'warn' : '';
+    const initial = (a.name || '?').charAt(0).toUpperCase();
+    const colors = [
+      'linear-gradient(135deg, #2aabee, #1e5a8a)',
+      'linear-gradient(135deg, #3390ec, #3390ec)',
+      'linear-gradient(135deg, #f5a623, #64abde)',
+      'linear-gradient(135deg, #2aabee, #64abde)',
+      'linear-gradient(135deg, #4fae4f, #2aabee)',
+      'linear-gradient(135deg, #64abde, #3390ec)',
+    ];
+    const accentColor = colors[i % colors.length];
+    const slotPct = Math.min(100, a.slots_pct || 0);
+    const slotBarCls = slotPct >= 90 ? 'warn' : '';
+    const tIn = a.today_in || 0;
+    const tOut = a.today_out || 0;
+    return `
+      <div class="account-mini ${cls}">
+        <div class="am-row">
+          <div class="am-avatar" style="background:${accentColor}">${escapeHTML(initial)}</div>
+          <div style="min-width:0;flex:1;">
+            <div class="am-name">${escapeHTML(a.name)}</div>
+            <div class="am-phone">${escapeHTML(a.phone)}${a.username ? ' · @' + escapeHTML(a.username) : ''}</div>
+          </div>
+          <span class="am-pulse ${pulseCls}">${escapeHTML(pulseLabel)}</span>
+        </div>
+        <div class="am-stat">
+          <span class="io-pill" title="今日入站">↓ <b>${tIn}</b></span>
+          <span class="io-pill" title="今日出站">↑ <b>${tOut}</b></span>
+          <span><b>${a.alerts_today.keyword}</b>关键词</span>
+          <span><b>${a.alerts_today.no_reply}</b>未回复</span>
+          <span><b>${a.alerts_today.deleted}</b>删除</span>
+        </div>
+        <div class="slot-bar" title="${a.slots_used} / ${a.slots_total} 槽位">
+          <div class="slot-bar-fill ${slotBarCls}" style="width:${slotPct}%"></div>
+        </div>
+        <div style="font-size:9px;color:var(--text-dim);text-align:right;margin-top:2px;letter-spacing:0.5px;">
+          槽位 ${a.slots_used}/${a.slots_total} · ${slotPct}%
+        </div>
+      </div>`;
+  }).join('');
+  grid.innerHTML = html;
+}
+
+function renderAlerts(alerts) {
+  const stream = el('alert-stream');
+  if (!alerts || alerts.length === 0) {
+    stream.innerHTML = '<li class="empty-block">今日还没告警 — 系统在监听</li>';
+    return;
+  }
+  const html = alerts.map(a => {
+    const typeCls = a.type === 'keyword' ? 'kw' : a.type;
+    const typeLabel = TYPE_LABEL[a.type] || a.type;
+    const actCls = a.pushed ? 'a-act ok' : 'a-act';
+    const actText = a.pushed ? '✓ 已推' : '◯ 静音';
+    return `
+      <li class="alert-row">
+        <span class="a-time">${escapeHTML(a.time_short)}</span>
+        <span class="a-type ${typeCls}">${escapeHTML(typeLabel)}</span>
+        <span class="a-msg">
+          <span class="acc">${escapeHTML(a.account_name)}</span>
+          <span class="peer">→ ${escapeHTML(a.peer_name)}</span>
+          ${escapeHTML(a.message_text)}
+        </span>
+        <span class="${actCls}">${escapeHTML(actText)}</span>
+      </li>`;
+  }).join('');
+  stream.innerHTML = html;
+}
+
+function renderChart(buckets) {
+  const wrap = el('chart-bars');
+  if (!buckets || buckets.length === 0) {
+    wrap.innerHTML = '<div class="empty-block" style="width:100%;">无 24h 数据</div>';
+    setHTML('chart-x', '');
+    setText('chart-meta', '');
+    return;
+  }
+  // 告警最大值(决定告警柱高度)
+  let alertMax = 0;
+  for (const b of buckets) {
+    const t = b.kw + b.nr + b.del;
+    if (t > alertMax) alertMax = t;
+  }
+  if (alertMax === 0) alertMax = 1;
+  // 消息最大值(决定背景灰柱高度)
+  let msgMax = 0;
+  for (const b of buckets) {
+    const t = b.msg_total || 0;
+    if (t > msgMax) msgMax = t;
+  }
+  if (msgMax === 0) msgMax = 1;
+
+  const html = buckets.map(b => {
+    let segs = '';
+    const segData = [
+      {cls: 'kw',  v: b.kw},
+      {cls: 'nr',  v: b.nr},
+      {cls: 'del', v: b.del},
+    ];
+    for (const s of segData) {
+      if (s.v > 0) {
+        const h = (s.v / alertMax) * 130;
+        segs += `<div class="chart-seg ${s.cls}" style="height:${h.toFixed(1)}px"></div>`;
+      }
+    }
+    // 灰色消息背景柱(独立尺度)
+    const msgT = b.msg_total || 0;
+    const msgH = msgT > 0 ? (msgT / msgMax) * 130 : 0;
+    const bg = msgT > 0 ? `<div class="chart-msgbg" style="height:${msgH.toFixed(1)}px"></div>` : '';
+    const tipParts = [
+      b.hour,
+      `消息 ${msgT} (↓${b.msg_in||0} ↑${b.msg_out||0})`,
+      `关键词 ${b.kw}`,
+      `未回复 ${b.nr}`,
+      `删除 ${b.del}`,
+    ];
+    return `<div class="chart-col" title="${tipParts.join(' · ')}">${bg}${segs}</div>`;
+  }).join('');
+  wrap.innerHTML = html;
+
+  // X 轴
+  let xHTML = '';
+  for (let i = 0; i < buckets.length; i++) {
+    if (i === 0 || i === buckets.length - 1 || i % 4 === 0) {
+      xHTML += `<span>${buckets[i].hour}</span>`;
+    } else {
+      xHTML += `<span></span>`;
+    }
+  }
+  setHTML('chart-x', xHTML);
+
+  const total24 = buckets.reduce((s, b) => s + b.kw + b.nr + b.del, 0);
+  const msg24 = buckets.reduce((s, b) => s + (b.msg_total || 0), 0);
+  setText('chart-meta',
+    `告警 ${total24} (峰 ${alertMax}/h) · 消息 ${msg24} (峰 ${msgMax}/h)`);
+}
+
+function renderTopPeers(active, silent) {
+  // Active
+  const a = el('top-active-list');
+  if (!active || active.length === 0) {
+    a.innerHTML = '<div class="empty-block">24h 内没有入站消息</div>';
+    setText('top-active-meta', '0');
+  } else {
+    setText('top-active-meta', active.length + ' 条');
+    a.innerHTML = active.map((p, i) => {
+      const rankCls = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
+      return `
+        <div class="top-row">
+          <span class="top-rank ${rankCls}">${i + 1}</span>
+          <span class="top-name">${escapeHTML(p.peer_name)}<small>${escapeHTML(p.account_name)} · ${escapeHTML(p.last_human)}</small></span>
+          <span class="top-val">${p.count}</span>
+        </div>`;
+    }).join('');
+  }
+  // Silent
+  const s = el('top-silent-list');
+  if (!silent || silent.length === 0) {
+    s.innerHTML = '<div class="empty-block">所有广告主 24h 内都有回复 ✓</div>';
+    setText('top-silent-meta', '0');
+  } else {
+    setText('top-silent-meta', silent.length + ' 条');
+    s.innerHTML = silent.map((p, i) => {
+      const isNever = !p.last_in;
+      return `
+        <div class="top-row">
+          <span class="top-rank">${i + 1}</span>
+          <span class="top-name">${escapeHTML(p.peer_name)}<small>${escapeHTML(p.account_name)}</small></span>
+          <span class="top-val ${isNever ? 'warn' : 'muted'}">${escapeHTML(p.last_human)}</span>
+        </div>`;
+    }).join('');
+  }
+}
+
+function renderConfig(cfg) {
+  setText('cfg-company', cfg.company_display || '—');
+  setText('cfg-peer', cfg.peer_role_label);
+  setText('cfg-operator', cfg.operator_label);
+  setText('cfg-noreply', cfg.no_reply_minutes + ' 分钟');
+  setText('cfg-media', cfg.media_enabled ? '✓ 已启用' : '— 未配');
+  setText('cfg-kw-count', (cfg.keywords ? cfg.keywords.length : 0) + ' 个');
+  // 关键词 chips
+  const chipsWrap = el('keyword-chips');
+  if (!cfg.keywords || cfg.keywords.length === 0) {
+    chipsWrap.innerHTML = '<span style="font-size:10px;color:#6d7f8f;letter-spacing:1px;">// 未设置关键词</span>';
+  } else {
+    chipsWrap.innerHTML = cfg.keywords.map(k =>
+      `<span class="kw-chip">${escapeHTML(k)}</span>`).join('');
+  }
+}
+
+function renderSheets(s) {
+  setText('sh-today', s.today_writes + ' 行');
+  el('sh-pending').className = s.pending > 0 ? 'kv-v warn' : 'kv-v green';
+  setText('sh-pending', s.pending > 0 ? s.pending + ' 条' : '0 (全部已写)');
+  setText('sh-last', s.last_write_human || '—');
+  setText('sh-id', '···' + (s.sheet_id || '—'));
+}
+
+function renderBot(b) {
+  setText('bot-kw', b.today_keyword_pushed);
+  setText('bot-nr', b.today_no_reply_pushed);
+  setText('bot-del', b.today_delete_pushed);
+  setText('bot-last', b.last_push_human || '—');
+  setText('bot-token', '···' + (b.bot_token_tail || '—'));
+  setText('bot-group', b.alert_group_id || '—');
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/api/dashboard/snapshot', {credentials: 'same-origin'});
+    if (!r.ok) {
+      pollFails++;
+      setLive('error', 'HTTP ' + r.status);
+      return;
+    }
+    const data = await r.json();
+    if (!data.ok) {
+      pollFails++;
+      setLive('error', 'API ERR');
+      return;
+    }
+    pollFails = 0;
+    setLive('ok', 'LIVE · ' + (data.ts || '').slice(-8));
+    renderSystem(data);
+    renderAccounts(data.accounts);
+    renderAlerts(data.alerts_recent);
+    renderTopPeers(data.top_active, data.top_silent);
+    renderChart(data.alerts_24h);
+    renderConfig(data.config);
+    renderSheets(data.sheets);
+    renderBot(data.bot);
+  } catch (e) {
+    pollFails++;
+    setLive('error', 'NET ERR');
+    console.warn('snapshot fail', e);
+  }
+  // 连续 3 次失败 → stale 标识
+  if (pollFails >= 3) setLive('stale', '断线 ' + pollFails);
+  setTimeout(poll, POLL_INTERVAL);
+}
+
+setLive('stale', 'INIT...');
+poll();
+</script>
+
+<!-- /* upgrade modal (v2.9.3) */ -->
+<div id="upgrade-modal" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+  <div style="background:#0d1419;border:1px solid rgba(42,171,238,0.4);border-radius:12px;width:min(640px,92vw);max-height:86vh;overflow:auto;padding:24px 28px;box-shadow:0 0 60px rgba(42,171,238,0.25);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="font-family:Orbitron,sans-serif;font-size:14px;letter-spacing:2px;color:#2aabee;">🔄 版本升级</div>
+      <button type="button" id="upg-close" style="background:transparent;border:0;color:#bfd6e8;font-size:18px;cursor:pointer;">✕</button>
+    </div>
+    <div id="upg-body" style="font-size:13px;color:#bfd6e8;line-height:1.8;">
+      <div id="upg-loading">加载状态中...</div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var btn=document.getElementById('upgrade-btn');
+  if(!btn) return;
+  var modal=document.getElementById('upgrade-modal');
+  var body=document.getElementById('upg-body');
+  var dot=document.getElementById('upgrade-dot');
+  var pollTimer=null;
+
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+
+  function show(){ modal.style.display='flex'; }
+  function hide(){ modal.style.display='none'; if(pollTimer){clearInterval(pollTimer);pollTimer=null;} }
+
+  async function fetchStatus(){
+    try{
+      var r=await fetch('/api/update/check_now',{method:'POST'});
+      var j=await r.json();
+      if(!j.ok) return null;
+      return j.state;
+    }catch(e){ return null; }
+  }
+
+  async function fetchUpgradeProgress(){
+    try{
+      var r=await fetch('/api/update/upgrade_status');
+      var j=await r.json();
+      return j.state||{};
+    }catch(e){ return {}; }
+  }
+
+  function renderIdle(s){
+    if(!s){ body.innerHTML='<div style="color:#ff6b6b;">状态读取失败</div>'; return; }
+    if(!s.has_update){
+      body.innerHTML='<div style="padding:18px;background:rgba(79,174,79,0.08);border:1px solid rgba(79,174,79,0.3);border-radius:8px;color:#9ef0b8;">✓ 当前已是最新版本</div>'+
+        '<div style="margin-top:12px;font-size:11px;color:#6a7f93;">本机: '+esc(s.local_short)+' · 远端: '+esc(s.latest_short)+'</div>';
+      return;
+    }
+    var title=esc(s.latest_user_title||'📦 有新版本');
+    var bodyText=esc(s.latest_user_body||'');
+    var cmds=s.upgrade_cmd||'';
+    body.innerHTML=
+      '<div style="padding:14px 16px;background:rgba(255,184,70,0.08);border:1px solid rgba(255,184,70,0.3);border-radius:8px;margin-bottom:16px;">'+
+        '<div style="color:#ffb946;font-weight:600;margin-bottom:4px;">'+title+'</div>'+
+        '<div style="color:#e6d5b0;font-size:12px;">'+bodyText+'</div>'+
+        '<div style="margin-top:8px;font-size:11px;color:#8ba3b8;">版本 '+esc(s.local_short)+' → '+esc(s.latest_short)+'</div>'+
+      '</div>'+
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;">'+
+        '<button type="button" id="upg-soft" style="flex:1;min-width:160px;padding:12px 16px;background:rgba(42,171,238,0.15);border:1px solid rgba(42,171,238,0.5);color:#2aabee;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;">⬇ 一键软升级</button>'+
+        '<button type="button" id="upg-ssh" style="flex:1;min-width:160px;padding:12px 16px;background:transparent;border:1px solid rgba(191,214,232,0.3);color:#bfd6e8;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;">📋 复制 SSH 命令</button>'+
+      '</div>'+
+      '<div style="margin-top:10px;font-size:11px;color:#6a7f93;">软升级 ≈ 15 秒,失败会自动回退。涉及镜像重建的版本会提示你用 SSH。</div>';
+
+    document.getElementById('upg-soft').onclick=doSoftUpgrade;
+    document.getElementById('upg-ssh').onclick=async function(){
+      try{ await navigator.clipboard.writeText(cmds); this.textContent=\'✓ 已复制\'; setTimeout(()=>{this.textContent='📋 复制 SSH 命令';},2000);}catch(e){ prompt('复制以下命令:', cmds); }
+    };
+  }
+
+  async function doSoftUpgrade(){
+    body.innerHTML='<div style="padding:14px;color:#9cc9e8;">启动升级...</div>';
+    try{
+      var r=await fetch('/api/update/soft_upgrade',{method:'POST'});
+      var j=await r.json();
+      if(!j.ok){ body.innerHTML='<div style="color:#ff6b6b;">升级启动失败: '+esc(j.error||'未知错误')+'</div>'; return; }
+      if(j.need_rebuild){
+        body.innerHTML='<div style="padding:14px;background:rgba(255,107,107,0.1);border:1px solid rgba(255,107,107,0.4);border-radius:6px;color:#ffd0d0;">'+
+          '<div style="font-weight:600;margin-bottom:6px;">⚠ 此版本涉及镜像重建</div>'+
+          '<div style="font-size:12px;">改动文件: '+(j.rebuild_files||[]).map(esc).join(', ')+'</div>'+
+          '<div style="margin-top:10px;padding:10px;background:#000;border-radius:4px;font-family:monospace;font-size:11px;color:#9ef0b8;word-break:break-all;">'+esc(j.ssh_cmd)+'</div>'+
+          '<button type="button" onclick="navigator.clipboard.writeText('+JSON.stringify(j.ssh_cmd)+');this.textContent=\'✓ 已复制\'" style="margin-top:10px;padding:8px 14px;background:rgba(42,171,238,0.15);border:1px solid rgba(42,171,238,0.5);color:#2aabee;border-radius:4px;cursor:pointer;font-size:12px;">📋 复制命令</button>'+
+        '</div>';
+        return;
+      }
+      if(j.started){
+        body.innerHTML='<div id="upg-progress" style="font-size:12px;line-height:1.9;"><div style="color:#2aabee;">✓ 升级已开始...</div></div><div id="upg-logs" style="margin-top:12px;padding:10px;background:#000;border-radius:4px;font-family:monospace;font-size:11px;color:#9cc9e8;max-height:280px;overflow:auto;"></div>';
+        pollProgress();
+      }
+    }catch(e){ body.innerHTML='<div style="color:#ff6b6b;">网络错误: '+esc(String(e))+'</div>'; }
+  }
+
+  async function pollProgress(){
+    var fail=0;
+    pollTimer=setInterval(async function(){
+      var st=await fetchUpgradeProgress();
+      var logs=st.logs||[];
+      var logBox=document.getElementById('upg-logs');
+      var prog=document.getElementById('upg-progress');
+      if(logBox) logBox.innerHTML=logs.map(esc).join('<br>');
+      if(st.phase==='done'){
+        if(prog) prog.innerHTML='<div style="color:#9ef0b8;">✓ 升级完成,容器正在重启(约 10 秒后请刷新页面)</div>';
+        clearInterval(pollTimer); pollTimer=null;
+      } else if(st.phase==='error'){
+        if(prog) prog.innerHTML='<div style="color:#ff6b6b;">✗ 升级失败: '+esc(st.error||'')+'</div>';
+        clearInterval(pollTimer); pollTimer=null;
+      } else if(st.phase==='restarting'){
+        if(prog) prog.innerHTML='<div style="color:#ffb946;">⏳ 容器重启中...</div>';
+      }
+      // 如果 web 容器重启了,fetch 会失败;容忍几次
+      if(!st || !st.phase){ fail++; if(fail>5){ clearInterval(pollTimer); pollTimer=null; } }
+    }, 1500);
+  }
+
+  btn.onclick=async function(e){
+    e.preventDefault();
+    show();
+    body.innerHTML='<div style="padding:18px;color:#9cc9e8;">检查中...</div>';
+    var s=await fetchStatus();
+    renderIdle(s);
+    if(s && s.has_update) dot.style.display='block';
+    else dot.style.display='none';
+  };
+
+  document.getElementById('upg-close').onclick=hide;
+  modal.onclick=function(e){ if(e.target===modal) hide(); };
+
+  // 静默初始检查,有新版亮点
+  (async function(){
+    try{
+      var r=await fetch('/api/update/status');
+      var j=await r.json();
+      if(j.ok && j.state && j.state.has_update) dot.style.display='block';
+    }catch(e){}
+  })();
+})();
+</script>
+
+</body>
+</html>

@@ -28,7 +28,7 @@
     background: var(--bg-0);
     color: var(--text);
     min-height: 100vh;
-    padding: 40px 16px;
+    padding: 0;
     -webkit-font-smoothing: antialiased;
     position: relative;
     overflow-x: hidden;
@@ -76,57 +76,128 @@
   .container {
     position: relative; z-index: 10;
     max-width: 860px; margin: 0 auto;
-    background: rgba(13, 13, 13, 0.72);
+    padding: 32px 20px 40px;
+  }
+
+  /* ===== 顶部统一导航(与 index/dashboard 一致) ===== */
+  .header {
+    position: relative; z-index: 10;
+    background: rgba(13, 13, 13, 0.85);
     backdrop-filter: blur(20px) saturate(150%);
     -webkit-backdrop-filter: blur(20px) saturate(150%);
-    border: 1px solid rgba(42, 171, 238, 0.22);
+    border-bottom: 1px solid rgba(42, 171, 238, 0.22);
+    padding: 0 32px;
+    height: 64px;
+    display: flex; align-items: center; justify-content: space-between;
+    box-shadow: 0 4px 30px rgba(42, 171, 238, 0.08);
+  }
+  .header-left { display: flex; align-items: center; gap: 14px; }
+  .header-icon {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, #2aabee, #3390ec, #64abde);
+    background-size: 200% 200%;
+    border-radius: 10px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: "Orbitron", sans-serif;
+    font-size: 14px; font-weight: 900; color: #fff;
+    box-shadow: 0 0 20px rgba(42, 171, 238, 0.4);
+  }
+  .header h1.brand {
+    font-family: "Orbitron", sans-serif;
+    font-size: 16px; font-weight: 700;
+    letter-spacing: 3px;
+    background: linear-gradient(90deg, #2aabee, #3390ec, #64abde, #3390ec, #2aabee);
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: textFlow 20s linear infinite;
+    margin: 0;
+  }
+  @keyframes textFlow { 0% { background-position: 0% 50%; } 100% { background-position: 300% 50%; } }
+  .company-tag {
+    margin-left: 10px;
+    padding: 3px 10px;
+    border: 1px solid rgba(42, 171, 238, 0.3);
     border-radius: 20px;
-    padding: 48px 44px;
-    box-shadow:
-      0 0 60px rgba(42, 171, 238, 0.10),
-      0 0 120px rgba(51, 144, 236, 0.06),
-      inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  }
-  .container::before {
-    content: "";
-    position: absolute; inset: -1px;
-    border-radius: 20px;
-    padding: 1px;
-    background: linear-gradient(135deg,
-      rgba(42,171,238,0.6), transparent 30%,
-      transparent 70%, rgba(100,171,222,0.6));
-    -webkit-mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    animation: borderShine 5s linear infinite;
-    pointer-events: none;
-  }
-  @keyframes borderShine {
-    0%, 100% { opacity: 0.4; }
-    50%      { opacity: 1; }
-  }
-
-  /* ===== 顶部导航 ===== */
-  .top-nav {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 24px;
-    padding-bottom: 18px;
-    border-bottom: 1px dashed rgba(42,171,238,0.15);
-  }
-  .top-nav a {
+    font-size: 10px; letter-spacing: 2px;
     color: var(--accent-red);
+    background: rgba(42, 171, 238, 0.08);
+    text-transform: uppercase;
+  }
+  .live-indicator {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-left: 8px;
+    font-size: 10px; color: var(--text-dim);
+    letter-spacing: 1px;
+  }
+  .live-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent-lime, #4caf50);
+    box-shadow: 0 0 6px var(--accent-lime, #4caf50);
+    animation: liveBlink 2s ease-in-out infinite;
+  }
+  @keyframes liveBlink { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .header-right { display: flex; gap: 16px; align-items: center; }
+  .header-right a {
+    color: var(--text-dim);
     text-decoration: none;
-    font-size: 12px;
+    font-size: 11px;
     letter-spacing: 2px;
     text-transform: uppercase;
-    transition: text-shadow 0.2s;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: all 0.2s;
   }
-  .top-nav a:hover { text-shadow: 0 0 12px var(--accent-red); }
+  .header-right a:hover {
+    color: var(--accent-red);
+    background: rgba(42, 171, 238, 0.08);
+    text-shadow: 0 0 10px var(--accent-red);
+  }
+  .header-right a.active {
+    color: var(--accent-red);
+    background: rgba(42, 171, 238, 0.12);
+    border: 1px solid rgba(42, 171, 238, 0.4);
+  }
+  /* 实时指示器 */
+  .live-indicator {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-left: 8px;
+    font-size: 10px; color: var(--text-dim);
+    letter-spacing: 1px;
+  }
+  .live-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent-lime, #4caf50);
+    box-shadow: 0 0 6px var(--accent-lime, #4caf50);
+    animation: liveBlink 2s ease-in-out infinite;
+  }
+  @keyframes liveBlink { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  .site-header-right { display: flex; gap: 16px; align-items: center; }
+  .site-header-right a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: all 0.2s;
+  }
+  .site-header-right a:hover {
+    color: var(--accent-red);
+    background: rgba(42, 171, 238, 0.08);
+    text-shadow: 0 0 10px var(--accent-red);
+  }
+  .site-header-right a.active {
+    color: var(--accent-red);
+    background: rgba(42, 171, 238, 0.12);
+    border: 1px solid rgba(42, 171, 238, 0.4);
+  }
 
   /* ===== 标题区 ===== */
-  .header-icon {
+  .page-icon {
     width: 60px; height: 60px;
     background: linear-gradient(135deg, #2aabee, #3390ec, #64abde);
     background-size: 200% 200%;
@@ -153,6 +224,7 @@
     font-size: 32px;
     font-weight: 900;
     letter-spacing: 2px;
+    margin-top: 18px;
     margin-bottom: 8px;
     background: linear-gradient(90deg, #2aabee, #3390ec, #64abde, #3390ec, #2aabee);
     background-size: 300% 100%;
@@ -165,13 +237,6 @@
   @keyframes textFlow {
     0%   { background-position: 0% 50%; }
     100% { background-position: 300% 50%; }
-  }
-  @keyframes 100% { opacity: 1; }
-    3%       { opacity: 0.85; }
-    6%       { opacity: 1; }
-    48%      { opacity: 1; }
-    50%      { opacity: 0.92; }
-    52%      { opacity: 1; }
   }
   .subtitle {
     color: var(--text-dim);
@@ -519,15 +584,26 @@
 </head>
 <body>
 <div class="scanline"></div>
-<div class="container">
-  {% if mode == 'settings' %}
-  <div class="top-nav">
-    <a href="/">◂ 返回账号管理</a>
+{% if mode == 'settings' %}
+<div class="header">
+  <div class="header-left">
+    <div class="header-icon">TG</div>
+    <h1 class="brand">TG MONITOR</h1>
+    {% if company %}<span class="company-tag">{{ company }}</span>{% endif %}
+    <span class="live-indicator"><span class="live-dot"></span><span id="live-text">LIVE</span></span>
+  </div>
+  <div class="header-right">
+    <a href="/dashboard">📊 驾驶舱</a>
+    <a href="/">账号管理</a>
+    <a href="/settings" class="active">⚙ 设置</a>
+    <a href="#" id="upgrade-btn" title="检查并升级" style="position:relative;">🔄 升级<span id="upgrade-dot" style="display:none;position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:#ffb946;box-shadow:0 0 6px #ffb946;"></span></a>
     <a href="/logout">登出 ▸</a>
   </div>
-  {% endif %}
+</div>
+{% endif %}
+<div class="container">
 
-  <div class="header-icon">TG</div>
+{% if mode == 'setup' %}<div class="page-icon">TG</div>{% endif %}
   <h1>{% if mode == 'setup' %}首次部署向导{% else %}系统设置{% endif %}</h1>
   <p class="subtitle">
     {% if mode == 'setup' %}填完以下模块即可启动监控服务{% elif d.is_admin %}修改运行参数 — 保存后自动重启监控{% else %}个人面板 — 你只能修改自己的密码{% endif %}
@@ -1816,5 +1892,158 @@ bindPushToggle('toggle_daily_report_enabled', 'daily_report_enabled_status', '/a
 {% endif %}
 {% endif %}
 </script>
+<!-- /* live tick */ -->
+<script>
+(function(){
+  var t=document.getElementById('live-text');
+  if(!t) return;
+  function pad(n){return n<10?'0'+n:n;}
+  function tick(){
+    var d=new Date();
+    t.textContent='LIVE · '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+  }
+  tick(); setInterval(tick,1000);
+})();
+</script>
+
+<!-- /* upgrade modal (v2.9.3) */ -->
+<div id="upgrade-modal" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+  <div style="background:#0d1419;border:1px solid rgba(42,171,238,0.4);border-radius:12px;width:min(640px,92vw);max-height:86vh;overflow:auto;padding:24px 28px;box-shadow:0 0 60px rgba(42,171,238,0.25);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="font-family:Orbitron,sans-serif;font-size:14px;letter-spacing:2px;color:#2aabee;">🔄 版本升级</div>
+      <button type="button" id="upg-close" style="background:transparent;border:0;color:#bfd6e8;font-size:18px;cursor:pointer;">✕</button>
+    </div>
+    <div id="upg-body" style="font-size:13px;color:#bfd6e8;line-height:1.8;">
+      <div id="upg-loading">加载状态中...</div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var btn=document.getElementById('upgrade-btn');
+  if(!btn) return;
+  var modal=document.getElementById('upgrade-modal');
+  var body=document.getElementById('upg-body');
+  var dot=document.getElementById('upgrade-dot');
+  var pollTimer=null;
+
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+
+  function show(){ modal.style.display='flex'; }
+  function hide(){ modal.style.display='none'; if(pollTimer){clearInterval(pollTimer);pollTimer=null;} }
+
+  async function fetchStatus(){
+    try{
+      var r=await fetch('/api/update/check_now',{method:'POST'});
+      var j=await r.json();
+      if(!j.ok) return null;
+      return j.state;
+    }catch(e){ return null; }
+  }
+
+  async function fetchUpgradeProgress(){
+    try{
+      var r=await fetch('/api/update/upgrade_status');
+      var j=await r.json();
+      return j.state||{};
+    }catch(e){ return {}; }
+  }
+
+  function renderIdle(s){
+    if(!s){ body.innerHTML='<div style="color:#ff6b6b;">状态读取失败</div>'; return; }
+    if(!s.has_update){
+      body.innerHTML='<div style="padding:18px;background:rgba(79,174,79,0.08);border:1px solid rgba(79,174,79,0.3);border-radius:8px;color:#9ef0b8;">✓ 当前已是最新版本</div>'+
+        '<div style="margin-top:12px;font-size:11px;color:#6a7f93;">本机: '+esc(s.local_short)+' · 远端: '+esc(s.latest_short)+'</div>';
+      return;
+    }
+    var title=esc(s.latest_user_title||'📦 有新版本');
+    var bodyText=esc(s.latest_user_body||'');
+    var cmds=s.upgrade_cmd||'';
+    body.innerHTML=
+      '<div style="padding:14px 16px;background:rgba(255,184,70,0.08);border:1px solid rgba(255,184,70,0.3);border-radius:8px;margin-bottom:16px;">'+
+        '<div style="color:#ffb946;font-weight:600;margin-bottom:4px;">'+title+'</div>'+
+        '<div style="color:#e6d5b0;font-size:12px;">'+bodyText+'</div>'+
+        '<div style="margin-top:8px;font-size:11px;color:#8ba3b8;">版本 '+esc(s.local_short)+' → '+esc(s.latest_short)+'</div>'+
+      '</div>'+
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;">'+
+        '<button type="button" id="upg-soft" style="flex:1;min-width:160px;padding:12px 16px;background:rgba(42,171,238,0.15);border:1px solid rgba(42,171,238,0.5);color:#2aabee;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;">⬇ 一键软升级</button>'+
+        '<button type="button" id="upg-ssh" style="flex:1;min-width:160px;padding:12px 16px;background:transparent;border:1px solid rgba(191,214,232,0.3);color:#bfd6e8;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;">📋 复制 SSH 命令</button>'+
+      '</div>'+
+      '<div style="margin-top:10px;font-size:11px;color:#6a7f93;">软升级 ≈ 15 秒,失败会自动回退。涉及镜像重建的版本会提示你用 SSH。</div>';
+
+    document.getElementById('upg-soft').onclick=doSoftUpgrade;
+    document.getElementById('upg-ssh').onclick=async function(){
+      try{ await navigator.clipboard.writeText(cmds); this.textContent=\'✓ 已复制\'; setTimeout(()=>{this.textContent='📋 复制 SSH 命令';},2000);}catch(e){ prompt('复制以下命令:', cmds); }
+    };
+  }
+
+  async function doSoftUpgrade(){
+    body.innerHTML='<div style="padding:14px;color:#9cc9e8;">启动升级...</div>';
+    try{
+      var r=await fetch('/api/update/soft_upgrade',{method:'POST'});
+      var j=await r.json();
+      if(!j.ok){ body.innerHTML='<div style="color:#ff6b6b;">升级启动失败: '+esc(j.error||'未知错误')+'</div>'; return; }
+      if(j.need_rebuild){
+        body.innerHTML='<div style="padding:14px;background:rgba(255,107,107,0.1);border:1px solid rgba(255,107,107,0.4);border-radius:6px;color:#ffd0d0;">'+
+          '<div style="font-weight:600;margin-bottom:6px;">⚠ 此版本涉及镜像重建</div>'+
+          '<div style="font-size:12px;">改动文件: '+(j.rebuild_files||[]).map(esc).join(', ')+'</div>'+
+          '<div style="margin-top:10px;padding:10px;background:#000;border-radius:4px;font-family:monospace;font-size:11px;color:#9ef0b8;word-break:break-all;">'+esc(j.ssh_cmd)+'</div>'+
+          '<button type="button" onclick="navigator.clipboard.writeText('+JSON.stringify(j.ssh_cmd)+');this.textContent=\'✓ 已复制\'" style="margin-top:10px;padding:8px 14px;background:rgba(42,171,238,0.15);border:1px solid rgba(42,171,238,0.5);color:#2aabee;border-radius:4px;cursor:pointer;font-size:12px;">📋 复制命令</button>'+
+        '</div>';
+        return;
+      }
+      if(j.started){
+        body.innerHTML='<div id="upg-progress" style="font-size:12px;line-height:1.9;"><div style="color:#2aabee;">✓ 升级已开始...</div></div><div id="upg-logs" style="margin-top:12px;padding:10px;background:#000;border-radius:4px;font-family:monospace;font-size:11px;color:#9cc9e8;max-height:280px;overflow:auto;"></div>';
+        pollProgress();
+      }
+    }catch(e){ body.innerHTML='<div style="color:#ff6b6b;">网络错误: '+esc(String(e))+'</div>'; }
+  }
+
+  async function pollProgress(){
+    var fail=0;
+    pollTimer=setInterval(async function(){
+      var st=await fetchUpgradeProgress();
+      var logs=st.logs||[];
+      var logBox=document.getElementById('upg-logs');
+      var prog=document.getElementById('upg-progress');
+      if(logBox) logBox.innerHTML=logs.map(esc).join('<br>');
+      if(st.phase==='done'){
+        if(prog) prog.innerHTML='<div style="color:#9ef0b8;">✓ 升级完成,容器正在重启(约 10 秒后请刷新页面)</div>';
+        clearInterval(pollTimer); pollTimer=null;
+      } else if(st.phase==='error'){
+        if(prog) prog.innerHTML='<div style="color:#ff6b6b;">✗ 升级失败: '+esc(st.error||'')+'</div>';
+        clearInterval(pollTimer); pollTimer=null;
+      } else if(st.phase==='restarting'){
+        if(prog) prog.innerHTML='<div style="color:#ffb946;">⏳ 容器重启中...</div>';
+      }
+      // 如果 web 容器重启了,fetch 会失败;容忍几次
+      if(!st || !st.phase){ fail++; if(fail>5){ clearInterval(pollTimer); pollTimer=null; } }
+    }, 1500);
+  }
+
+  btn.onclick=async function(e){
+    e.preventDefault();
+    show();
+    body.innerHTML='<div style="padding:18px;color:#9cc9e8;">检查中...</div>';
+    var s=await fetchStatus();
+    renderIdle(s);
+    if(s && s.has_update) dot.style.display='block';
+    else dot.style.display='none';
+  };
+
+  document.getElementById('upg-close').onclick=hide;
+  modal.onclick=function(e){ if(e.target===modal) hide(); };
+
+  // 静默初始检查,有新版亮点
+  (async function(){
+    try{
+      var r=await fetch('/api/update/status');
+      var j=await r.json();
+      if(j.ok && j.state && j.state.has_update) dot.style.display='block';
+    }catch(e){}
+  })();
+})();
+</script>
+
 </body>
 </html>

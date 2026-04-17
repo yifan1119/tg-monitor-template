@@ -735,7 +735,7 @@ def setup_page():
         "api_id": env.get("API_ID", DEFAULT_API_ID),
         "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
     }
-    return render_template("setup.html", d=defaults, mode="setup")
+    return render_template("setup.html", d=defaults, mode="setup", company=config.COMPANY_DISPLAY)
 
 
 @app.route("/settings", methods=["GET"])
@@ -793,7 +793,7 @@ def settings_page():
         "metrics_access_count_24h": _metrics_access_count(24),
         "metrics_last_access": _metrics_last_access(),
     }
-    return render_template("setup.html", d=current, mode="settings")
+    return render_template("setup.html", d=current, mode="settings", company=config.COMPANY_DISPLAY)
 
 
 @app.route("/api/test-bot", methods=["POST"])
@@ -1994,7 +1994,7 @@ def api_update_status():
         env = read_env()
         company = env.get("COMPANY_NAME", "")
         state["company_name"] = company
-        state["upgrade_cmd"] = f"cd /root/tg-monitor-{company} && bash update.sh"
+        import upgrader as _up; state["upgrade_cmd"] = _up.build_upgrade_cmd(company)
         return jsonify({"ok": True, "state": state})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -2010,10 +2010,64 @@ def api_update_check_now():
         env = read_env()
         company = env.get("COMPANY_NAME", "")
         state["company_name"] = company
-        state["upgrade_cmd"] = f"cd /root/tg-monitor-{company} && bash update.sh"
+        import upgrader as _up; state["upgrade_cmd"] = _up.build_upgrade_cmd(company)
         return jsonify({"ok": True, "has_update": has_update, "state": state})
     except Exception as e:
         logger.exception("update check_now failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/update/soft_upgrade", methods=["POST"])
+@login_required
+def api_update_soft_upgrade():
+    """一键软升级 — 拉 tarball 覆盖代码 + 重启容器.
+    如果 Dockerfile/requirements.txt 改了会返回 need_rebuild=True,让前端显示 SSH 命令."""
+    me = flask_session.get("username", "")
+    if not is_admin(me):
+        return jsonify({"ok": False, "error": "仅管理员可执行升级"}), 403
+    try:
+        import upgrader
+        env = read_env()
+        company = env.get("COMPANY_NAME", "") or "demo"
+        result = upgrader.start_soft_upgrade(company)
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("soft upgrade start failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/update/upgrade_status", methods=["GET"])
+@login_required
+def api_update_upgrade_status():
+    try:
+        import upgrader
+        return jsonify({"ok": True, "state": upgrader.load_state()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+
+# ============ 驾驶舱 (demo 预览,暂不 push GIT) ============
+@app.route("/dashboard")
+@login_required
+def dashboard_page():
+    db.init_db()
+    return render_template(
+        "dashboard.html",
+        company=config.COMPANY_DISPLAY,
+        operator_label=config.OPERATOR_LABEL,
+        peer_role_label=config.PEER_ROLE_LABEL,
+    )
+
+
+@app.route("/api/dashboard/snapshot", methods=["GET"])
+@login_required
+def dashboard_snapshot():
+    try:
+        import dashboard_api
+        return jsonify(dashboard_api.snapshot())
+    except Exception as e:
+        logger.error("dashboard snapshot 失败: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
