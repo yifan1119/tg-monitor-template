@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.3(2026-04-18) — 登入/设置页版本号改动态 + 更新通知白话文案零维护(自动从 commit subject 生成)
+> 📌 **最新版**:v2.10.4(2026-04-18) — TG 会话吊销监测 + 预警(用户在 TG 官方 App 终止会话 / 账号被封禁 → 5 分钟内告警 + 驾驶舱红色 badge)
 
 ---
 
@@ -388,7 +388,19 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.3** (2026-04-18) — 当前稳定版
+- **v2.10.4** (2026-04-18) — 当前稳定版
+  - [NEW] TG 会话吊销监测 (client.is_user_authorized() 每 5 分钟巡检一次)
+    - healthy → revoked 转场:TG 预警群推「外事号离线预警」+ 写 alerts 表(实时告警流显示)
+    - revoked → healthy 转场:推「外事号恢复通知」
+    - 状态持久化到 `data/.session_states.json`,容器重启不会重复告警
+    - 首轮 90s 延后 + 基线模式(不炸群),error 状态不触发转场
+  - [NEW] 驾驶舱账号卡:session 吊销时 pulse badge 覆盖为「🔴 会话已吊销」(优先级高于心跳)
+  - [FIX] main.py 启动期全军覆没不再退出容器 → 改为等待模式(bot 继续运行,允许 /bind 指令)
+    - 附带推送每个账号的 session_revoked 预警(客户一开始就能看到"你哪些号掉了")
+  - 受 ALERTS_ENABLED 主开关控制(master off 时只写日志不推 TG)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.3** (2026-04-18)
   - [FIX] 登入页/设置页底部版本号不再硬编码(之前 login 显示 v2.6.12、setup 显示 v2.8.0
     都是老版本留的),改从 README 最新版 banner 动态读取(SSOT:改 README 即跟着变)
   - [NEW] `update_checker._notes_for()` 3 层 fallback:release_notes.json short_sha →

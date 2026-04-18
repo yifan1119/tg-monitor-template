@@ -33,6 +33,7 @@ class TaskScheduler:
             self._peer_name_consistency_loop(),
             self._media_cleanup_loop(),
             self._update_check_loop(),
+            self._session_health_loop(),   # v2.10.4: TG session 吊销检测
         )
 
     async def stop(self):
@@ -337,6 +338,100 @@ class TaskScheduler:
             except Exception as e:
                 logger.warning(f"update check loop error: {e}")
             await asyncio.sleep(6 * 3600)  # 6 小时
+
+    # v2.10.4: session 吊销检测 ----------------------------------------
+    SESSION_STATE_FILE = "/app/data/.session_states.json"
+    SESSION_CHECK_INTERVAL = 300   # 5 分钟一次
+    SESSION_FIRST_DELAY = 90       # 启动后等 90s 再开始(避开启动期的 flaky)
+
+    def _load_session_states(self):
+        import json, os
+        try:
+            if os.path.exists(self.SESSION_STATE_FILE):
+                with open(self.SESSION_STATE_FILE, "r") as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.warning("载入 session_states 失败: %s", e)
+        return {}
+
+    def _save_session_states(self, states):
+        import json, os
+        try:
+            os.makedirs(os.path.dirname(self.SESSION_STATE_FILE), exist_ok=True)
+            tmp = self.SESSION_STATE_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(states, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, self.SESSION_STATE_FILE)
+        except Exception as e:
+            logger.warning("保存 session_states 失败: %s", e)
+
+    async def _check_single_session(self, phone, client):
+        """返回 'healthy' | 'revoked' | 'error'"""
+        try:
+            if not client.is_connected():
+                try:
+                    await asyncio.wait_for(client.connect(), timeout=15)
+                except Exception as e:
+                    logger.warning("[session_check] %s connect 失败: %s", phone, e)
+                    return "error"
+            authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=10)
+            return "healthy" if authorized else "revoked"
+        except Exception as e:
+            msg = str(e)
+            if any(k in msg for k in ("AuthKey", "Unauthorized", "Deactivated", "Revoked")):
+                return "revoked"
+            logger.warning("[session_check] %s 检查异常: %s", phone, e)
+            return "error"
+
+    async def _session_health_loop(self):
+        """每 5 分钟检查每个 client 的 is_user_authorized()。
+        healthy→revoked 推吊销预警;revoked→healthy 推恢复通知。
+        首次启动用现状作基线,不报警,避免启动期炸群。
+        'error' 状态不触发转场(可能是临时网络问题)。"""
+        await asyncio.sleep(self.SESSION_FIRST_DELAY)
+        prev = self._load_session_states()
+        first_round = not prev   # 没状态文件 = 第一次跑
+        while self._running:
+            try:
+                current = {}
+                for phone, client in list(self.listener.clients.items()):
+                    status = await self._check_single_session(phone, client)
+                    current[phone] = {
+                        "status": status,
+                        "last_check": db.now_bj(),
+                    }
+                    prev_status = (prev.get(phone) or {}).get("status")
+                    if first_round:
+                        continue
+                    if status == "revoked" and prev_status != "revoked":
+                        logger.warning("[session] %s 吊销 (prev=%s)", phone, prev_status)
+                        await self._emit_session_alert("revoked", phone)
+                    elif status == "healthy" and prev_status == "revoked":
+                        logger.info("[session] %s 已恢复", phone)
+                        await self._emit_session_alert("restored", phone)
+                for phone, st in prev.items():
+                    if phone not in current:
+                        current[phone] = st
+                self._save_session_states(current)
+                prev = current
+                first_round = False
+            except Exception as e:
+                logger.error("session_health_loop 异常: %s", e)
+            await asyncio.sleep(self.SESSION_CHECK_INTERVAL)
+
+    async def _emit_session_alert(self, kind, phone):
+        """找到 account_id + name 再丢给 bot.send_session_alert"""
+        try:
+            row = db.get_conn().execute(
+                "SELECT id, name FROM accounts WHERE phone=?", (phone,)
+            ).fetchone()
+            aid = row["id"] if row else 0
+            name = row["name"] if row else ""
+            if self.bot:
+                await self.bot.send_session_alert(kind, phone, account_id=aid, account_name=name)
+        except Exception as e:
+            logger.warning("_emit_session_alert 失败 phone=%s kind=%s: %s", phone, kind, e)
+    # -----------------------------------------------------------------
 
     async def _daily_report_loop(self):
         """每天北京时间 00:00 发日报"""

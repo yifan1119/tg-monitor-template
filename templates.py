@@ -59,3 +59,28 @@ def daily_report(report_date, record_time, chat_count,
         f"信息删除数量：{_fmt(delete_count, delete_detail)}\n"
         f"关键词监听数量：{keyword_count}"
     )
+
+def session_revoked_alert(phone, account_name):
+    """v2.10.4: TG 会话被吊销(用户在 TG 官方 App 点「终止其他会话」会触发)"""
+    return (
+        f"【外事号离线预警{config.COMPANY_DISPLAY}】\n\n"
+        f"外事号:{account_name or '—'} ({phone})\n"
+        f"状态:❌ 登录会话已失效\n\n"
+        f"可能原因:\n"
+        f"  • 你在 TG 官方 App「设置→设备」点了「终止其他会话」\n"
+        f"  • 账号被 TG 风控封禁或限制登录\n"
+        f"  • Session 文件损坏\n\n"
+        f"处理方式:\n"
+        f"  1) 打开 Web 后台 → 账号管理 → 重新登录该账号\n"
+        f"  2) 输入验证码完成登录即可恢复监听\n\n"
+        f"提醒:会话失效期间该账号的消息不会被监听、不会写表、不会预警。"
+    )
+
+
+def session_restored_alert(phone, account_name):
+    """v2.10.4: session 恢复正常"""
+    return (
+        f"【外事号恢复通知{config.COMPANY_DISPLAY}】\n\n"
+        f"外事号:{account_name or '—'} ({phone})\n"
+        f"状态:✅ 监听已恢复正常"
+    )

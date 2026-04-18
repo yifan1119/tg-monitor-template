@@ -97,6 +97,7 @@ async def main():
     phones_cfg = {acfg["phone"]: acfg for acfg in config.ACCOUNTS}
 
     logger.info("准备登录 %d 个账号...", len(phones))
+    failed_phones = []  # v2.10.4: 收集 auth 失败的手机号
     for phone in phones:
         try:
             acfg = phones_cfg.get(phone, {})
@@ -118,10 +119,56 @@ async def main():
                 conn.commit()
         except Exception as e:
             logger.error("%s 登录失败: %s", phone, e)
+            failed_phones.append((phone, str(e)))
             continue
 
+    # v2.10.4: 启动期 session 失效处理
+    if failed_phones:
+        logger.warning("启动期 %d 个账号 session 失效,推送预警 + 写状态文件", len(failed_phones))
+        # 写 session_states.json 让 web 驾驶舱看到「会话已吊销」badge
+        try:
+            import json, os
+            state_file = "/app/data/.session_states.json"
+            os.makedirs(os.path.dirname(state_file), exist_ok=True)
+            states = {}
+            if os.path.exists(state_file):
+                try:
+                    with open(state_file) as f:
+                        states = json.load(f)
+                except Exception:
+                    states = {}
+            for phone, _err in failed_phones:
+                states[phone] = {"status": "revoked", "last_check": db.now_bj()}
+            with open(state_file, "w") as f:
+                json.dump(states, f, ensure_ascii=False, indent=2)
+            logger.info("session_states 已更新: %s", list(states.keys()))
+        except Exception as e:
+            logger.warning("写 session_states 失败: %s", e)
+        # 推 TG 吊销预警 — 每个失败账号一条
+        for phone, _err in failed_phones:
+            try:
+                row = db.get_conn().execute(
+                    "SELECT id, name FROM accounts WHERE phone=?", (phone,)
+                ).fetchone()
+                aid = row["id"] if row else 0
+                name = row["name"] if row else ""
+                if bot:
+                    await bot.send_session_alert("revoked", phone, account_id=aid, account_name=name)
+            except Exception as e:
+                logger.warning("启动期推送 session 预警失败 phone=%s: %s", phone, e)
+
     if not listener.clients:
-        logger.error("没有任何账号登录成功，退出")
+        logger.error("没有任何账号登录成功,进入等待模式(不退出容器)")
+        logger.info("请打开 Web 后台 → 账号管理 → 重新登录验证码后系统会自动恢复")
+        # 保持 bot 活着(处理 /bind 等指令),也保持容器不崩溃
+        tasks_wait = []
+        if bot and bot.dp:
+            tasks_wait.append(asyncio.create_task(bot.start()))
+        while True:
+            await asyncio.sleep(60)
+            # 可选: 每分钟重新扫一次 sessions,有新登入的自动重启 main
+            # 但更简单: 直接让用户重启 tg-monitor 容器(web 后台的重启按钮)
+        # unreachable but 保留结构清晰
         return
 
     # 6. 拉取历史消息

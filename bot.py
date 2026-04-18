@@ -322,6 +322,39 @@ class AlertBot:
         except Exception as e:
             logger.error("发送日报失败: %s", e)
 
+    async def send_session_alert(self, kind: str, phone: str, account_id: int = 0, account_name: str = ""):
+        """v2.10.4: 推送 session 吊销/恢复预警。kind: 'revoked' | 'restored'
+        - 走主开关 ALERTS_ENABLED(任何子开关都独立;这是系统级告警)
+        - DB 写 alerts 表,实时告警流会显示
+        - kind='revoked' 直接推;kind='restored' 也推一条,让客户知道已恢复"""
+        if not self.bot or not config.ALERT_GROUP_ID:
+            logger.warning("[session_%s] bot 未配或未配预警群,不推送 phone=%s", kind, phone)
+            return
+        try:
+            config.reload_if_env_changed()
+            if kind == "revoked":
+                msg = templates.session_revoked_alert(phone, account_name)
+                alert_type = "session_revoked"
+            elif kind == "restored":
+                msg = templates.session_restored_alert(phone, account_name)
+                alert_type = "session_restored"
+            else:
+                return
+            # DB 记录(不受 ALERTS_ENABLED 影响,审计留痕)
+            try:
+                if account_id:
+                    db.insert_alert(alert_type, account_id, peer_id=None, message_text=f"[{phone}] {account_name}")
+            except Exception as e:
+                logger.warning("[session_%s] insert_alert 失败: %s", kind, e)
+            # 推送(受 ALERTS_ENABLED 主开关控制)
+            if getattr(config, "ALERTS_ENABLED", True):
+                await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+                logger.info("[session_%s] 已推送 phone=%s", kind, phone)
+            else:
+                logger.info("[session_%s] ALERTS_ENABLED=false,跳过推送 phone=%s", kind, phone)
+        except Exception as e:
+            logger.error("[session_%s] 推送失败 phone=%s: %s", kind, phone, e)
+
     async def send_update_notice(self, state: dict):
         """v2.9.0: 发现 GitHub 有新版 → 推送到预警群(同版本只推一次,update_checker 控制去重)"""
         if not self.bot or not config.ALERT_GROUP_ID:

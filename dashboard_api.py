@@ -196,6 +196,22 @@ def env_version():
 
 # ============ 账号矩阵 ============
 
+def _load_session_status_for(phone):
+    """v2.10.4: 读 /app/data/.session_states.json 拿某个手机号的 session 状态"""
+    if not phone:
+        return "unknown"
+    try:
+        import json
+        p = Path("/app/data/.session_states.json")
+        if not p.exists():
+            return "unknown"
+        data = json.loads(p.read_text())
+        entry = data.get(phone) or {}
+        return entry.get("status", "unknown")
+    except Exception:
+        return "unknown"
+
+
 SLOT_CAPACITY = 16   # 每账号最多 16 个 peer 槽位
 
 
@@ -243,9 +259,12 @@ def accounts_matrix():
             for r in alerts_today:
                 t = r["type"] or "unknown"
                 ac[t] = r["n"]
+            # v2.10.4: session 健康状态(由 tasks._session_health_loop 维护)
+            session_status = _load_session_status_for(a["phone"] or "")
             out.append({
                 "id": aid,
                 "phone": a["phone"] or "",
+                "session_status": session_status,
                 "name": a["name"] or "—",
                 "username": a["username"] or "",
                 "company": a["company"] or "",

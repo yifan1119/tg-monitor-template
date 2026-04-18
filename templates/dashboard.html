@@ -747,14 +747,20 @@ function renderAccounts(accounts) {
   }
   setText('acc-meta', accounts.length + ' 个账号');
   const html = accounts.map((a, i) => {
-    const cls = a.heartbeat_status === 'dead' ? 'dead' :
+    // v2.10.4: session 吊销优先,覆盖心跳状态显示
+    const isSessionDead = a.session_status === 'revoked';
+    const cls = isSessionDead ? 'dead' :
+                a.heartbeat_status === 'dead' ? 'dead' :
                 a.heartbeat_status === 'warn' ? 'warn' : '';
-    const pulseLabel = a.heartbeat_status === 'dead' ?
+    const pulseLabel = isSessionDead ?
+        '🔴 会话已吊销' :
+      a.heartbeat_status === 'dead' ?
         '🔴 ' + (a.last_heartbeat_human === '—' ? '从未活动' : a.last_heartbeat_human) :
       a.heartbeat_status === 'warn' ?
         '⚠ ' + a.last_heartbeat_human :
         '● ' + a.last_heartbeat_human;
-    const pulseCls = a.heartbeat_status === 'dead' ? 'dead' :
+    const pulseCls = isSessionDead ? 'dead' :
+                     a.heartbeat_status === 'dead' ? 'dead' :
                      a.heartbeat_status === 'warn' ? 'warn' : '';
     const initial = (a.name || '?').charAt(0).toUpperCase();
     const colors = [
