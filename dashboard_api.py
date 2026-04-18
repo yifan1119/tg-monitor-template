@@ -582,6 +582,7 @@ def snapshot():
     return {
         "ok": True,
         "ts": _now_bj_iso(),
+        "product": "tg-monitor-template",  # 中央看板区分来源 (对齐 tg-monitor-multi)
         "system": {
             "listener": listener_status(),
             "config_version": code_version(),
