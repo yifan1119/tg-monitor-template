@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.5(2026-04-18) — 会话吊销告警脱离主开关(运维故障永远要告知,不受 ALERTS_ENABLED 影响)
+> 📌 **最新版**:v2.10.6(2026-04-18) — 账号管理页 ● Online badge 也根据 session_status 显示(之前写死,吊销了还显示绿灯)
 
 ---
 
@@ -388,7 +388,15 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.5** (2026-04-18) — 当前稳定版
+- **v2.10.6** (2026-04-18) — 当前稳定版
+  - [FIX] 账号管理页(index.html)的 `● Online` badge 之前写死,session 被吊销后仍显示绿色
+    - 改成读 `data/.session_states.json`,有 `revoked` 状态显示「🔴 会话已吊销」红 badge
+    - 另加 `error`(检查异常)黄 badge 覆盖临时网络故障
+    - 驾驶舱之前 v2.10.4 已经修过,这次补上账号管理页
+  - [NEW] `web.get_sessions()` 携带 `session_status` 字段,模板可直接读
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.5** (2026-04-18)
   - [FIX] `bot.send_session_alert()` 移除 `ALERTS_ENABLED` 主开关闸门
     - 根因:客户把业务告警主开关关了 → 结果连「外事号掉线」这种运维故障也不推
     - 架构划分:ALERTS_ENABLED 只管业务告警(关键词/未回复/删除),session 吊销是

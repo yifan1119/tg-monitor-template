@@ -958,7 +958,13 @@
             </div>
           </div>
           <div class="account-right">
-            <span class="tag tag-active">● Online</span>
+            {% if s.session_status == 'revoked' %}
+              <span class="tag tag-dead" title="TG 官方 App 终止了会话 / 账号被风控,请重新登录" style="background:rgba(244,67,54,0.12);border:1px solid rgba(244,67,54,0.55);color:#f56666;">🔴 会话已吊销</span>
+            {% elif s.session_status == 'error' %}
+              <span class="tag tag-warn" style="background:rgba(245,166,35,0.1);border:1px solid rgba(245,166,35,0.4);color:#f5a623;">⚠ 检查异常</span>
+            {% else %}
+              <span class="tag tag-active">● Online</span>
+            {% endif %}
             <button class="btn-remove" onclick="removeAccount('{{ s.phone }}')">移除</button>
           </div>
         </div>

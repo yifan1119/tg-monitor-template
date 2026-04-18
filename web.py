@@ -695,9 +695,25 @@ async def _get_me(client):
     return await client.get_me()
 
 
+def _load_session_states_map():
+    """v2.10.6: 读 data/.session_states.json — 账号管理页用"""
+    import json
+    try:
+        from pathlib import Path as _P
+        sp = _P("/app/data/.session_states.json")
+        if not sp.exists():
+            sp = _P(__file__).parent / "data" / ".session_states.json"
+        if sp.exists():
+            return json.loads(sp.read_text())
+    except Exception:
+        pass
+    return {}
+
+
 def get_sessions():
     """扫描 sessions 目录，返回已有的 session 列表"""
     sessions = []
+    _session_states = _load_session_states_map()
     for f in config.SESSION_DIR.glob("*.session"):
         phone = "+" + f.stem
         # 先查 DB
@@ -711,6 +727,7 @@ def get_sessions():
                 "company": account["company"] or "",
                 "operator": account["operator"] or "",
                 "status": "active",
+                "session_status": (_session_states.get(phone) or {}).get("status", "unknown"),
             })
         else:
             # DB 没有，尝试连 Telegram 获取
@@ -727,18 +744,21 @@ def get_sessions():
                     sessions.append({
                         "phone": phone, "name": name, "username": username,
                         "tg_id": me.id, "company": "", "operator": "", "status": "active",
+                        "session_status": (_session_states.get(phone) or {}).get("status", "healthy"),
                     })
                     run_async(_disconnect(client))
                 else:
                     sessions.append({
                         "phone": phone, "name": "", "username": "",
                         "tg_id": "", "company": "", "operator": "", "status": "expired",
+                        "session_status": "revoked",
                     })
                     run_async(_disconnect(client))
             except Exception as e:
                 sessions.append({
                     "phone": phone, "name": "", "username": "",
                     "tg_id": "", "company": "", "operator": "", "status": "error",
+                    "session_status": "error",
                 })
     return sessions
 
