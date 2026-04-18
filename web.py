@@ -1175,6 +1175,13 @@ def api_sheets_auto_create():
     # 读最新 .env(优先)而不是依赖模块级 config,避免同一进程内缓存过期
     existing = (read_env().get("SHEET_ID") or "").strip()
     if existing:
+        # v2.10.11: 即使 SHEET_ID 已存在也 heal 一次预警分页(应对旧部门空白 sheet)
+        try:
+            from sheets import SheetsWriter
+            SheetsWriter()
+            logger.info("v2.10.11: 已有 sheet 重新 heal 预警分页完成")
+        except Exception as e:
+            logger.warning(f"heal 预警分页失败(不影响): {e}")
         return jsonify({
             "ok": True,
             "sheet_id": existing,
@@ -1197,6 +1204,17 @@ def api_sheets_auto_create():
         importlib.reload(config)
     except Exception as e:
         logger.warning(f"reload config 失败(不影响写入): {e}")
+
+    # v2.10.11: 立刻建预警分页 (不用等 tg-monitor 启动)
+    # 以前预警分页只在 SheetsWriter.__init__ 建,但 tg-monitor 没 session 会
+    # 直接 return 不实例化 SheetsWriter → 新部门还没登入账号时 sheet 一片空白
+    try:
+        from sheets import SheetsWriter
+        SheetsWriter()  # __init__ 自动调 ensure_alert_tabs + ensure_account_tabs
+        logger.info("v2.10.11: sheet 建好后自动初始化预警分页完成")
+    except Exception as e:
+        logger.warning(f"自动初始化预警分页失败(不影响建 Sheet,登入账号后会补): {e}")
+
     return jsonify({
         "ok": True,
         "sheet_id": sheet_id,

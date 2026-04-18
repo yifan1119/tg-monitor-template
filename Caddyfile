@@ -24,3 +24,17 @@
     # Caddy 默认会自动 enable Let's Encrypt;失败的话日志会说原因
     encode gzip
 }
+
+
+
+# === tg-monitor-multi — auto-added by enable-https.sh ===
+multi.187.77.157.220.nip.io {
+    reverse_proxy tg-monitor-multi:5003 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+    encode gzip
+}
+# === end tg-monitor-multi ===

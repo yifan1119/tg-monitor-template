@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.10(2026-04-18) — 账号分页真的自动建了(以前 docstring 偷偷写「需手动建」和 UI 承诺矛盾)+ 启动 sweep 补建历史遗留
+> 📌 **最新版**:v2.10.11(2026-04-18) — 新部门建表后立刻初始化预警分页(以前要等登入账号才建,没登入前 sheet 全白)
 
 ---
 
@@ -388,7 +388,17 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.10** (2026-04-18) — 当前稳定版
+- **v2.10.11** (2026-04-18) — 当前稳定版
+  - [FIX] 新部门装完 OAuth + 点「自动建表格」后 Sheet 一片空白(只有 Google 默认的
+    工作表1)问题:以前预警分页只在 tg-monitor 启动时建,而 tg-monitor 没 session
+    文件会直接 return 不实例化 SheetsWriter → 还没登入账号的新部门 sheet 永远空
+    现在 web.py api_auto_create_sheet 建完立刻 new SheetsWriter() 触发
+    ensure_alert_tabs,用户看 Sheet 就直接有 3 个预警分页
+  - [FIX] SHEET_ID 已存在时也 heal 一次(幂等调 SheetsWriter),修老部门空白 sheet
+    的历史遗留 — 进设置页再点一次「自动建表格」就会补齐
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.10** (2026-04-18)
   - [FIX] `sheets.get_or_create_sheet()` 修复名不副实:以前名字叫 get_or_create
     但 docstring 和实现都只 get 不 create,跟 web UI 步骤 03「登录成功后 Sheets
     会自动建好对应分页」直接矛盾 → 历史遗留账号永远没有分页,消息不写
