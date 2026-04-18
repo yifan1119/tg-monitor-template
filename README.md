@@ -389,7 +389,7 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 ## 📜 版本
 
 - **v2.10.12** (2026-04-18) — 当前稳定版
-  - [FIX] `/api/sheets/auto-create` 加全局锁 — 修蘇總「同一部门 Drive 里看到两个
+  - [FIX] `/api/sheets/auto-create` 加全局锁 — 修「同一部门 Drive 里看到两个
     sheet,一个空一个有模板」的真凶:用户第一次点没反应再点一次,并发两个请求都
     read_env 看到 SHEET_ID 空 → 都调 Drive API 建新 sheet(Drive API eventual
     consistency 查同名查不到刚建的)→ 最后 write_env 只保留一个,另一个孤儿
