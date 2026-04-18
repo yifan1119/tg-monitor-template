@@ -344,6 +344,55 @@ def _test_sheets_access(sheet_id):
 _restart_debounce_lock = __import__("threading").Lock()
 _restart_debounce_timer = {"t": None}
 
+def _mark_session_healthy(phone):
+    """v2.10.7: 登录成功 → 立刻 session_states.json 该手机号改 healthy
+    返回 (prev_status, states) — prev_status 用来判断要不要推恢复通知"""
+    if not phone:
+        return None, None
+    import json
+    from pathlib import Path as _P
+    sp = _P("/app/data/.session_states.json")
+    if not sp.exists():
+        alt = _P(__file__).parent / "data" / ".session_states.json"
+        if alt.exists():
+            sp = alt
+    states = {}
+    prev_status = None
+    try:
+        if sp.exists():
+            states = json.loads(sp.read_text())
+        prev_status = (states.get(phone) or {}).get("status")
+        states[phone] = {"status": "healthy", "last_check": db.now_bj()}
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_text(json.dumps(states, ensure_ascii=False, indent=2))
+    except Exception as e:
+        print(f"[_mark_session_healthy] {e}")
+    return prev_status, states
+
+
+def _push_session_restored(phone, account_name):
+    """v2.10.7: 登录成功且前一状态是 revoked → 推恢复通知到预警群
+    直接调 Telegram Bot HTTP API (web 容器没 aiogram 实例)"""
+    import urllib.request, urllib.parse
+    token = (os.environ.get("BOT_TOKEN", "") or getattr(config, "BOT_TOKEN", "")).strip()
+    chat_id = (os.environ.get("ALERT_GROUP_ID", "") or str(getattr(config, "ALERT_GROUP_ID", ""))).strip()
+    if not token or not chat_id:
+        return
+    try:
+        text = (
+            f"【外事号恢复通知{config.COMPANY_DISPLAY}】\n\n"
+            f"外事号:{account_name or '—'} ({phone})\n"
+            f"状态:✅ 监听已恢复正常\n"
+            f"(客户通过 web 后台重新验证码登录;tg-monitor 正在自动重启读取新 session)"
+        )
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+        req = urllib.request.Request(url, data=data)
+        urllib.request.urlopen(req, timeout=10).read()
+    except Exception as e:
+        print(f"[_push_session_restored] {e}")
+
+
 def _schedule_listener_restart(delay=4.0):
     """v2.6.3: 帐号增删后自动重启 tg-monitor 容器,debounce 合并 N 秒内的连续操作。
     用例:
@@ -1834,6 +1883,14 @@ def verify_code():
         run_async(_disconnect(client))
         del _pending[phone]
 
+        # v2.10.7: 登录成功 → session_states 立刻标 healthy(UI 不再显示吊销)+ 推恢复通知
+        try:
+            prev_status, _ = _mark_session_healthy(phone)
+            if prev_status == "revoked":
+                _push_session_restored(phone, tg_name)
+        except Exception as e:
+            print(f"[verify_code] session heal 失败: {e}")
+
         # v2.6.3: 帐号添加成功 → 后台自动重启监听(debounce 4 秒,批量加号只触发一次)
         _schedule_listener_restart()
 
@@ -1874,6 +1931,14 @@ def verify_password():
 
         run_async(_disconnect(client))
         del _pending[phone]
+
+        # v2.10.7: 同上 — session_states 标 healthy + 推恢复通知
+        try:
+            prev_status, _ = _mark_session_healthy(phone)
+            if prev_status == "revoked":
+                _push_session_restored(phone, tg_name)
+        except Exception as e:
+            print(f"[verify_password] session heal 失败: {e}")
 
         # v2.6.3: 同上,二步验证通过后也触发自动重启
         _schedule_listener_restart()

@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.6(2026-04-18) — 账号管理页 ● Online badge 也根据 session_status 显示(之前写死,吊销了还显示绿灯)
+> 📌 **最新版**:v2.10.7(2026-04-18) — 重新登录成功立刻 heal session_states(不用等 tg-monitor 5 分钟巡检)+ 推「外事号恢复通知」
 
 ---
 
@@ -388,7 +388,21 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.6** (2026-04-18) — 当前稳定版
+- **v2.10.7** (2026-04-18) — 当前稳定版
+  - [FIX] 验证码/两步密码登录成功后,`.session_states.json` 立刻标 healthy — UI 不再 stale
+    - 根因:tg-monitor 的 `_session_health_loop` 要等 90s 首轮延迟 + 历史消息拉完(媒体多可能几分钟)
+    - 之前用户重新登录后,账号管理页还显示「🔴 会话已吊销」很久,体验差
+    - 现在 verify_code / verify_password 成功立刻写 state 文件 + 推「外事号恢复通知」到预警群
+  - [NEW] `web._push_session_restored()` 绕开 aiogram(web 容器没 bot 实例),直接 HTTP POST
+    `api.telegram.org/bot{token}/sendMessage` — 轻量可靠
+  - [DOCS] web 登录 → UI 立刻变绿的完整链路:
+    1. web.py `verify_code` 成功 → `_mark_session_healthy(phone)` 写 `.session_states.json`
+    2. `_push_session_restored(phone, name)` 推恢复通知
+    3. `_schedule_listener_restart()` 4 秒后重启 tg-monitor
+    4. tg-monitor 重启后读新 session,`_session_health_loop` 首轮看到 healthy 不重复推
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.6** (2026-04-18)
   - [FIX] 账号管理页(index.html)的 `● Online` badge 之前写死,session 被吊销后仍显示绿色
     - 改成读 `data/.session_states.json`,有 `revoked` 状态显示「🔴 会话已吊销」红 badge
     - 另加 `error`(检查异常)黄 badge 覆盖临时网络故障
