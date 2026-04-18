@@ -600,11 +600,20 @@ def config_snapshot():
 def snapshot():
     """单一聚合接口 — 给前端一次性 fetch 全部 dashboard 数据"""
     accounts = accounts_matrix()
-    online = sum(1 for a in accounts if a["heartbeat_status"] == "online")
-    warn = sum(1 for a in accounts if a["heartbeat_status"] == "warn")
-    waiting = sum(1 for a in accounts if a["heartbeat_status"] == "waiting")
-    # v2.10.8: dead 只算真正挂掉(session 吊销 或 心跳 >4h);waiting 不算死
-    dead = sum(1 for a in accounts if a["heartbeat_status"] == "dead" or a.get("session_status") == "revoked")
+    # v2.10.9: KPI 看「连线健康度」(session), 不是「消息活跃度」(heartbeat)
+    # 群里没人发言不代表账号掛了 → 以 session_status 为主 KPI,heartbeat 降为副信息
+    connected = sum(1 for a in accounts if a.get("session_status") == "healthy")
+    revoked   = sum(1 for a in accounts if a.get("session_status") == "revoked")
+    # 活跃度细分(副标信息用,不影响 X/Y 主 KPI)
+    active   = sum(1 for a in accounts if a["heartbeat_status"] == "online")
+    slow     = sum(1 for a in accounts if a["heartbeat_status"] == "warn")
+    waiting  = sum(1 for a in accounts if a["heartbeat_status"] == "waiting")
+    # silent = session 好但 >4h 无消息 (群真安静,非账号问题)
+    silent   = sum(1 for a in accounts if a["heartbeat_status"] == "dead" and a.get("session_status") != "revoked")
+    # 向后兼容字段(旧前端读这几个)
+    online = active
+    warn   = slow
+    dead   = revoked   # v2.10.9 起 dead 只等于 revoked
     return {
         "ok": True,
         "ts": _now_bj_iso(),
@@ -612,6 +621,13 @@ def snapshot():
         "system": {
             "listener": listener_status(),
             "config_version": code_version(),
+            # v2.10.9 新字段(连线为主)
+            "accounts_connected": connected,
+            "accounts_revoked":   revoked,
+            "accounts_active":    active,
+            "accounts_slow":      slow,
+            "accounts_silent":    silent,
+            # 向后兼容(老 dashboard.html 还会读这几个)
             "accounts_online": online,
             "accounts_warn": warn,
             "accounts_waiting": waiting,

@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.8(2026-04-18) — 驾驶舱新增 waiting 状态(刚登入等首条消息不再误报「🔴 从未活动」/ 1 死)
+> 📌 **最新版**:v2.10.9(2026-04-18) — 驾驶舱 KPI 改看 session 连线(群静 2h 不再报 0/1),活跃度降为副标
 
 ---
 
@@ -388,7 +388,16 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.8** (2026-04-18) — 当前稳定版
+- **v2.10.9** (2026-04-18) — 当前稳定版
+  - [UX] 驾驶舱 KPI「账号 X / Y」改以 session_status 为准:session healthy 即算连线 OK
+    群里没人发言 (heartbeat warn / silent) 不再被判定为「不健康」下调分子
+    副标改分四档 (X 吊销 · X 活跃 · X 等待首条 · X 慢 · X 静默)
+  - [UX] snapshot system 新增字段:accounts_connected / accounts_revoked / accounts_active
+    / accounts_slow / accounts_silent。老前端读 accounts_online/warn/dead 兼容不变
+  - [UX] KPI 颜色:全部 connected → 绿 · 有 revoked → 红 · 部分未连 → 黄
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.8** (2026-04-18)
   - [UX] 驾驶舱 KPI「账号 0/1 · 1 死」误报修复:刚登入 / 群内还没人发言的账号
     不再被判定为死账号,改为 waiting 状态 → 显示「● 等待首条消息」(绿)
     KPI 分母计入「正常」,副标注出等待数,收到首条消息自动切回 online

@@ -704,22 +704,32 @@ function renderSystem(d) {
     setText('kpi-listener', '○ OFFLINE');
     setText('kpi-listener-sub', sys.listener.status || 'down');
   }
-  // 账号
-  // v2.10.8: waiting(刚登入等首条消息) 算在「正常」分母里,主数字显示 online+waiting
-  const accWaiting = sys.accounts_waiting || 0;
-  const accHealthy = sys.accounts_online + accWaiting;
-  setText('kpi-accounts', accHealthy + ' / ' + sys.accounts_total);
+  // 账号 — v2.10.9: KPI 看「连线健康度」(session), 不再看「10min 活跃度」
+  // 群里没人发言不代表账号掛了 → 只要 session healthy 就算正常连线
+  // 活跃度 (active / slow / waiting / silent) 退到副标,给 Ivan 参考用
+  const accConnected = (sys.accounts_connected != null) ? sys.accounts_connected
+                     : (sys.accounts_total - (sys.accounts_dead || 0));  // 老版本兜底
+  const accRevoked   = (sys.accounts_revoked  != null) ? sys.accounts_revoked  : (sys.accounts_dead || 0);
+  const accActive    = (sys.accounts_active   != null) ? sys.accounts_active   : (sys.accounts_online || 0);
+  const accSlow      = (sys.accounts_slow     != null) ? sys.accounts_slow     : (sys.accounts_warn || 0);
+  const accWaiting   = sys.accounts_waiting || 0;
+  const accSilent    = sys.accounts_silent || 0;
+
+  setText('kpi-accounts', accConnected + ' / ' + sys.accounts_total);
   let acc_sub_parts = [];
-  if (accWaiting > 0) acc_sub_parts.push(accWaiting + ' 等待首条消息');
-  if (sys.accounts_warn > 0) acc_sub_parts.push(sys.accounts_warn + ' 慢');
-  if (sys.accounts_dead > 0) acc_sub_parts.push(sys.accounts_dead + ' 死');
-  if (acc_sub_parts.length === 0 && sys.accounts_total > 0) acc_sub_parts.push('全部正常');
+  if (accRevoked > 0) acc_sub_parts.push(accRevoked + ' 吊销');
+  if (accActive  > 0) acc_sub_parts.push(accActive  + ' 活跃');
+  if (accWaiting > 0) acc_sub_parts.push(accWaiting + ' 等待首条');
+  if (accSlow    > 0) acc_sub_parts.push(accSlow    + ' 慢');
+  if (accSilent  > 0) acc_sub_parts.push(accSilent  + ' 静默');  // 群 >4h 无消息但连线健康
+  if (acc_sub_parts.length === 0 && sys.accounts_total > 0) acc_sub_parts.push('全部在线');
   if (sys.accounts_total === 0) acc_sub_parts.push('未登录账号');
   setText('kpi-accounts-sub', acc_sub_parts.join(' · '));
   el('kpi-accounts').className =
-    (sys.accounts_dead > 0) ? 'kpi-val danger' :
-    (sys.accounts_warn > 0) ? 'kpi-val warn' :
-    ((sys.accounts_online + accWaiting) > 0 ? 'kpi-val green' : 'kpi-val dim');
+    (accRevoked > 0)                                      ? 'kpi-val danger' :
+    (accConnected === sys.accounts_total && accConnected > 0) ? 'kpi-val green'  :
+    (sys.accounts_total > 0)                               ? 'kpi-val warn'   :
+                                                              'kpi-val dim';
   // 代码版本
   setText('kpi-config', sys.config_version.sha || sys.config_version.label || '—');
   setText('kpi-config-sub', sys.config_version.subject || sys.config_version.label || '—');
