@@ -302,7 +302,7 @@
   </div>
   <div class="sys-status">
     <span><span class="led"></span>系统在线</span>
-    <span>v2.6.12 · 加密连线</span>
+    <span>{% if app_version %}{{ app_version }} · {% endif %}加密连线</span>
   </div>
 </form>
 

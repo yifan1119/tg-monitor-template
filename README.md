@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.2(2026-04-18) — Codex review 加固:修 bot 推送 NameError / 验证码 5 次上限 / Flask secret 随机化
+> 📌 **最新版**:v2.10.3(2026-04-18) — 登入/设置页版本号改动态 + 更新通知白话文案零维护(自动从 commit subject 生成)
 
 ---
 
@@ -388,7 +388,17 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.2** (2026-04-18) — 当前稳定版
+- **v2.10.3** (2026-04-18) — 当前稳定版
+  - [FIX] 登入页/设置页底部版本号不再硬编码(之前 login 显示 v2.6.12、setup 显示 v2.8.0
+    都是老版本留的),改从 README 最新版 banner 动态读取(SSOT:改 README 即跟着变)
+  - [NEW] `update_checker._notes_for()` 3 层 fallback:release_notes.json short_sha →
+    version_tag → commit subject 自动生成白话标题 + emoji(未来 Ivan 不用维护
+    release_notes.json,直接写正常 git commit 就行)
+  - [NEW] `_auto_emoji()` 关键词 → emoji 映射:fix→🔧 / sec→🔒 / feat→🆕 / docs→📖 /
+    refactor→🧹 / perf→⚡ / ui|dashboard→🎛️ / 兜底→📦
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.2** (2026-04-18)
   - [FIX] bot.py `send_update_notice()` `latest_short` 未定义 → NameError 炸栈
     (改用 `state.get` 读取;py3.11 不支持嵌套同引号 f-string)
   - [SEC] `auth_reset.consume_reset_code()` 加尝试次数上限 (错 5 次锁死该 pending)

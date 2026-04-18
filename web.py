@@ -583,6 +583,50 @@ app.secret_key = _load_or_gen_secret()
 from werkzeug.middleware.proxy_fix import ProxyFix
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
+
+# v2.10.3: 全局注入 app_version,登入页/设置页不再硬编码版本号
+_APP_VERSION_CACHE = {"value": None, "mtime": 0}
+
+def _app_version_string():
+    """SSOT: README.md 最新版 banner。fallback: commit subject 找 vX.Y.Z → short sha。
+    带 mtime 缓存,省文件 IO;模板里直接 {{ app_version }} 用。"""
+    import re
+    from pathlib import Path as _P
+    try:
+        readme = _P(__file__).parent / "README.md"
+        if readme.exists():
+            mtime = readme.stat().st_mtime
+            if _APP_VERSION_CACHE["value"] and _APP_VERSION_CACHE["mtime"] == mtime:
+                return _APP_VERSION_CACHE["value"]
+            text = readme.read_text(errors="replace")
+            m = re.search(r"最新版[^v]*?(v\d+\.\d+\.\d+)", text)
+            if m:
+                _APP_VERSION_CACHE["value"] = m.group(1)
+                _APP_VERSION_CACHE["mtime"] = mtime
+                return m.group(1)
+    except Exception:
+        pass
+    # fallback: dashboard_api code_version
+    try:
+        import dashboard_api
+        info = dashboard_api.code_version() or {}
+        subject = (info.get("subject") or "").strip()
+        sha = (info.get("sha") or "").strip()
+        m = re.search(r"v\d+\.\d+\.\d+", subject)
+        if m:
+            return m.group(0)
+        if sha:
+            return sha
+    except Exception:
+        pass
+    return ""
+
+
+@app.context_processor
+def _inject_app_version():
+    return {"app_version": _app_version_string()}
+
+
 # 管理密码（从 .env 读取 WEB_PASSWORD，默认 tg@monitor2026）
 WEB_PASSWORD = os.environ.get("WEB_PASSWORD", "tg@monitor2026")
 
@@ -2100,7 +2144,7 @@ def api_v1_metrics():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     try:
-        import dashboard_api
+        import dashboard_api, re
         data = dashboard_api.snapshot()
         data["company_name"] = env.get("COMPANY_NAME", "")
         data["company_display"] = env.get("COMPANY_DISPLAY", "")
@@ -2226,7 +2270,7 @@ def dashboard_page():
 @login_required
 def dashboard_snapshot():
     try:
-        import dashboard_api
+        import dashboard_api, re
         return jsonify(dashboard_api.snapshot())
     except Exception as e:
         logger.error("dashboard snapshot 失败: %s", e)
