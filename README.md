@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.11(2026-04-18) — 新部门建表后立刻初始化预警分页(以前要等登入账号才建,没登入前 sheet 全白)
+> 📌 **最新版**:v2.10.12(2026-04-18) — 自动建表按钮加锁(防双击建两个 sheet,一个空一个有模板的根因)
 
 ---
 
@@ -388,7 +388,15 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.11** (2026-04-18) — 当前稳定版
+- **v2.10.12** (2026-04-18) — 当前稳定版
+  - [FIX] `/api/sheets/auto-create` 加全局锁 — 修蘇總「同一部门 Drive 里看到两个
+    sheet,一个空一个有模板」的真凶:用户第一次点没反应再点一次,并发两个请求都
+    read_env 看到 SHEET_ID 空 → 都调 Drive API 建新 sheet(Drive API eventual
+    consistency 查同名查不到刚建的)→ 最后 write_env 只保留一个,另一个孤儿
+  - 修复方式:`@_synchronized(_auto_create_sheet_lock)` 串行化 check-then-create
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.11** (2026-04-18)
   - [FIX] 新部门装完 OAuth + 点「自动建表格」后 Sheet 一片空白(只有 Google 默认的
     工作表1)问题:以前预警分页只在 tg-monitor 启动时建,而 tg-monitor 没 session
     文件会直接 return 不实例化 SheetsWriter → 还没登入账号的新部门 sheet 永远空

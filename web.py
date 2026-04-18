@@ -342,6 +342,19 @@ def _test_sheets_access(sheet_id):
 
 
 _restart_debounce_lock = __import__("threading").Lock()
+_auto_create_sheet_lock = __import__("threading").Lock()  # v2.10.12
+
+
+def _synchronized(lock):
+    """v2.10.12: 简单 sync decorator — 用于防双击建 sheet 之类的并发保护"""
+    def deco(f):
+        from functools import wraps
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            with lock:
+                return f(*args, **kwargs)
+        return wrapper
+    return deco
 _restart_debounce_timer = {"t": None}
 
 def _mark_session_healthy(phone):
@@ -1166,9 +1179,11 @@ def api_oauth_status():
 
 
 @app.route("/api/sheets/auto-create", methods=["POST"])
+@_synchronized(_auto_create_sheet_lock)
 def api_sheets_auto_create():
     """OAuth 授权后,自动建一个 Spreadsheet,ID 写回 .env。
-    已有 SHEET_ID 则直接返回现有的,不重复建。"""
+    已有 SHEET_ID 则直接返回现有的,不重复建。
+    v2.10.12: 加全局锁防用户双击按钮触发并发建两个 sheet。"""
     import oauth_helper
     if not oauth_helper.has_token():
         return jsonify({"ok": False, "msg": "请先完成 Google 授权"})
