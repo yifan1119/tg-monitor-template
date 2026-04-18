@@ -346,12 +346,10 @@ class AlertBot:
                     db.insert_alert(alert_type, account_id, peer_id=None, message_text=f"[{phone}] {account_name}")
             except Exception as e:
                 logger.warning("[session_%s] insert_alert 失败: %s", kind, e)
-            # 推送(受 ALERTS_ENABLED 主开关控制)
-            if getattr(config, "ALERTS_ENABLED", True):
-                await self.bot.send_message(config.ALERT_GROUP_ID, msg)
-                logger.info("[session_%s] 已推送 phone=%s", kind, phone)
-            else:
-                logger.info("[session_%s] ALERTS_ENABLED=false,跳过推送 phone=%s", kind, phone)
+            # v2.10.5: 运维告警,永远推 — 不受 ALERTS_ENABLED 影响
+            # (ALERTS_ENABLED 只管业务告警:关键词/未回复/删除。session 吊销是系统性故障,必须让客户知道)
+            await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+            logger.info("[session_%s] 已推送 phone=%s", kind, phone)
         except Exception as e:
             logger.error("[session_%s] 推送失败 phone=%s: %s", kind, phone, e)
 
