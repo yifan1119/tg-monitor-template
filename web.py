@@ -557,7 +557,10 @@ def _create_sheet_tab(name, operator="", company=""):
         sp.batch_update({"requests": requests})
         print(f"✅ 自动建分页成功: {name}")
     except Exception as e:
-        print(f"❌ 自动建分页失败: {e}")
+        # v2.10.10: 打完整 stack, 方便 docker logs tg-web 追
+        import traceback
+        print(f"❌ 自动建分页失败 {name!r}: {e}")
+        traceback.print_exc()
 
 
 def login_required(f):

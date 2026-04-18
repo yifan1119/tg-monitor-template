@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.9(2026-04-18) — 驾驶舱 KPI 改看 session 连线(群静 2h 不再报 0/1),活跃度降为副标
+> 📌 **最新版**:v2.10.10(2026-04-18) — 账号分页真的自动建了(以前 docstring 偷偷写「需手动建」和 UI 承诺矛盾)+ 启动 sweep 补建历史遗留
 
 ---
 
@@ -388,7 +388,19 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.9** (2026-04-18) — 当前稳定版
+- **v2.10.10** (2026-04-18) — 当前稳定版
+  - [FIX] `sheets.get_or_create_sheet()` 修复名不副实:以前名字叫 get_or_create
+    但 docstring 和实现都只 get 不 create,跟 web UI 步骤 03「登录成功后 Sheets
+    会自动建好对应分页」直接矛盾 → 历史遗留账号永远没有分页,消息不写
+    现在真的 auto-create(A2/A3 留空等商务填 B2/B3,第一条消息进来自动填对话槽)
+  - [NEW] `SheetsClient.ensure_account_tabs()` 启动 sweep:扫 DB 里所有账号,
+    Sheet 里没有对应分页的,启动时补建(解决 v2.10.10 前登录的老账号无分页问题)
+  - [FIX] `web._create_sheet_tab()` 失败改打完整 stack trace(以前只 print 一行
+    错误讯息,看不到原因)
+  - 升级后:tg-monitor 重启 → ensure_account_tabs 扫一轮 → 缺失分页自动补齐
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.9** (2026-04-18)
   - [UX] 驾驶舱 KPI「账号 X / Y」改以 session_status 为准:session healthy 即算连线 OK
     群里没人发言 (heartbeat warn / silent) 不再被判定为「不健康」下调分子
     副标改分四档 (X 吊销 · X 活跃 · X 等待首条 · X 慢 · X 静默)

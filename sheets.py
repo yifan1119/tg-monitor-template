@@ -40,6 +40,36 @@ class SheetsWriter:
         self._write_lock = threading.Lock()
         logger.info("Google Sheets 连接成功 (OAuth): %s", self.spreadsheet.title)
         self.ensure_alert_tabs()
+        self.ensure_account_tabs()  # v2.10.10: 启动时给 DB 里每个账号补缺失的分页
+
+    def ensure_account_tabs(self):
+        """v2.10.10: 扫 DB 所有账号,分页不存在就建一个(对齐登录时 _create_sheet_tab 的承诺)。
+        解决升级前登录的账号没有对应分页的历史遗留问题。"""
+        try:
+            accounts = db.get_conn().execute(
+                "SELECT id, phone, name, sheet_tab, operator, company FROM accounts"
+            ).fetchall()
+        except Exception as e:
+            logger.warning("ensure_account_tabs: 读 DB 失败 %s", e)
+            return
+        if not accounts:
+            return
+        existing = {ws.title for ws in self.spreadsheet.worksheets()}
+        created = 0
+        for a in accounts:
+            tab_name = a["sheet_tab"] or a["name"] or a["phone"]
+            if not tab_name or tab_name in existing:
+                continue
+            try:
+                self._rate_limit()
+                ws = self.spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=30)
+                self._init_sheet_header(ws, a)
+                logger.info("ensure_account_tabs: 补建分页「%s」", tab_name)
+                created += 1
+            except Exception as e:
+                logger.warning("ensure_account_tabs: 补建「%s」失败 %s", tab_name, e)
+        if created:
+            logger.info("ensure_account_tabs: 共补建 %d 个账号分页", created)
 
     # 告警分页表头（跟苏总现有 Sheet 格式 1:1 对齐）
     # 注意: "广告主" 这个位置用 config.PEER_ROLE_LABEL 动态替换，各部门可能叫「广告主/客户/合作方」等
@@ -205,13 +235,25 @@ class SheetsWriter:
         self._last_api_call = time.time()
 
     def get_or_create_sheet(self, account):
-        """获取已有的分表（不自动创建，需要商务手动建好）"""
+        """获取账号分表,v2.10.10 起真的会 auto-create(以前只 get)。
+
+        创建出来只填基础 A2/A3 表头(商务人员 label + 中心/部门 label),
+        B2/B3 留空给商务自己填。第一条消息进来时对话槽列会自动填。
+        """
         tab_name = account["sheet_tab"] or account["name"] or account["phone"]
         try:
-            ws = self.spreadsheet.worksheet(tab_name)
-            return ws
+            return self.spreadsheet.worksheet(tab_name)
         except gspread.WorksheetNotFound:
-            logger.warning("找不到分表「%s」", tab_name)
+            pass
+        # v2.10.10: 自动建
+        try:
+            logger.info("账号分页「%s」不存在 → 自动建立", tab_name)
+            self._rate_limit()
+            ws = self.spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=30)
+            self._init_sheet_header(ws, account)
+            return ws
+        except Exception as e:
+            logger.warning("建立账号分页失败「%s」: %s", tab_name, e)
             return None
 
     def _ensure_cols(self, ws, needed_cols):
