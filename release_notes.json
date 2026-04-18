@@ -64,23 +64,23 @@
     "body": "升级命令 bash update.sh 加了保护:升级失败会自动退回旧版,不会让你停机。另外新增了 bash rollback.sh,想回退到指定版本一键搞定。"
   },
   "v2.10.8": {
-    "title": "v2.10.8 已发布",
-    "body": "驾驶舱不再把刚登入的账号误报成死账号\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+    "title": "v2.10.8",
+    "body": "修复: 驾驶舱把刚登入账号误报成死账号\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   },
   "v2.10.9": {
-    "title": "v2.10.9 已发布",
-    "body": "驾驶舱 KPI 群安静不再误报 0/1\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+    "title": "v2.10.9",
+    "body": "修复: 驾驶舱 KPI 群安静时误报 0/1\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   },
   "v2.10.10": {
-    "title": "v2.10.10 已发布",
-    "body": "账号登入后真的会自动建 Sheet 分页(旧账号自动补)\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+    "title": "v2.10.10",
+    "body": "修复: 账号登入后自动建 Sheet 分页(旧账号自动补)\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   },
   "v2.10.11": {
-    "title": "v2.10.11 已发布",
-    "body": "新部门建表后直接有预警分页\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+    "title": "v2.10.11",
+    "body": "优化: 新部门建表后直接有预警分页\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   },
   "v2.10.12": {
-    "title": "v2.10.12 已发布",
-    "body": "双击建表不再生两个 sheet\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+    "title": "v2.10.12",
+    "body": "修复: 双击建表会生两个 sheet\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   }
 }
