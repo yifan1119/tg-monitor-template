@@ -63,9 +63,14 @@ def _human_age(ts_str):
     return f"{secs // 86400} 天前"
 
 
-def _classify_heartbeat(ts_str):
-    """根据上次心跳时间分级:online / warn (>10min) / dead (>4h or 无)"""
+def _classify_heartbeat(ts_str, session_status=None):
+    """根据上次心跳时间分级:online / warn (>10min) / dead (>4h)
+    v2.10.8: 新增 waiting 状态 — session 健康但还没收到首条消息(刚登入/群里没人发言)
+    不能一律 dead,会误报"""
     if not ts_str:
+        # 完全没消息历史:session 健康 → 等待中(绿);异常/吊销 → 交给 session_status 判定
+        if session_status in ("healthy", None):
+            return "waiting"
         return "dead"
     try:
         dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ_BJ)
@@ -279,7 +284,7 @@ def accounts_matrix():
                 "alerts_today": ac,
                 "last_heartbeat": last_msg_ts,
                 "last_heartbeat_human": _human_age(last_msg_ts),
-                "heartbeat_status": _classify_heartbeat(last_msg_ts),
+                "heartbeat_status": _classify_heartbeat(last_msg_ts, session_status),
             })
         return out
     return _safe(_q, [])
@@ -597,7 +602,9 @@ def snapshot():
     accounts = accounts_matrix()
     online = sum(1 for a in accounts if a["heartbeat_status"] == "online")
     warn = sum(1 for a in accounts if a["heartbeat_status"] == "warn")
-    dead = sum(1 for a in accounts if a["heartbeat_status"] == "dead")
+    waiting = sum(1 for a in accounts if a["heartbeat_status"] == "waiting")
+    # v2.10.8: dead 只算真正挂掉(session 吊销 或 心跳 >4h);waiting 不算死
+    dead = sum(1 for a in accounts if a["heartbeat_status"] == "dead" or a.get("session_status") == "revoked")
     return {
         "ok": True,
         "ts": _now_bj_iso(),
@@ -607,6 +614,7 @@ def snapshot():
             "config_version": code_version(),
             "accounts_online": online,
             "accounts_warn": warn,
+            "accounts_waiting": waiting,
             "accounts_dead": dead,
             "accounts_total": len(accounts),
             "alert_switches": {

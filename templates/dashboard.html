@@ -705,8 +705,12 @@ function renderSystem(d) {
     setText('kpi-listener-sub', sys.listener.status || 'down');
   }
   // 账号
-  setText('kpi-accounts', sys.accounts_online + ' / ' + sys.accounts_total);
+  // v2.10.8: waiting(刚登入等首条消息) 算在「正常」分母里,主数字显示 online+waiting
+  const accWaiting = sys.accounts_waiting || 0;
+  const accHealthy = sys.accounts_online + accWaiting;
+  setText('kpi-accounts', accHealthy + ' / ' + sys.accounts_total);
   let acc_sub_parts = [];
+  if (accWaiting > 0) acc_sub_parts.push(accWaiting + ' 等待首条消息');
   if (sys.accounts_warn > 0) acc_sub_parts.push(sys.accounts_warn + ' 慢');
   if (sys.accounts_dead > 0) acc_sub_parts.push(sys.accounts_dead + ' 死');
   if (acc_sub_parts.length === 0 && sys.accounts_total > 0) acc_sub_parts.push('全部正常');
@@ -715,7 +719,7 @@ function renderSystem(d) {
   el('kpi-accounts').className =
     (sys.accounts_dead > 0) ? 'kpi-val danger' :
     (sys.accounts_warn > 0) ? 'kpi-val warn' :
-    (sys.accounts_total > 0 ? 'kpi-val green' : 'kpi-val dim');
+    ((sys.accounts_online + accWaiting) > 0 ? 'kpi-val green' : 'kpi-val dim');
   // 代码版本
   setText('kpi-config', sys.config_version.sha || sys.config_version.label || '—');
   setText('kpi-config-sub', sys.config_version.subject || sys.config_version.label || '—');
@@ -748,12 +752,16 @@ function renderAccounts(accounts) {
   setText('acc-meta', accounts.length + ' 个账号');
   const html = accounts.map((a, i) => {
     // v2.10.4: session 吊销优先,覆盖心跳状态显示
+    // v2.10.8: waiting(刚登入没消息) 显示绿色 ● 等待首条消息,不再误报 🔴 从未活动
     const isSessionDead = a.session_status === 'revoked';
+    const isWaiting = !isSessionDead && a.heartbeat_status === 'waiting';
     const cls = isSessionDead ? 'dead' :
                 a.heartbeat_status === 'dead' ? 'dead' :
                 a.heartbeat_status === 'warn' ? 'warn' : '';
     const pulseLabel = isSessionDead ?
         '🔴 会话已吊销' :
+      isWaiting ?
+        '● 等待首条消息' :
       a.heartbeat_status === 'dead' ?
         '🔴 ' + (a.last_heartbeat_human === '—' ? '从未活动' : a.last_heartbeat_human) :
       a.heartbeat_status === 'warn' ?

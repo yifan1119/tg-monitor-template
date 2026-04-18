@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.7(2026-04-18) — 重新登录成功立刻 heal session_states(不用等 tg-monitor 5 分钟巡检)+ 推「外事号恢复通知」
+> 📌 **最新版**:v2.10.8(2026-04-18) — 驾驶舱新增 waiting 状态(刚登入等首条消息不再误报「🔴 从未活动」/ 1 死)
 
 ---
 
@@ -388,7 +388,15 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.7** (2026-04-18) — 当前稳定版
+- **v2.10.8** (2026-04-18) — 当前稳定版
+  - [UX] 驾驶舱 KPI「账号 0/1 · 1 死」误报修复:刚登入 / 群内还没人发言的账号
+    不再被判定为死账号,改为 waiting 状态 → 显示「● 等待首条消息」(绿)
+    KPI 分母计入「正常」,副标注出等待数,收到首条消息自动切回 online
+  - [UX] accounts_matrix.heartbeat_status 新增 waiting 枚举,前端对应 ● 等待首条消息
+  - [UX] KPI 「X 死」只计 session_status==revoked 或 心跳 >4h,不再把「没心跳 + healthy」当死
+  - 升级:cd /root/tg-monitor-<dept> && ./update.sh
+
+- **v2.10.7** (2026-04-18)
   - [FIX] 验证码/两步密码登录成功后,`.session_states.json` 立刻标 healthy — UI 不再 stale
     - 根因:tg-monitor 的 `_session_health_loop` 要等 90s 首轮延迟 + 历史消息拉完(媒体多可能几分钟)
     - 之前用户重新登录后,账号管理页还显示「🔴 会话已吊销」很久,体验差
