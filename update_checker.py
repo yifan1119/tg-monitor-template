@@ -43,8 +43,32 @@ def _fetch_release_notes():
     return {}
 
 
+def _auto_emoji(text: str) -> str:
+    """根据 commit subject 关键词自动挑 emoji"""
+    t = (text or "").lower()
+    rules = [
+        (("fix", "修复", "修了", "bug"), "🔧"),
+        (("sec", "安全", "加固", "漏洞", "hardening"), "🔒"),
+        (("feat", "新增", "新功能", "加了", "新建"), "🆕"),
+        (("docs", "文档", "readme", "说明"), "📖"),
+        (("refactor", "重构", "清理", "移除"), "🧹"),
+        (("perf", "优化", "性能", "提速"), "⚡"),
+        (("ui", "ux", "界面", "驾驶舱", "dashboard"), "🎛️"),
+    ]
+    for keys, emoji in rules:
+        if any(k in t for k in keys):
+            return emoji
+    return "📦"
+
+
 def _notes_for(short_sha: str, all_notes: dict, commit_subject: str = "") -> dict:
-    """给一个 commit 短 sha,拿白话说明;没有就从 commit subject 尝试匹配版本号"""
+    """给一个 commit 短 sha,拿白话说明。
+    优先级:
+    1. release_notes.json 里匹配 short_sha (手写的最优)
+    2. release_notes.json 里匹配 v2.x.x 版本号
+    3. 从 commit subject 自动生成 (剥掉 vX.Y.Z: 前缀 + 自动 emoji) — Ivan 不用维护
+    4. 最后兜底: 常规更新
+    """
     if short_sha in all_notes:
         return all_notes[short_sha]
     # 从 commit subject 找 v2.x.x 这种版本号
@@ -52,6 +76,19 @@ def _notes_for(short_sha: str, all_notes: dict, commit_subject: str = "") -> dic
     m = re.search(r"v\d+\.\d+\.\d+", commit_subject or "")
     if m and m.group(0) in all_notes:
         return all_notes[m.group(0)]
+
+    # v2.10.3+: commit subject 自动转白话
+    subject = (commit_subject or "").strip()
+    if subject:
+        # 剥掉 "v2.10.2: " 或 "docs: " / "fix: " 这种前缀
+        desc = re.sub(r"^(v\d+\.\d+\.\d+|docs|fix|feat|chore|refactor|perf|sec|ui|ux|style|test|build|ci)[:\s]*", "", subject, flags=re.IGNORECASE).strip()
+        if desc:
+            emoji = _auto_emoji(subject)
+            return {
+                "title": f"{emoji} {desc}",
+                "body": "详情见 GitHub 提交记录。可以放心升级,有自动回滚保护。",
+            }
+
     meta = all_notes.get("_meta", {})
     return {
         "title": "📦 常规更新",
