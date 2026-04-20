@@ -175,6 +175,15 @@ class TaskScheduler:
                 except Exception as e:
                     logger.warning("预警分页一致性巡检失败: %s", e)
 
+                # v2.10.15: 账号分页自愈巡检 — 登录时 _create_sheet_tab 可能因为
+                # Sheets API 429 / 瞬时网络 / OAuth token 过期而静默失败,
+                # tg-monitor 启动 sweep 只跑一次。这里每轮巡检再扫一次,
+                # 补建 DB 里有但 Sheet 里没有的账号分页(幂等)
+                try:
+                    self.sheets.ensure_account_tabs()
+                except Exception as e:
+                    logger.warning("账号分页自愈巡检失败: %s", e)
+
                 for phone, client in self.listener.clients.items():
                     # 删除检测
                     deleted_msgs = await self.listener.check_deleted(phone, days=config.PATROL_DAYS)

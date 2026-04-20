@@ -90,5 +90,9 @@
   "v2.10.14": {
     "title": "v2.10.14",
     "body": "修复: 测试 Sheet 通过立刻存 ID + 装前自动清孤儿容器 + HTTPS 默认开\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+  },
+  "v2.10.15": {
+    "title": "v2.10.15",
+    "body": "修复: 批量登录时漏建的账号分页 60 秒内自动补齐\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   }
 }

@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.14(2026-04-20) — HTTPS 默认开启 + SHEET ID 验证通过立刻存盘 + 安装前自动清孤儿容器
+> 📌 **最新版**:v2.10.15(2026-04-20) — 账号分页自愈巡检(漏建的分页 60 秒内自动补)
 
 ---
 
@@ -390,7 +390,14 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.14** (2026-04-20) — 当前稳定版
+- **v2.10.15** (2026-04-20) — 当前稳定版
+  - [FIX] tasks.py `_patrol_loop` 每 60 秒也调一次 `ensure_account_tabs` —
+    修「批量登录多个账号时少数分页没建出来」:`_create_sheet_tab` 登录时
+    静默失败(Sheets 429 / 瞬时网络 / OAuth 缓存)+ tg-monitor 启动 sweep
+    只跑一次的双重漏洞。现在漏建的分页 60 秒内巡检会补上,不用重启
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.14** (2026-04-20)
   - [FIX] `/api/test-sheets` 验证通过时立刻把 SHEET_ID 写进 `.env` — 解决
     用户只点「测试 Sheet 访问」但没点「保存并启动」导致 SHEET_ID 丢失、
     tg-monitor 启动报 `RuntimeError: SHEET_ID 为空`、三个预警分页永远没被建
