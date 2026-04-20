@@ -8,17 +8,25 @@ import urllib.request
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from telethon import TelegramClient
-from telethon.errors import (
-    SessionPasswordNeededError,
-    PasswordHashInvalidError,
-    PhoneCodeInvalidError,
-    PhoneCodeExpiredError,
-    PhoneCodeEmptyError,
-    PhoneNumberInvalidError,
-    PhoneNumberBannedError,
-    PhoneNumberFloodError,
-    FloodWaitError,
-)
+from telethon.errors import SessionPasswordNeededError
+
+# v2.10.21: 防御性 import — 不同 Telethon 版本下某些异常类可能缺失,
+# 直接 `from telethon.errors import X, Y, Z` 一个缺失整个 web.py 就 ImportError 起不来。
+# 逐个 getattr,缺的用占位 Exception(isinstance 检查永远 False),_humanize_tg_error
+# 里的分支就走不到,走兜底 str(e) 也够用。
+class _MissingTgError(Exception):
+    """Telethon 此版本缺的异常占位, isinstance 检查永远为 False"""
+import telethon.errors as _tg_errors
+def _tg_err(name):
+    return getattr(_tg_errors, name, _MissingTgError)
+PasswordHashInvalidError  = _tg_err("PasswordHashInvalidError")
+PhoneCodeInvalidError     = _tg_err("PhoneCodeInvalidError")
+PhoneCodeExpiredError     = _tg_err("PhoneCodeExpiredError")
+PhoneCodeEmptyError       = _tg_err("PhoneCodeEmptyError")
+PhoneNumberInvalidError   = _tg_err("PhoneNumberInvalidError")
+PhoneNumberBannedError    = _tg_err("PhoneNumberBannedError")
+PhoneNumberFloodError     = _tg_err("PhoneNumberFloodError")
+FloodWaitError            = _tg_err("FloodWaitError")
 
 import os
 from functools import wraps
