@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.20(2026-04-20) — update.sh 遇到同名容器冲突也能清,升级不再卡"already in use"
+> 📌 **最新版**:v2.10.22(2026-04-20) — 升级后自动恢复挂掉的 Caddy(HTTPS 部署不再手动救)
 
 ---
 
@@ -390,7 +390,28 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.20** (2026-04-20) — 当前稳定版
+- **v2.10.22** (2026-04-20) — 当前稳定版
+  - [FIX] `update.sh` 末端新增 HTTPS 保护块 — 如果看到 `tg-caddy-<部门>` 容器
+    存在但不在 `running` 状态(例如之前有人跑过 `docker compose down`),
+    自动跑 `docker compose -p tg-<部门> --profile https up -d caddy` 把它拉回来
+  - 只对"挂了的 Caddy"动手,正在跑的不碰 — 避免引入不必要的 recreate
+    导致 HTTPS 瞬断
+  - 拉起失败只打 warning,不会让 `set -e` 把整个升级标成失败触发回滚
+    (主服务已经过健康检查,Caddy 救不回来是独立问题)
+  - 纯 HTTP 部署(没装过 Caddy)看不到这段执行,零影响
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.21** (2026-04-20)
+  - [FIX] `web.py` 改成防御性 `import telethon.errors` — 用 `getattr(telethon.errors, ...)`
+    + `_MissingTgError` 占位 — 以前 v2.10.19 直接 `from telethon.errors import
+    PasswordHashInvalidError, PhoneCodeInvalidError, ...`,如果客户 VPS 上
+    Telethon 版本偏旧(例如 1.36.0 没有某些 error class),升级后 web 容器
+    启动时 `ImportError` 直接挂,登录页打不开
+  - `_humanize_tg_error()` 的 `isinstance` 检查对缺失的 error class 永远走
+    `False` 分支 → fallback 到"剥掉 (caused by XxxRequest) 尾巴"的 str 兜底
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.20** (2026-04-20)
   - [FIX] `update.sh` 加上同名容器清理(跟 install.sh 逻辑对齐)— 以前只有
     install.sh 清 orphan,update.sh 没清,遇到老 compose 文件生的容器或 label
     丢失的容器,`docker compose up --build` 会报 `container name "/tg-xxx-<dept>"
@@ -399,8 +420,7 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
     (v2.10.14 的谨慎判断),现在放宽到"名字对就清",因为
     `tg-(monitor|web|caddy)-<部门>` 这三个名字本来就是当前部门独占的,
     不怕误伤
-  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`(本版本修复后生效 —
-    如果你 **现在** 就被卡住,参考下面的常见故障排查「升级卡在容器名冲突」)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
 
 - **v2.10.19** (2026-04-20)
   - [FIX] 登录 TG 账号(发验证码 / 验证码 / 两步验证密码)的错误提示

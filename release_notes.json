@@ -114,5 +114,13 @@
   "v2.10.20": {
     "title": "v2.10.20",
     "body": "修复: 升级时遇到 \"container name already in use\" 冲突\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+  },
+  "v2.10.21": {
+    "title": "v2.10.21",
+    "body": "修复: 防御性 import telethon.errors(旧版 Telethon 升级后 web 打不开)\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+  },
+  "v2.10.22": {
+    "title": "v2.10.22",
+    "body": "修复: 升级后自动恢复挂掉的 Caddy(HTTPS 部署不再手动救)\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   }
 }

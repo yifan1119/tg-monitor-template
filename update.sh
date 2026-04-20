@@ -186,6 +186,30 @@ if [ -n "$WEB_PORT" ]; then
     fi
 fi
 
+# ===== 5.5 HTTPS 保护 (v2.10.22) — Caddy 挂了就拉起来 =====
+# 背景: docker-compose.yml 里 caddy 挂了 profiles: ["https"],
+#       `compose up -d --build` 不带 --profile 不会动它 → 正常运行的 Caddy 不受影响,
+#       但是如果历史上有人跑过 `docker compose down`(例如 debug 时),
+#       Caddy 就永远起不来了,update.sh 也不会救它 → 客户发现 HTTPS 打不开。
+# 策略: 看到 tg-caddy-<部门> 容器存在但不在跑,才主动拉 (profile https up -d caddy)。
+#       正在跑的不碰 (避免没必要的 recreate 导致 HTTPS 瞬断)。
+#       失败只打 warning,不让 set -e 把整个升级标成失败。
+CADDY_NAME="tg-caddy-${COMPANY_NAME}"
+if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${CADDY_NAME}$"; then
+    CADDY_STATE=$(docker inspect -f '{{.State.Running}}' "$CADDY_NAME" 2>/dev/null || echo "false")
+    if [ "$CADDY_STATE" != "true" ]; then
+        echo ""
+        echo "🔒 检测到 HTTPS(Caddy)容器未在运行,尝试恢复..."
+        if docker compose -p "tg-${COMPANY_NAME}" --profile https up -d caddy 2>&1; then
+            echo "  ✅ Caddy 已恢复"
+        else
+            echo "  ⚠ Caddy 拉起失败 — 不影响主服务"
+            echo "     手动恢复: docker compose -p tg-${COMPANY_NAME} --profile https up -d caddy"
+            echo "     查 Caddy 日志: docker logs tg-caddy-${COMPANY_NAME} --tail 50"
+        fi
+    fi
+fi
+
 # ===== 6. 升级成功 =====
 echo ""
 echo "╔══════════════════════════════════════════════╗"
