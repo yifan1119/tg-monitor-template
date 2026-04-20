@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.12(2026-04-18) — 自动建表按钮加锁(防双击建两个 sheet,一个空一个有模板的根因)
+> 📌 **最新版**:v2.10.13(2026-04-18) — 同 VPS 多部门 HTTPS 共存不再冲突(子域自动区分,老部门不受影响)
 
 ---
 
@@ -388,7 +388,16 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.12** (2026-04-18) — 当前稳定版
+- **v2.10.13** (2026-04-18) — 当前稳定版
+  - [FIX] `enable_https.sh` 同 VPS 多部门 HTTPS 共存冲突修复:以前所有部门默认
+    domain 都是 `<IP>.nip.io`,Caddy site block 重复 → 后装的覆盖先装的 → 先装
+    的部门 HTTPS 入口失效.现在新部门默认 `<company>.<IP>.nip.io` 子域,各自独立
+    证书,多部门共存互不干扰
+  - [兼容] 老部门 `.env` 已有 `PUBLIC_DOMAIN` → 继续沿用,Google OAuth redirect
+    URI 不用改
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.12** (2026-04-18)
   - [FIX] `/api/sheets/auto-create` 加全局锁 — 修「同一部门 Drive 里看到两个
     sheet,一个空一个有模板」的真凶:用户第一次点没反应再点一次,并发两个请求都
     read_env 看到 SHEET_ID 空 → 都调 Drive API 建新 sheet(Drive API eventual

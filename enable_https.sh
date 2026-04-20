@@ -25,20 +25,26 @@ WEB_PORT="${WEB_PORT:-5001}"
 WEB_CONTAINER="tg-web-${COMPANY}"
 
 # 1. 决定域名
+# v2.10.13: 支持同 VPS 多部门 HTTPS 共存 — 新部门用 <company>.<IP>.nip.io 子域
+#   向后兼容: .env 已有 PUBLIC_DOMAIN 的老部门继续沿用,不破坏 OAuth redirect URI
 if [ -n "$1" ]; then
     DOMAIN="$1"
     echo "▸ 使用自定义域名: $DOMAIN"
     echo "  ⚠ 请确认 $DOMAIN 的 DNS A 记录已指向本机 IP"
+elif grep -q "^PUBLIC_DOMAIN=" .env 2>/dev/null; then
+    # 老部门已有 domain → 沿用,避免改动 OAuth 配置
+    DOMAIN=$(grep "^PUBLIC_DOMAIN=" .env | head -1 | cut -d= -f2 | tr -d '"' | tr -d "'")
+    echo "▸ 沿用 .env 已有 domain: $DOMAIN"
 else
     IP=$(curl -s4 --max-time 5 ifconfig.me 2>/dev/null || curl -s4 --max-time 5 ipinfo.io/ip 2>/dev/null)
     if [ -z "$IP" ]; then
         echo "✗ 无法自动获取公网 IP,请手动指定:./enable_https.sh your-domain.com"
         exit 1
     fi
-    # nip.io 两种格式都支持:带 . 或带 -。用 . 更直观,也避开某些浏览器 DoH 把 - 格式
-    # 当成长子域名导致解析异常的情况
-    DOMAIN="${IP}.nip.io"
-    echo "▸ 自动用 nip.io 域名: $DOMAIN  (会解析到 $IP)"
+    # v2.10.13: 子域区分不同部门 — 避免多部门同 domain 导致 Caddy site block 冲突
+    # nip.io wildcard 解析: 任意前缀.IP.nip.io 都解析到 IP
+    DOMAIN="${COMPANY}.${IP}.nip.io"
+    echo "▸ 自动子域: $DOMAIN  (解析到 $IP)"
 fi
 
 # 2. 写入/更新 .env
