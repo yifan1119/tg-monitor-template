@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.17(2026-04-20) — 存量阉割版账号分页 60 秒自愈升级成完整模板(数据不丢)
+> 📌 **最新版**:v2.10.18(2026-04-20) — 软升级后同步更新 `.git/refs`,弹窗不再阴魂不散
 
 ---
 
@@ -390,7 +390,17 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.17** (2026-04-20) — 当前稳定版
+- **v2.10.18** (2026-04-20) — 当前稳定版
+  - [FIX] `upgrader._run_upgrade` 覆盖完 tarball 后,立刻把 `.git/refs/heads/main`
+    (和 `packed-refs` 里的 main 行)写成 `latest_sha` — 以前 `PRESERVE` 把
+    `.git` 保留不覆盖,导致 `update_checker._read_local_sha` 永远读到 install.sh
+    当时 git clone 下来的老 sha,一键软升级成功后弹窗阴魂不散
+  - [FIX] 升级完成后立刻调一次 `update_checker.check_once()` 刷新
+    `update_status.json`,前端下次查状态就能看到 `has_update=False`
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`(update.sh 走 git pull,
+    会自动把 refs 更新到 v2.10.18)
+
+- **v2.10.17** (2026-04-20)
   - [FIX] `ensure_account_tabs` 除了补建不存在的分页,也会扫所有已存在的
     账号分页,如果是阉割版(frozenRowCount<6)就原地升级成完整模板 —
     补 row 4-6 样式 / 对话槽 header / 冻结 6 行 / 列宽 / 10 槽斑马纹,

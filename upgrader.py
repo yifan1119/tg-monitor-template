@@ -127,6 +127,46 @@ def _apply_tarball(tar_bytes: bytes):
         return applied
 
 
+def _bump_local_refs(latest_sha: str):
+    """v2.10.18: 软升级成功后把 .git/refs/heads/main 更新到最新 sha。
+
+    背景: PRESERVE 保留 .git 目录 → tarball 不动它 → update_checker._read_local_sha
+    永远读到 install.sh 当时 git clone 下来的老 sha → 升级后弹窗永不消失。
+
+    做法: 直接重写 refs/heads/main + 同步 packed-refs 里的 main 行。
+    工作树与 index 不同步不影响运行 — soft upgrade 本来就不走 git。
+    """
+    try:
+        git_dir = REPO_ROOT / ".git"
+        if not git_dir.exists():
+            logger.warning("bump refs: .git 目录不存在, 跳过")
+            return
+        # 主 refs 文件
+        refs_path = git_dir / "refs" / "heads" / update_checker.BRANCH
+        refs_path.parent.mkdir(parents=True, exist_ok=True)
+        refs_path.write_text(latest_sha + "\n")
+        # packed-refs 里的 main 行(如果有)
+        packed = git_dir / "packed-refs"
+        if packed.exists():
+            try:
+                lines = packed.read_text().splitlines()
+                new_lines = []
+                changed = False
+                for line in lines:
+                    if line.endswith(f"refs/heads/{update_checker.BRANCH}") and not line.startswith("#"):
+                        new_lines.append(f"{latest_sha} refs/heads/{update_checker.BRANCH}")
+                        changed = True
+                    else:
+                        new_lines.append(line)
+                if changed:
+                    packed.write_text("\n".join(new_lines) + "\n")
+            except Exception as e:
+                logger.warning(f"bump packed-refs failed: {e}")
+        logger.info(f"bump local refs → {latest_sha[:7]}")
+    except Exception as e:
+        logger.warning(f"bump local refs failed: {e}")
+
+
 def _restart_containers(company: str):
     """用 docker SDK 重启 tg-monitor-<company> + tg-web-<company>."""
     import docker
@@ -157,6 +197,16 @@ def _run_upgrade(company: str, latest_sha: str):
         log("覆盖代码文件(保留 .env/data/sessions/.git)...")
         n = _apply_tarball(tb)
         log(f"覆盖 {n} 个文件")
+
+        # v2.10.18: 更新 .git/refs/heads/main, 否则 update_checker 永远读到老 sha, 弹窗不消失
+        _bump_local_refs(latest_sha)
+        log(f"refs 更新到 {latest_sha[:7]}")
+
+        # v2.10.18: 立刻刷新 update_status.json, 前端下次查 /api/update/status 马上看到 has_update=False
+        try:
+            update_checker.check_once()
+        except Exception as e:
+            log(f"刷新 update_status.json 失败(不影响升级): {e}")
 
         # 同步到 /app (web 容器启动时会再 cp 一次,这里不用手动)
         state["phase"] = "restarting"
