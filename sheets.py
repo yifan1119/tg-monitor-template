@@ -186,9 +186,16 @@ class SheetsWriter:
         # 2a: 清旧 banding
         for bid in banding_ids:
             requests.append({"deleteBanding": {"bandedRangeId": bid}})
-        # 2b: 整张表 WHITE + center
-        requests.append(_repeat(0, TOTAL_ROWS, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}))
-        # 2c: row 1-6 的背景色
+        # 2b: 整张表 WHITE + center — fields 遮罩**不含 textFormat**,
+        # 避免把 row 7+ 已删除消息的红字+删除线(mark_deleted_in_sheet 打的)清掉
+        requests.append({"repeatCell": {
+            "range": {"sheetId": sheet_id,
+                      "startRowIndex": 0, "endRowIndex": TOTAL_ROWS,
+                      "startColumnIndex": 0, "endColumnIndex": TOTAL_COLS},
+            "cell": {"userEnteredFormat": {"backgroundColor": WHITE, **center_middle}},
+            "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment)",
+        }})
+        # 2c: row 1-6 的背景色(header 区域,随便覆盖 textFormat)
         requests.extend([
             _repeat(0, 1, 0, TOTAL_COLS, {"backgroundColor": CYAN, **center_middle}),
             _repeat(1, 2, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}),
