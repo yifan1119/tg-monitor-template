@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.15(2026-04-20) — 账号分页自愈巡检(漏建的分页 60 秒内自动补)
+> 📌 **最新版**:v2.10.16(2026-04-20) — sweep 补建的账号分页统一用完整模板(跟登录建的一致)
 
 ---
 
@@ -390,7 +390,17 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.15** (2026-04-20) — 当前稳定版
+- **v2.10.16** (2026-04-20) — 当前稳定版
+  - [FIX] sweep `ensure_account_tabs` 补建的分页改用完整模板(青色 header +
+    对话槽 + 冻结 6 行 + 10 槽斑马纹),跟登录时 `_create_sheet_tab` 一致 —
+    以前 sweep 只跑 `_init_sheet_header` 产出 3 行阉割版,导致 OAuth 失效
+    恢复后漏建的分页结构不全,写消息时找不到对话槽位置
+  - [重构] 把两路建分页逻辑合并到 `SheetsWriter.create_account_tab_full`,
+    web.py 和 sheets.py 都调它,杜绝以后再 drift
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`(已有阉割版分页需先
+    在 Sheet 手动删,再升 — sweep 会重建成完整版)
+
+- **v2.10.15** (2026-04-20)
   - [FIX] tasks.py `_patrol_loop` 每 60 秒也调一次 `ensure_account_tabs` —
     修「批量登录多个账号时少数分页没建出来」:`_create_sheet_tab` 登录时
     静默失败(Sheets 429 / 瞬时网络 / OAuth 缓存)+ tg-monitor 启动 sweep

@@ -462,112 +462,17 @@ def _get_spreadsheet():
 
 
 def _create_sheet_tab(name, operator="", company=""):
-    """登录成功后自动建分页（格式与舒舒一致：全部置中 + 斑马纹 + 冻结 6 行）
+    """登录成功后自动建分页。
 
-    name: 外事号 TG 昵称 (会写到 row 5 col C)
-    operator: 商务人员 (会写到 B2；空就留白等用户自己填)
-    company: 所属中心/部门 (会写到 B3；空就默认用 .env 的 COMPANY_DISPLAY)
+    v2.10.16: 改用 SheetsWriter.create_account_tab_full 统一模板 —
+    之前 web.py 和 sheets.py ensure_account_tabs 各自有一套建分页逻辑
+    (一套完整、一套阉割 3 行),sweep 补建的分页看起来跟登录建的不一样。
+    现在两路都走同一个方法,格式保证一致。
     """
     try:
-        sp = _get_spreadsheet()
-        existing = [ws.title for ws in sp.worksheets()]
-        if name in existing:
-            return
-
-        # company 默认读 env COMPANY_DISPLAY
-        if not company:
-            company = read_env().get("COMPANY_DISPLAY") or read_env().get("COMPANY_NAME") or ""
-
-        TOTAL_ROWS = 1000
-        TOTAL_COLS = 30
-        ws = sp.add_worksheet(title=name, rows=TOTAL_ROWS, cols=TOTAL_COLS)
-        sheet_id = ws.id
-
-        # 颜色常量
-        CYAN = {"red": 0.3019608, "green": 0.8156863, "blue": 0.88235295}
-        WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
-        LIGHT_BLUE = {"red": 0.8784314, "green": 0.96862745, "blue": 0.98039216}
-        TEAL = {"red": 0.29803923, "green": 0.69803923, "blue": 0.69803923}
-
-        # 文字内容: label A2/A3 + value B2/B3 + 对话槽标题 row5-6
-        ws.update("A2:B3", [
-            [config.OPERATOR_LABEL, operator],
-            ["中心/部门", company],
-        ])
-        # C6 留空（第一条消息进来时 setup_dialog_columns 会填真实 peer 名）
-        # 之前预填「（等消息进来自动填）」会让 sheets.py 的空检查失效，导致 B6 永远不同步
-        ws.update("A5:C6", [
-            ["A", "外事号", name],
-            ["B", config.PEER_ROLE_LABEL, ""],
-        ])
-
-        center_middle = {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}
-
-        def _repeat(r0, r1, c0, c1, fmt):
-            return {"repeatCell": {
-                "range": {"sheetId": sheet_id,
-                          "startRowIndex": r0, "endRowIndex": r1,
-                          "startColumnIndex": c0, "endColumnIndex": c1},
-                "cell": {"userEnteredFormat": fmt},
-                "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat)",
-            }}
-
-        def _col_dim(c0, c1, size):
-            return {"updateDimensionProperties": {
-                "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
-                          "startIndex": c0, "endIndex": c1},
-                "properties": {"pixelSize": size}, "fields": "pixelSize",
-            }}
-
-        # 整张表全部置中 (row 1..TOTAL_ROWS, col 1..TOTAL_COLS)
-        requests = [
-            _repeat(0, TOTAL_ROWS, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}),
-            # Row 1: 青色横条 (全宽)
-            _repeat(0, 1, 0, TOTAL_COLS, {"backgroundColor": CYAN, **center_middle}),
-            # Row 2: 白底 + 置中 (全宽)
-            _repeat(1, 2, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}),
-            # Row 3: 淡蓝底 + 置中 (全宽)
-            _repeat(2, 3, 0, TOTAL_COLS, {"backgroundColor": LIGHT_BLUE, **center_middle}),
-            # Row 4: 白底 + 白字 + 粗体 + 置中 (spacer, 全宽)
-            _repeat(3, 4, 0, TOTAL_COLS, {
-                "backgroundColor": WHITE,
-                "textFormat": {"bold": True, "foregroundColor": WHITE},
-                **center_middle,
-            }),
-            # Row 5-6 第一个对话槽 A-C: 青绿 + 粗体 + 置中
-            _repeat(4, 6, 0, 3, {
-                "backgroundColor": TEAL,
-                "textFormat": {"bold": True},
-                **center_middle,
-            }),
-            # 冻结前 6 行
-            {"updateSheetProperties": {
-                "properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 6}},
-                "fields": "gridProperties.frozenRowCount",
-            }},
-            # 列宽: A=180, B=192, C=350 (与舒舒一致)
-            _col_dim(0, 1, 180),
-            _col_dim(1, 2, 192),
-            _col_dim(2, 3, 350),
-            # 斑马纹: row 7+ 全部 30 列统一双色（淡蓝 / 白交替），一次铺满
-            # 每 3 列一个对话槽独立 banding，之后新 peer 进来的 slot 视觉会自然统一
-            *[
-                {"addBanding": {
-                    "bandedRange": {
-                        "range": {"sheetId": sheet_id,
-                                  "startRowIndex": 6, "endRowIndex": TOTAL_ROWS,
-                                  "startColumnIndex": slot * 3, "endColumnIndex": slot * 3 + 3},
-                        "rowProperties": {
-                            "firstBandColor": LIGHT_BLUE,
-                            "secondBandColor": WHITE,
-                        },
-                    },
-                }}
-                for slot in range(TOTAL_COLS // 3)  # 10 个对话槽都预先带斑马纹
-            ],
-        ]
-
-        sp.batch_update({"requests": requests})
+        from sheets import SheetsWriter
+        writer = SheetsWriter()  # __init__ 顺便 sweep 一轮(幂等)
+        writer.create_account_tab_full(name=name, operator=operator, company=company)
         print(f"✅ 自动建分页成功: {name}")
     except Exception as e:
         # v2.10.10: 打完整 stack, 方便 docker logs tg-web 追

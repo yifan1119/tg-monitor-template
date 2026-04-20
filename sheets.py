@@ -44,7 +44,10 @@ class SheetsWriter:
 
     def ensure_account_tabs(self):
         """v2.10.10: 扫 DB 所有账号,分页不存在就建一个(对齐登录时 _create_sheet_tab 的承诺)。
-        解决升级前登录的账号没有对应分页的历史遗留问题。"""
+        解决升级前登录的账号没有对应分页的历史遗留问题。
+
+        v2.10.16: 改用 create_account_tab_full 建完整模板(青头 + 对话槽 + 冻结
+        + 斑马纹),跟登录时 web._create_sheet_tab 产出一致,不再是 3 行阉割版。"""
         try:
             accounts = db.get_conn().execute(
                 "SELECT id, phone, name, sheet_tab, operator, company FROM accounts"
@@ -61,15 +64,131 @@ class SheetsWriter:
             if not tab_name or tab_name in existing:
                 continue
             try:
-                self._rate_limit()
-                ws = self.spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=30)
-                self._init_sheet_header(ws, a)
+                self.create_account_tab_full(
+                    name=tab_name,
+                    operator=a["operator"] or "",
+                    company=a["company"] or "",
+                )
                 logger.info("ensure_account_tabs: 补建分页「%s」", tab_name)
                 created += 1
             except Exception as e:
                 logger.warning("ensure_account_tabs: 补建「%s」失败 %s", tab_name, e)
         if created:
             logger.info("ensure_account_tabs: 共补建 %d 个账号分页", created)
+
+    def create_account_tab_full(self, name, operator="", company=""):
+        """v2.10.16: 账号分页完整模板 — 统一登录时 web._create_sheet_tab 和
+        sweep ensure_account_tabs 两路的建分页逻辑,保证格式一致。
+
+        name: 外事号 TG 昵称 (会写到 row 5 col C)
+        operator: 商务人员 (B2;空就留白等用户自己填)
+        company: 所属中心/部门 (B3;空就默认用 .env 的 COMPANY_DISPLAY)
+
+        若分页已存在 → 直接返回 existing worksheet(幂等)。
+        """
+        # 幂等:已存在就返回
+        existing = {ws.title: ws for ws in self.spreadsheet.worksheets()}
+        if name in existing:
+            return existing[name]
+
+        # company 默认读 env COMPANY_DISPLAY(tg-monitor 进程里 config.COMPANY_DISPLAY 已注入)
+        if not company:
+            company = config.COMPANY_DISPLAY or config.COMPANY_NAME or ""
+
+        TOTAL_ROWS = 1000
+        TOTAL_COLS = 30
+
+        self._rate_limit()
+        ws = self.spreadsheet.add_worksheet(title=name, rows=TOTAL_ROWS, cols=TOTAL_COLS)
+        sheet_id = ws.id
+
+        # 颜色常量
+        CYAN = {"red": 0.3019608, "green": 0.8156863, "blue": 0.88235295}
+        WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
+        LIGHT_BLUE = {"red": 0.8784314, "green": 0.96862745, "blue": 0.98039216}
+        TEAL = {"red": 0.29803923, "green": 0.69803923, "blue": 0.69803923}
+
+        # 文字内容: label A2/A3 + value B2/B3 + 对话槽标题 row5-6
+        self._rate_limit()
+        ws.update("A2:B3", [
+            [config.OPERATOR_LABEL, operator],
+            ["中心/部门", company],
+        ])
+        # C6 留空(第一条消息进来时 setup_dialog_columns 会填真实 peer 名)
+        self._rate_limit()
+        ws.update("A5:C6", [
+            ["A", "外事号", name],
+            ["B", config.PEER_ROLE_LABEL, ""],
+        ])
+
+        center_middle = {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}
+
+        def _repeat(r0, r1, c0, c1, fmt):
+            return {"repeatCell": {
+                "range": {"sheetId": sheet_id,
+                          "startRowIndex": r0, "endRowIndex": r1,
+                          "startColumnIndex": c0, "endColumnIndex": c1},
+                "cell": {"userEnteredFormat": fmt},
+                "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat)",
+            }}
+
+        def _col_dim(c0, c1, size):
+            return {"updateDimensionProperties": {
+                "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                          "startIndex": c0, "endIndex": c1},
+                "properties": {"pixelSize": size}, "fields": "pixelSize",
+            }}
+
+        requests = [
+            # 整张表置中
+            _repeat(0, TOTAL_ROWS, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}),
+            # Row 1: 青色横条
+            _repeat(0, 1, 0, TOTAL_COLS, {"backgroundColor": CYAN, **center_middle}),
+            # Row 2: 白底
+            _repeat(1, 2, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}),
+            # Row 3: 淡蓝底
+            _repeat(2, 3, 0, TOTAL_COLS, {"backgroundColor": LIGHT_BLUE, **center_middle}),
+            # Row 4: 白底白字 spacer
+            _repeat(3, 4, 0, TOTAL_COLS, {
+                "backgroundColor": WHITE,
+                "textFormat": {"bold": True, "foregroundColor": WHITE},
+                **center_middle,
+            }),
+            # Row 5-6 第一个对话槽 A-C: 青绿 + 粗体
+            _repeat(4, 6, 0, 3, {
+                "backgroundColor": TEAL,
+                "textFormat": {"bold": True},
+                **center_middle,
+            }),
+            # 冻结前 6 行
+            {"updateSheetProperties": {
+                "properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 6}},
+                "fields": "gridProperties.frozenRowCount",
+            }},
+            # 列宽: A=180, B=192, C=350
+            _col_dim(0, 1, 180),
+            _col_dim(1, 2, 192),
+            _col_dim(2, 3, 350),
+            # 斑马纹: 10 个对话槽都预先带
+            *[
+                {"addBanding": {
+                    "bandedRange": {
+                        "range": {"sheetId": sheet_id,
+                                  "startRowIndex": 6, "endRowIndex": TOTAL_ROWS,
+                                  "startColumnIndex": slot * 3, "endColumnIndex": slot * 3 + 3},
+                        "rowProperties": {
+                            "firstBandColor": LIGHT_BLUE,
+                            "secondBandColor": WHITE,
+                        },
+                    },
+                }}
+                for slot in range(TOTAL_COLS // 3)
+            ],
+        ]
+
+        self._rate_limit()
+        self.spreadsheet.batch_update({"requests": requests})
+        return ws
 
     # 告警分页表头（跟苏总现有 Sheet 格式 1:1 对齐）
     # 注意: "广告主" 这个位置用 config.PEER_ROLE_LABEL 动态替换，各部门可能叫「广告主/客户/合作方」等
