@@ -47,7 +47,10 @@ class SheetsWriter:
         解决升级前登录的账号没有对应分页的历史遗留问题。
 
         v2.10.16: 改用 create_account_tab_full 建完整模板(青头 + 对话槽 + 冻结
-        + 斑马纹),跟登录时 web._create_sheet_tab 产出一致,不再是 3 行阉割版。"""
+        + 斑马纹),跟登录时 web._create_sheet_tab 产出一致,不再是 3 行阉割版。
+
+        v2.10.17: 对已存在的账号分页也扫一遍,如果是阉割版(frozen<6)就原地升级成完整模板,
+        数据不丢(row 7+ 保留)。解决存量客户已经有阉割版分页的历史遗留问题。"""
         try:
             accounts = db.get_conn().execute(
                 "SELECT id, phone, name, sheet_tab, operator, company FROM accounts"
@@ -57,12 +60,27 @@ class SheetsWriter:
             return
         if not accounts:
             return
-        existing = {ws.title for ws in self.spreadsheet.worksheets()}
+        existing_ws = {ws.title: ws for ws in self.spreadsheet.worksheets()}
+        # v2.10.17: 先把所有分页的 frozenRowCount 拉下来, 避免循环里逐个 fetch metadata
+        frozen_map = self._fetch_frozen_rows_map()
         created = 0
+        upgraded = 0
         for a in accounts:
             tab_name = a["sheet_tab"] or a["name"] or a["phone"]
-            if not tab_name or tab_name in existing:
+            if not tab_name:
                 continue
+            if tab_name in existing_ws:
+                # v2.10.17: 已存在 → 检查是不是阉割版,是就升级
+                ws = existing_ws[tab_name]
+                if frozen_map.get(ws.id, 0) < 6:
+                    try:
+                        self.upgrade_minimal_tab(ws)
+                        logger.info("ensure_account_tabs: 升级阉割版「%s」→ 完整模板", tab_name)
+                        upgraded += 1
+                    except Exception as e:
+                        logger.warning("ensure_account_tabs: 升级「%s」失败 %s", tab_name, e)
+                continue
+            # 不存在 → 建完整版
             try:
                 self.create_account_tab_full(
                     name=tab_name,
@@ -75,6 +93,144 @@ class SheetsWriter:
                 logger.warning("ensure_account_tabs: 补建「%s」失败 %s", tab_name, e)
         if created:
             logger.info("ensure_account_tabs: 共补建 %d 个账号分页", created)
+        if upgraded:
+            logger.info("ensure_account_tabs: 共升级 %d 个阉割版分页", upgraded)
+
+    def _fetch_frozen_rows_map(self):
+        """拉一次 metadata,返回 {sheetId: frozenRowCount} dict。
+        v2.10.17: 升级检测用,避免循环里 N 次 API 调用。"""
+        try:
+            self._rate_limit()
+            meta = self.spreadsheet.fetch_sheet_metadata()
+            result = {}
+            for s in meta.get("sheets", []):
+                sid = s.get("properties", {}).get("sheetId")
+                frozen = s.get("properties", {}).get("gridProperties", {}).get("frozenRowCount", 0)
+                if sid is not None:
+                    result[sid] = frozen
+            return result
+        except Exception as e:
+            logger.warning("_fetch_frozen_rows_map 失败: %s", e)
+            return {}
+
+    def _fetch_banded_ranges(self, sheet_id):
+        """拉指定 sheet 的所有 bandedRange id, 用于升级前清掉旧斑马纹。"""
+        try:
+            self._rate_limit()
+            meta = self.spreadsheet.fetch_sheet_metadata()
+            for s in meta.get("sheets", []):
+                if s.get("properties", {}).get("sheetId") == sheet_id:
+                    return [b["bandedRangeId"] for b in s.get("bandedRanges", []) if "bandedRangeId" in b]
+        except Exception as e:
+            logger.warning("_fetch_banded_ranges[%s] 失败: %s", sheet_id, e)
+        return []
+
+    def upgrade_minimal_tab(self, ws):
+        """v2.10.17: 把阉割版账号分页(只有 row 1-3 粗糙 header,无 frozen/对话槽/斑马纹)
+        原地升级成完整模板,消息数据(row 7+)完全保留。
+
+        安全前提: tg-monitor 消息写入从 row 7 开始(见 write_messages 里 current_row=max(len+1, 7)),
+        阉割版 row 4-6 本来就是空的,可以直接覆盖不影响数据。
+
+        做的事:
+        1. 补 row 5-6 对话槽 header(A/B + 外事号/PEER_ROLE_LABEL + 外事号 TG 名;C6 保护已有 peer 名)
+        2. 重画 row 1-6 的背景色 + 整张表 center_middle
+        3. 冻结 6 行
+        4. 列宽 A=180 / B=192 / C=350
+        5. 清旧斑马纹,加 10 槽新斑马纹
+        """
+        sheet_id = ws.id
+        tab_name = ws.title
+        TOTAL_COLS = 30
+        TOTAL_ROWS = max(ws.row_count, 1000)
+
+        # 颜色常量(跟 create_account_tab_full 一致)
+        CYAN = {"red": 0.3019608, "green": 0.8156863, "blue": 0.88235295}
+        WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
+        LIGHT_BLUE = {"red": 0.8784314, "green": 0.96862745, "blue": 0.98039216}
+        TEAL = {"red": 0.29803923, "green": 0.69803923, "blue": 0.69803923}
+        center_middle = {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}
+
+        # Step 1: 补 row 5-6 对话槽 header,保护 C6(可能已经被 setup_dialog_columns 填过 peer 名)
+        try:
+            self._rate_limit()
+            c6_existing = ws.acell("C6").value or ""
+        except Exception:
+            c6_existing = ""
+        self._rate_limit()
+        ws.update("A5:C6", [
+            ["A", "外事号", tab_name],
+            ["B", config.PEER_ROLE_LABEL, c6_existing],
+        ])
+
+        # Step 2: 先清掉现有 banding(否则 addBanding 会冲突)
+        banding_ids = self._fetch_banded_ranges(sheet_id)
+
+        def _repeat(r0, r1, c0, c1, fmt):
+            return {"repeatCell": {
+                "range": {"sheetId": sheet_id,
+                          "startRowIndex": r0, "endRowIndex": r1,
+                          "startColumnIndex": c0, "endColumnIndex": c1},
+                "cell": {"userEnteredFormat": fmt},
+                "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat)",
+            }}
+
+        def _col_dim(c0, c1, size):
+            return {"updateDimensionProperties": {
+                "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                          "startIndex": c0, "endIndex": c1},
+                "properties": {"pixelSize": size}, "fields": "pixelSize",
+            }}
+
+        requests = []
+        # 2a: 清旧 banding
+        for bid in banding_ids:
+            requests.append({"deleteBanding": {"bandedRangeId": bid}})
+        # 2b: 整张表 WHITE + center
+        requests.append(_repeat(0, TOTAL_ROWS, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}))
+        # 2c: row 1-6 的背景色
+        requests.extend([
+            _repeat(0, 1, 0, TOTAL_COLS, {"backgroundColor": CYAN, **center_middle}),
+            _repeat(1, 2, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}),
+            _repeat(2, 3, 0, TOTAL_COLS, {"backgroundColor": LIGHT_BLUE, **center_middle}),
+            _repeat(3, 4, 0, TOTAL_COLS, {
+                "backgroundColor": WHITE,
+                "textFormat": {"bold": True, "foregroundColor": WHITE},
+                **center_middle,
+            }),
+            _repeat(4, 6, 0, 3, {
+                "backgroundColor": TEAL,
+                "textFormat": {"bold": True},
+                **center_middle,
+            }),
+        ])
+        # 2d: 冻结 6 行
+        requests.append({"updateSheetProperties": {
+            "properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 6}},
+            "fields": "gridProperties.frozenRowCount",
+        }})
+        # 2e: 列宽 A=180 B=192 C=350
+        requests.extend([
+            _col_dim(0, 1, 180),
+            _col_dim(1, 2, 192),
+            _col_dim(2, 3, 350),
+        ])
+        # 2f: 10 槽斑马纹(row 7+)
+        for slot in range(TOTAL_COLS // 3):
+            requests.append({"addBanding": {
+                "bandedRange": {
+                    "range": {"sheetId": sheet_id,
+                              "startRowIndex": 6, "endRowIndex": TOTAL_ROWS,
+                              "startColumnIndex": slot * 3, "endColumnIndex": slot * 3 + 3},
+                    "rowProperties": {
+                        "firstBandColor": LIGHT_BLUE,
+                        "secondBandColor": WHITE,
+                    },
+                },
+            }})
+
+        self._rate_limit()
+        self.spreadsheet.batch_update({"requests": requests})
 
     def create_account_tab_full(self, name, operator="", company=""):
         """v2.10.16: 账号分页完整模板 — 统一登录时 web._create_sheet_tab 和

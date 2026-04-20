@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.16(2026-04-20) — sweep 补建的账号分页统一用完整模板(跟登录建的一致)
+> 📌 **最新版**:v2.10.17(2026-04-20) — 存量阉割版账号分页 60 秒自愈升级成完整模板(数据不丢)
 
 ---
 
@@ -390,15 +390,25 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.16** (2026-04-20) — 当前稳定版
+- **v2.10.17** (2026-04-20) — 当前稳定版
+  - [FIX] `ensure_account_tabs` 除了补建不存在的分页,也会扫所有已存在的
+    账号分页,如果是阉割版(frozenRowCount<6)就原地升级成完整模板 —
+    补 row 4-6 样式 / 对话槽 header / 冻结 6 行 / 列宽 / 10 槽斑马纹,
+    row 7+ 消息数据完全保留。存量客户 v2.10.16 之前的阉割版分页不用手动
+    删,升级后 60 秒自愈巡检自动升
+  - 新增方法:`SheetsWriter.upgrade_minimal_tab(ws)` +
+    `_fetch_frozen_rows_map` / `_fetch_banded_ranges`(fetch metadata 一次
+    批量判断,避免逐个分页 API 往返)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.16** (2026-04-20)
   - [FIX] sweep `ensure_account_tabs` 补建的分页改用完整模板(青色 header +
     对话槽 + 冻结 6 行 + 10 槽斑马纹),跟登录时 `_create_sheet_tab` 一致 —
     以前 sweep 只跑 `_init_sheet_header` 产出 3 行阉割版,导致 OAuth 失效
     恢复后漏建的分页结构不全,写消息时找不到对话槽位置
   - [重构] 把两路建分页逻辑合并到 `SheetsWriter.create_account_tab_full`,
     web.py 和 sheets.py 都调它,杜绝以后再 drift
-  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`(已有阉割版分页需先
-    在 Sheet 手动删,再升 — sweep 会重建成完整版)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
 
 - **v2.10.15** (2026-04-20)
   - [FIX] tasks.py `_patrol_loop` 每 60 秒也调一次 `ensure_account_tabs` —
