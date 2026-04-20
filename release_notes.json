@@ -86,5 +86,9 @@
   "v2.10.13": {
     "title": "v2.10.13",
     "body": "优化: 同 VPS 多部门 HTTPS 共存不再冲突\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+  },
+  "v2.10.14": {
+    "title": "v2.10.14",
+    "body": "修复: 测试 Sheet 通过立刻存 ID + 装前自动清孤儿容器 + HTTPS 默认开\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   }
 }

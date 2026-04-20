@@ -1337,6 +1337,13 @@ def api_test_sheets():
     except Exception as e:
         return jsonify({"ok": False, "msg": f"获取 OAuth 状态失败: {e}"})
     ok, msg = _test_sheets_access(sheet_id)
+    # v2.10.14: 验证通过就立刻持久化 SHEET_ID,避免用户只点「测试」没点「保存并启动」
+    # 导致 .env SHEET_ID 留空 — tg-monitor 启动报 `RuntimeError: SHEET_ID 为空`
+    if ok:
+        try:
+            write_env({"SHEET_ID": sheet_id})
+        except Exception as e:
+            logger.warning(f"[test-sheets] 持久化 SHEET_ID 失败(不影响验证结果): {e}")
     return jsonify({"ok": ok, "msg": msg})
 
 

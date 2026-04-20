@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.13(2026-04-18) — 同 VPS 多部门 HTTPS 共存不再冲突(子域自动区分,老部门不受影响)
+> 📌 **最新版**:v2.10.14(2026-04-20) — HTTPS 默认开启 + SHEET ID 验证通过立刻存盘 + 安装前自动清孤儿容器
 
 ---
 
@@ -48,8 +48,10 @@
 ### SSH 登入你的 VPS 后,执行这条:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yifan1119/tg-monitor-template/main/install.sh -o /root/install.sh && bash /root/install.sh demo --https
+curl -fsSL https://raw.githubusercontent.com/yifan1119/tg-monitor-template/main/install.sh -o /root/install.sh && bash /root/install.sh demo
 ```
+
+> v2.10.14 起 HTTPS 默认开启,不用再加 `--https` 旗标。
 
 > 把 `demo` 换成你的**部门英文代号**(只能小写字母 + 数字 + `-` / `_`,不能中文)。
 > 中文显示名(如「示例公司」)在安装完的 setup 页里填,不影响这里。
@@ -72,14 +74,14 @@ curl -fsSL https://raw.githubusercontent.com/yifan1119/tg-monitor-template/main/
 ### 其他用法
 
 ```bash
-# 不启用 HTTPS(纯内部测试)
-bash install.sh demo
-
-# 指定端口
-bash install.sh demo 5003 --https
+# 指定 web 端口(HTTPS 仍默认开启)
+bash install.sh demo 5003
 
 # 用自己的域名(需先把 DNS A 记录指到本机 IP)
 bash install.sh demo --https monitor.abc.com
+
+# 纯 HTTP (特殊场景,一般别用)
+bash install.sh demo --no-https
 
 # 不带参数:列出已部署部门
 bash install.sh
@@ -217,9 +219,9 @@ bash install.sh demo --https monitor.abc.com
 直接多跑几次 install.sh 就行:
 
 ```bash
-bash install.sh demo --https    # 5001
-bash install.sh dept2 --https  # 5002
-bash install.sh dept3 --https  # 5003
+bash install.sh demo    # 5001
+bash install.sh dept2   # 5002
+bash install.sh dept3   # 5003
 ```
 
 ---
@@ -343,7 +345,7 @@ rm -rf /root/tg-monitor-demo
 ├── config.py               # 配置加载
 ├── oauth_helper.py         # Google OAuth 授权 + Drive/Sheets 建立
 ├── templates.py            # 预警消息模板
-├── install.sh              # 一键安装(支持 --https)
+├── install.sh              # 一键安装(默认 HTTPS + 自动清孤儿容器)
 ├── enable_https.sh         # 独立启 HTTPS / 外部 Caddy 接入
 ├── update.sh               # 拉新代码 + 重启
 ├── docker-compose.yml
@@ -388,7 +390,18 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.13** (2026-04-18) — 当前稳定版
+- **v2.10.14** (2026-04-20) — 当前稳定版
+  - [FIX] `/api/test-sheets` 验证通过时立刻把 SHEET_ID 写进 `.env` — 解决
+    用户只点「测试 Sheet 访问」但没点「保存并启动」导致 SHEET_ID 丢失、
+    tg-monitor 启动报 `RuntimeError: SHEET_ID 为空`、三个预警分页永远没被建
+  - [FIX] `install.sh` 启动前自动扫 `tg-(monitor|web|caddy)-<dept>` 同名
+    孤儿容器(项目 label 对不上当前部门的才清),避免 "container name
+    already in use" 卡住重装
+  - [UX] `install.sh` HTTPS 默认开启 — 改旗标为 `--no-https` 显式关闭
+    (之前要加 `--https`,新人经常漏)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.13** (2026-04-18)
   - [FIX] `enable_https.sh` 同 VPS 多部门 HTTPS 共存冲突修复:以前所有部门默认
     domain 都是 `<IP>.nip.io`,Caddy site block 重复 → 后装的覆盖先装的 → 先装
     的部门 HTTPS 入口失效.现在新部门默认 `<company>.<IP>.nip.io` 子域,各自独立
