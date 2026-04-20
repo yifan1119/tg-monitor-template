@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.18(2026-04-20) — 软升级后同步更新 `.git/refs`,弹窗不再阴魂不散
+> 📌 **最新版**:v2.10.19(2026-04-20) — 登录 TG 账号的错误提示改成白话(不再吐 Telethon 英文)
 
 ---
 
@@ -390,7 +390,18 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.18** (2026-04-20) — 当前稳定版
+- **v2.10.19** (2026-04-20) — 当前稳定版
+  - [FIX] 登录 TG 账号(发验证码 / 验证码 / 两步验证密码)的错误提示
+    从 Telethon 原始英文(例如 `The password (and thus its hash value) you
+    entered is invalid (caused by CheckPasswordRequest)`)改成白话
+    (例如「两步验证密码错误,请重新输入(区分大小写)」)
+  - 新增 `_humanize_tg_error(e)`:覆盖 `PasswordHashInvalidError` /
+    `PhoneCodeInvalidError` / `PhoneCodeExpiredError` / `PhoneNumberInvalidError` /
+    `PhoneNumberBannedError` / `FloodWaitError`(带 N 秒/分/小时自动换算)等;
+    兜底剥掉 `(caused by XxxRequest)` 技术尾巴
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.18** (2026-04-20)
   - [FIX] `upgrader._run_upgrade` 覆盖完 tarball 后,立刻把 `.git/refs/heads/main`
     (和 `packed-refs` 里的 main 行)写成 `latest_sha` — 以前 `PRESERVE` 把
     `.git` 保留不覆盖,导致 `update_checker._read_local_sha` 永远读到 install.sh

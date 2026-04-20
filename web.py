@@ -8,7 +8,17 @@ import urllib.request
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import (
+    SessionPasswordNeededError,
+    PasswordHashInvalidError,
+    PhoneCodeInvalidError,
+    PhoneCodeExpiredError,
+    PhoneCodeEmptyError,
+    PhoneNumberInvalidError,
+    PhoneNumberBannedError,
+    PhoneNumberFloodError,
+    FloodWaitError,
+)
 
 import os
 from functools import wraps
@@ -1778,6 +1788,39 @@ def toggle_daily_report():
         return jsonify({"ok": False, "msg": str(e)})
 
 
+def _humanize_tg_error(e):
+    """v2.10.19: 把 Telethon 原始异常翻成客户能看懂的白话。
+    之前 send-code / verify-code / verify-password 三个路由的 except 都是
+    `str(e)` 直接吐 Telethon 原文 (例如 "The password (and thus its hash value)
+    you entered is invalid (caused by CheckPasswordRequest)"), 客户看不懂。"""
+    if isinstance(e, PasswordHashInvalidError):
+        return "两步验证密码错误,请重新输入(区分大小写;跟 Telegram 客户端设置里的密码要一致)"
+    if isinstance(e, PhoneCodeInvalidError):
+        return "验证码错误,请重新输入(别漏数字或复制多空格)"
+    if isinstance(e, PhoneCodeExpiredError):
+        return "验证码已过期,请点「发送验证码」重新获取"
+    if isinstance(e, PhoneCodeEmptyError):
+        return "请输入验证码"
+    if isinstance(e, PhoneNumberInvalidError):
+        return "手机号格式错误,请加国家区号 + 号码(例如 +85512345678)"
+    if isinstance(e, PhoneNumberBannedError):
+        return "此手机号已被 Telegram 封禁,无法登录"
+    if isinstance(e, (PhoneNumberFloodError, FloodWaitError)):
+        seconds = getattr(e, "seconds", 0) or 0
+        if seconds >= 3600:
+            return f"请求太频繁,Telegram 要求等约 {seconds // 3600} 小时后再试"
+        if seconds >= 60:
+            return f"请求太频繁,Telegram 要求等约 {seconds // 60} 分钟后再试"
+        if seconds:
+            return f"请求太频繁,请等 {seconds} 秒后再试"
+        return "请求太频繁,请稍后再试"
+    # 兜底: 保留原始 message 但剥掉 "(caused by XxxRequest)" 技术尾巴
+    import re as _re
+    msg = str(e) or type(e).__name__
+    msg = _re.sub(r"\s*\(caused by \w+\)", "", msg).strip()
+    return msg
+
+
 @app.route("/api/send-code", methods=["POST"])
 @login_required
 def send_code():
@@ -1800,7 +1843,7 @@ def send_code():
         }
         return jsonify({"ok": True, "phone": phone})
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+        return jsonify({"ok": False, "error": _humanize_tg_error(e)})
 
 
 @app.route("/api/verify-code", methods=["POST"])
@@ -1852,7 +1895,7 @@ def verify_code():
         _pending[phone]["need_password"] = True
         return jsonify({"ok": False, "need_password": True, "error": "此账号有两步验证，请输入密码"})
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+        return jsonify({"ok": False, "error": _humanize_tg_error(e)})
 
 
 @app.route("/api/verify-password", methods=["POST"])
@@ -1898,7 +1941,7 @@ def verify_password():
             "auto_restart": True,
         })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+        return jsonify({"ok": False, "error": _humanize_tg_error(e)})
 
 
 @app.route("/api/dedup/today", methods=["GET"])

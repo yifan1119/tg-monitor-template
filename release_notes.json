@@ -106,5 +106,9 @@
   "v2.10.18": {
     "title": "v2.10.18",
     "body": "修复: 一键软升级后弹窗阴魂不散(refs 没跟着更新)\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+  },
+  "v2.10.19": {
+    "title": "v2.10.19",
+    "body": "修复: 登录 TG 账号的错误提示改成白话(不再吐 Telethon 英文)\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   }
 }
