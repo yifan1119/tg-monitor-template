@@ -124,6 +124,22 @@ fi
 
 # ===== 4. 重建容器 =====
 echo ""
+# v2.10.20: compose up --build 遇到 "container name already in use" 时不会自动清,
+#   常见于:旧版本 compose 文件 project label 跟当前 -p 参数不一致,或者 label 丢失。
+#   强制清跟当前 project 不一致的同名容器(跟 install.sh 逻辑对齐),
+#   tg-(monitor|web|caddy)-<部门> 三个名字本来就是当前部门独占。
+ORPHANS=$(docker ps -a --format '{{.Names}}' 2>/dev/null \
+    | grep -E "^tg-(monitor|web|caddy)-${COMPANY_NAME}$" || true)
+if [ -n "$ORPHANS" ]; then
+    for c in $ORPHANS; do
+        proj=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$c" 2>/dev/null || echo "")
+        if [ "$proj" != "tg-${COMPANY_NAME}" ]; then
+            echo "  🧹 清理同名容器: $c (compose project=\"$proj\")"
+            docker rm -f "$c" >/dev/null 2>&1 || true
+        fi
+    done
+fi
+
 echo "🐳 重建 Docker 镜像并重启容器..."
 docker compose -p "tg-${COMPANY_NAME}" up -d --build
 

@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.19(2026-04-20) — 登录 TG 账号的错误提示改成白话(不再吐 Telethon 英文)
+> 📌 **最新版**:v2.10.20(2026-04-20) — update.sh 遇到同名容器冲突也能清,升级不再卡"already in use"
 
 ---
 
@@ -390,7 +390,19 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.19** (2026-04-20) — 当前稳定版
+- **v2.10.20** (2026-04-20) — 当前稳定版
+  - [FIX] `update.sh` 加上同名容器清理(跟 install.sh 逻辑对齐)— 以前只有
+    install.sh 清 orphan,update.sh 没清,遇到老 compose 文件生的容器或 label
+    丢失的容器,`docker compose up --build` 会报 `container name "/tg-xxx-<dept>"
+    is already in use`,升级卡住
+  - [FIX] install.sh 原本只清"compose project 标签不是 tg-<部门>"的容器
+    (v2.10.14 的谨慎判断),现在放宽到"名字对就清",因为
+    `tg-(monitor|web|caddy)-<部门>` 这三个名字本来就是当前部门独占的,
+    不怕误伤
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`(本版本修复后生效 —
+    如果你 **现在** 就被卡住,参考下面的常见故障排查「升级卡在容器名冲突」)
+
+- **v2.10.19** (2026-04-20)
   - [FIX] 登录 TG 账号(发验证码 / 验证码 / 两步验证密码)的错误提示
     从 Telethon 原始英文(例如 `The password (and thus its hash value) you
     entered is invalid (caused by CheckPasswordRequest)`)改成白话

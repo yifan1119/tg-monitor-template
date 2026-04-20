@@ -110,5 +110,9 @@
   "v2.10.19": {
     "title": "v2.10.19",
     "body": "修复: 登录 TG 账号的错误提示改成白话(不再吐 Telethon 英文)\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+  },
+  "v2.10.20": {
+    "title": "v2.10.20",
+    "body": "修复: 升级时遇到 \"container name already in use\" 冲突\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   }
 }

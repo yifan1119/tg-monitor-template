@@ -222,18 +222,19 @@ fi
 
 # 6. 启动（project 名带部门名避免 compose 把同部门跨安装合并）
 # v2.10.14: compose 用了固定 container_name,以前手动 docker run / docker exec 创建的
-# 同名容器会导致 "container name already in use" — 先清掉,避免客户卡在这
+#   同名容器会导致 "container name already in use" — 先清掉,避免客户卡在这
+# v2.10.20: 清理条件放宽 —— v2.10.14 版本只清 compose label 不是 tg-${COMPANY_NAME}
+#   的容器,但如果旧容器是老 compose 文件(container_name 指定但 project 名不同)
+#   生出来的,或者 label 丢失,compose up -d --build 仍然会报 "name already in use"。
+#   既然 tg-(monitor|web|caddy)-${COMPANY_NAME} 这三个名字**必然**是当前部门独占的
+#   (COMPANY_NAME 是本次 install 的部门),强制清掉最稳。compose up 不 care 旧容器死活。
 ORPHANS=$(docker ps -a --format '{{.Names}}' 2>/dev/null \
     | grep -E "^tg-(monitor|web|caddy)-${COMPANY_NAME}$" || true)
 if [ -n "$ORPHANS" ]; then
-    # 只清 compose 项目标签不是 tg-${COMPANY_NAME} 的(真正的孤儿) —
-    # 属于当前项目的容器 compose up 会自己处理,不要乱 rm
     for c in $ORPHANS; do
         proj=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$c" 2>/dev/null || echo "")
-        if [ "$proj" != "tg-${COMPANY_NAME}" ]; then
-            echo "  🧹 清理孤儿容器: $c (compose project=\"$proj\")"
-            docker rm -f "$c" >/dev/null 2>&1 || true
-        fi
+        echo "  🧹 清理同名容器: $c (compose project=\"$proj\")"
+        docker rm -f "$c" >/dev/null 2>&1 || true
     done
 fi
 
