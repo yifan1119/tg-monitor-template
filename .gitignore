@@ -41,3 +41,6 @@ venv/
 .claude/memory/
 .claude/private-*.md
 .claude/*.local.md
+
+# 推送前敏感词扫描脚本 — 内容本身含真实客户名 / 部门代号等,不能进 git
+scripts/check-secrets.sh
