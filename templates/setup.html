@@ -713,6 +713,18 @@
         <button type="button" class="test-btn" id="testBotBtn">▸ 测试 Bot 连线</button>
         <span class="test-result" id="testBotResult"></span>
       </div>
+      <div class="field">
+        <label>审核按钮白名单 <span style="color:#7c8a9a;font-weight:400;">(选填,留空=任何群成员都能点)</span></label>
+        <input type="text" name="callback_auth_user_ids" id="callback_auth_user_ids"
+               value="{{ d.callback_auth_user_ids }}"
+               placeholder="留空=任何群成员都能点 / 填多个 TG 数字 ID 用逗号分隔:123456789,987654321">
+        <div class="hint">
+          只有这里列的 TG 用户能点预警群里的「通过/拒绝」按钮,其他人点会弹提示没权限。
+          <b>留空 = 不校验,跟以前一样任何人都能点(默认行为)。</b><br>
+          找数字 ID 最简单的方法:TG 搜 <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a> 私聊发一条消息,它会回你的 ID。
+          多个人用英文逗号分隔,例如:<code>123456789,987654321</code>
+        </div>
+      </div>
     </div>
 
     <div class="section">

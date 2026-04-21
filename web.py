@@ -800,6 +800,8 @@ def setup_page():
         "operator_label": env.get("OPERATOR_LABEL", "商务人员"),
         "bot_token": env.get("BOT_TOKEN", ""),
         "alert_group_id": env.get("ALERT_GROUP_ID", ""),
+        # v2.10.23: 审核按钮白名单(空=不校验)
+        "callback_auth_user_ids": env.get("CALLBACK_AUTH_USER_IDS", ""),
         "sheet_id": env.get("SHEET_ID", ""),
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
@@ -829,6 +831,8 @@ def settings_page():
         "operator_label": env.get("OPERATOR_LABEL", "商务人员"),
         "bot_token": env.get("BOT_TOKEN", ""),
         "alert_group_id": env.get("ALERT_GROUP_ID", ""),
+        # v2.10.23: 审核按钮白名单(空=不校验)
+        "callback_auth_user_ids": env.get("CALLBACK_AUTH_USER_IDS", ""),
         "sheet_id": env.get("SHEET_ID", ""),
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
@@ -1348,6 +1352,13 @@ def _save_settings(is_first):
     kw_added = [k for k in new_keywords if k not in old_keywords]
     kw_removed = [k for k in old_keywords if k not in new_keywords]
 
+    # v2.10.23: 审核按钮白名单 — 归一化 (去空格 + 过滤非数字),空值留空字符串(= 不校验)
+    callback_auth_raw = (form.get("callback_auth_user_ids") or "").strip()
+    callback_auth_normalized = ",".join(
+        x.strip() for x in callback_auth_raw.split(",")
+        if x.strip() and x.strip().isdigit()
+    )
+
     # 写 .env
     updates = {
         "COMPANY_NAME": company_name,
@@ -1356,6 +1367,7 @@ def _save_settings(is_first):
         "OPERATOR_LABEL": form.get("operator_label", "").strip()[:10] or "商务人员",
         "BOT_TOKEN": bot_token,
         "ALERT_GROUP_ID": alert_group_id,
+        "CALLBACK_AUTH_USER_IDS": callback_auth_normalized,
         "SHEET_ID": sheet_id,
         "MEDIA_FOLDER_ID": form.get("media_folder_id", "").strip(),
         "MEDIA_MAX_MB": form.get("media_max_mb", "20").strip() or "20",

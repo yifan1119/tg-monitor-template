@@ -27,6 +27,7 @@ def reload_if_env_changed():
     global _env_mtime_cache, ALERTS_ENABLED, DAILY_REPORT_ENABLED
     global ALERT_KEYWORD_ENABLED, ALERT_NO_REPLY_ENABLED, ALERT_DELETE_ENABLED
     global KEYWORDS, NO_REPLY_MINUTES, PEER_ROLE_LABEL, OPERATOR_LABEL, COMPANY_DISPLAY
+    global CALLBACK_AUTH_USER_IDS
     try:
         m = _ENV_PATH.stat().st_mtime
     except OSError:
@@ -56,6 +57,15 @@ def reload_if_env_changed():
     OPERATOR_LABEL = os.environ.get("OPERATOR_LABEL", "").strip() or "商务人员"
     _comp_name = os.environ.get("COMPANY_NAME", "")
     COMPANY_DISPLAY = os.environ.get("COMPANY_DISPLAY", _comp_name)
+    # v2.10.23: 审核按钮白名单热 reload(Web 后台改了立刻生效,不用 docker restart)
+    _cb_auth_new = os.environ.get("CALLBACK_AUTH_USER_IDS", "").strip()
+    _new_set = set()
+    if _cb_auth_new:
+        for _x in _cb_auth_new.split(","):
+            _x = _x.strip()
+            if _x.isdigit():
+                _new_set.add(int(_x))
+    CALLBACK_AUTH_USER_IDS = _new_set
     return True
 
 
