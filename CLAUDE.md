@@ -98,19 +98,16 @@ commit message 里明确标出「影响文档」:
 6. 每 6h 客户预警群自动收到升级通知(update_checker 机制)
 7. 观察 24-48h 再推下一版
 
-## 客户部门列表
+## 客户部门信息
 
-| 部门 | 代号 | VPS 路径 |
-|---|---|---|
-| 我的 demo | demo | `/root/tg-monitor-demo` @ 187.77.157.220 |
-| 瑞升渠道 | ruisheng-qd | `/root/tg-monitor-ruisheng-qd` |
-| (其他客户待补) | | |
+**真实客户 / 部门列表 / 联系人 / VPS 地址** 放在 `.claude/private-notes.md`
+(gitignored,不进 GitHub)。需要时本地查。
 
 ## 当前状态(2026-04-21)
 
 - main:`v2.10.23`(大修补:6 个 bug + 积压告警 + 白名单 UI)
 - feature/v3.0.0:Day 1 完 + Day 2 WIP(两段式预警开发中)
-- 苏总 demo 待升级验证 v2.10.23
+- 某客户 demo 待升级验证 v2.10.23
 
 ## 升级 / 回滚命令(客户侧)
 

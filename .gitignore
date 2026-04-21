@@ -35,7 +35,9 @@ venv/
 .dashboard-backup-*
 .metrics-backup/
 
-# Claude 专案本地设置(每台机权限白名单,不进 git)
+# Claude 专案本地设置(每台机权限白名单、私有备注,不进 git)
 .claude/settings.local.json
 .claude/sessions/
 .claude/memory/
+.claude/private-*.md
+.claude/*.local.md

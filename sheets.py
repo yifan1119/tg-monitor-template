@@ -358,7 +358,7 @@ class SheetsWriter:
         self.spreadsheet.batch_update({"requests": requests})
         return ws
 
-    # 告警分页表头（跟苏总现有 Sheet 格式 1:1 对齐）
+    # 告警分页表头（跟客户现有 Sheet 格式 1:1 对齐）
     # 注意: "广告主" 这个位置用 config.PEER_ROLE_LABEL 动态替换，各部门可能叫「广告主/客户/合作方」等
     @property
     def ALERT_HEADERS(self):
@@ -783,7 +783,7 @@ class SheetsWriter:
         """批量写入所有未写入的消息。
 
         v2.10.23:改成按账号分桶。以前全局 LIMIT 500,任一账号撞 429 / 出错
-        都会中断整批,下一轮又从同一批老消息卡起 → 苏总看到的「表格空白但 DB
+        都会中断整批,下一轮又从同一批老消息卡起 → 客户看到的「表格空白但 DB
         有」就是这样来的。现在:
         - 每账号独立桶,每轮最多 100 条/账号
         - 单账号失败 try/except 隔离,不影响其他账号
