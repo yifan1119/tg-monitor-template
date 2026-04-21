@@ -141,6 +141,19 @@ if _callback_auth:
 # v2.10.23: 启动期 GetHistory 全局并发上限(避免 200+ 账号同时拉历史触满 TG flood wait)
 HISTORY_PULL_CONCURRENCY = int(os.environ.get("HISTORY_PULL_CONCURRENCY", "3"))
 
+# v3.0.0: 两段式未回复预警开关(默认关 — 升级等价旧行为)
+# 开启后 30 分钟未回复 → 推 stage1 (无按钮, @business_tg_id),
+# 若 stage1 之后 NO_REPLY_STAGE2_AFTER_MIN 分钟内还没商务回消息 → 推 stage2 (带按钮, @owner_tg_id)
+TWO_STAGE_NO_REPLY_ENABLED = os.environ.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true"
+
+# v3.0.0: stage1 → stage2 的等待分钟数(默认 10 分钟,合计 30+10=40 分钟才会 at 负责人)
+NO_REPLY_STAGE2_AFTER_MIN = int(os.environ.get("NO_REPLY_STAGE2_AFTER_MIN", "10"))
+
+# v3.0.0: 未回复预警专用群(空则 fallback 到 ALERT_GROUP_ID,老部署无感)
+# 配了 = 未回复 stage1/stage2 推这个群,删除 + 关键词仍推 ALERT_GROUP_ID
+_unreplied_group = os.environ.get("UNREPLIED_ALERT_GROUP_ID", "0").strip()
+UNREPLIED_ALERT_GROUP_ID = int(_unreplied_group) if _unreplied_group and _unreplied_group != "0" else 0
+
 # 工作时段（北京时间，周一=0, 周日=6）
 # 每段格式: (开始小时, 开始分钟, 结束小时, 结束分钟)
 WORK_SCHEDULE = {

@@ -97,6 +97,9 @@ def _run_migrations(conn):
     if version < 1:
         _migrate_to_1(conn)
         conn.execute("PRAGMA user_version=1")
+    if version < 2:
+        _migrate_to_2(conn)
+        conn.execute("PRAGMA user_version=2")
 
 
 def _migrate_to_1(conn):
@@ -104,6 +107,26 @@ def _migrate_to_1(conn):
     - messages 加 delete_mark_pending(删除时序修复:消息写 Sheet 前被删 → 写完立刻补标红)
     """
     _safe_add_column(conn, "messages", "delete_mark_pending", "INTEGER DEFAULT 0")
+
+
+def _migrate_to_2(conn):
+    """v3.0.0 → user_version=2:
+    - accounts 加 4 个业务字段(两段式预警用):
+      - business_tg_id:商务人员 TG ID(stage1 @ 的对象)
+      - owner_tg_id:负责人 TG ID(stage2 @ 的对象)
+      - remind_30min_text:stage1 可选自定义提醒文案
+      - remind_40min_text:stage2 可选自定义提醒文案
+    - alerts 加 stage 字段(显式区分两段式阶段):
+      - stage=0:非两段式(v2.x 老数据默认)或未激活
+      - stage=1:已推送 stage1,等 stage2_after_min 后决定要不要升级
+      - stage=2:已升级到 stage2(40min 追加)
+      - stage 扫描必须显式 WHERE stage=1,避免误触老 pending 记录
+    """
+    _safe_add_column(conn, "accounts", "business_tg_id", "TEXT DEFAULT ''")
+    _safe_add_column(conn, "accounts", "owner_tg_id", "TEXT DEFAULT ''")
+    _safe_add_column(conn, "accounts", "remind_30min_text", "TEXT DEFAULT ''")
+    _safe_add_column(conn, "accounts", "remind_40min_text", "TEXT DEFAULT ''")
+    _safe_add_column(conn, "alerts", "stage", "INTEGER DEFAULT 0")
 
 
 def _safe_add_column(conn, table, column, definition):
@@ -154,6 +177,35 @@ def update_account_business(account_id, company=None, operator=None):
     conn = get_conn()
     conn.execute(f"UPDATE accounts SET {', '.join(sets)} WHERE id=?", tuple(vals))
     conn.commit()
+
+
+def update_account_two_stage(account_id, business_tg_id=None, owner_tg_id=None,
+                             remind_30min_text=None, remind_40min_text=None):
+    """v3.0.0:单独更新两段式预警配置 — 只有显式传入(非 None)的字段会被更新。"""
+    sets = []
+    vals = []
+    if business_tg_id is not None:
+        sets.append("business_tg_id=?")
+        vals.append(business_tg_id)
+    if owner_tg_id is not None:
+        sets.append("owner_tg_id=?")
+        vals.append(owner_tg_id)
+    if remind_30min_text is not None:
+        sets.append("remind_30min_text=?")
+        vals.append(remind_30min_text)
+    if remind_40min_text is not None:
+        sets.append("remind_40min_text=?")
+        vals.append(remind_40min_text)
+    if not sets:
+        return
+    vals.append(account_id)
+    conn = get_conn()
+    conn.execute(f"UPDATE accounts SET {', '.join(sets)} WHERE id=?", tuple(vals))
+    conn.commit()
+
+
+def get_account_by_id(account_id):
+    return get_conn().execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
 
 
 def get_account_by_tg_id(tg_id):
@@ -416,6 +468,76 @@ def claim_alert_for_review(alert_id, new_status):
         "UPDATE alerts SET status=?, reviewed_at=? WHERE id=? AND status='pending'",
         (new_status, now_bj(), alert_id)
     )
+    conn.commit()
+    return cur.rowcount == 1
+
+
+# ===== v3.0.0 两段式未回复预警 =====
+
+def insert_stage1_alert(account_id, peer_id, msg_id, message_text=""):
+    """v3.0.0:插入 stage1(30 分钟)未回复预警。stage=1 显式标记,便于 stage2 扫描 WHERE 过滤。
+    老 v2.x 的单段 alerts stage 默认 0,不会被 stage2 loop 误触。"""
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO alerts (type, account_id, peer_id, msg_id, message_text, stage, created_at)
+        VALUES ('no_reply', ?, ?, ?, ?, 1, ?)
+    """, (account_id, peer_id, msg_id, message_text, now_bj()))
+    conn.commit()
+    return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def get_pending_stage1_alerts(after_minutes=10):
+    """v3.0.0:找所有 stage=1 且发送时间超过 N 分钟还没 handled 的预警 — stage2 loop 用。
+    显式 stage=1 过滤,老 v2.x 的 stage=0 记录不会被误扫到。
+    bot_message_id IS NOT NULL 才算真正送达,未送达的不升级(等下次重推 stage1)。"""
+    cutoff = (datetime.now(TZ_BJ) - timedelta(minutes=after_minutes)).strftime("%Y-%m-%d %H:%M:%S")
+    return get_conn().execute("""
+        SELECT * FROM alerts
+        WHERE type='no_reply' AND stage=1 AND status='pending'
+          AND bot_message_id IS NOT NULL
+          AND created_at <= ?
+        ORDER BY id
+    """, (cutoff,)).fetchall()
+
+
+def has_outbound_since(peer_id, since_ts):
+    """v3.0.0:查 peer 在 since_ts 之后有没有商务 outbound(A 方向)消息。
+    事件驱动路径:listener 收到 outbound 直接 mark_stage1_handled,这个函数只做轮询兜底。"""
+    row = get_conn().execute(
+        "SELECT 1 FROM messages WHERE peer_id=? AND direction='A' AND timestamp > ? LIMIT 1",
+        (peer_id, since_ts)
+    ).fetchone()
+    return row is not None
+
+
+def mark_stage1_handled_by_reply(peer_id, since_ts):
+    """v3.0.0:listener 收到 outbound 时原子更新对应 stage1 → status='handled_by_reply'。
+    只动这个 peer 的 stage=1 pending 记录(创建时间在 since_ts 之前),避免覆盖其他对话。
+    返回被更新的条数(>0 说明命中了某条等待中的 stage1)。"""
+    conn = get_conn()
+    cur = conn.execute("""
+        UPDATE alerts SET status='handled_by_reply', reviewed_at=?
+        WHERE peer_id=? AND type='no_reply' AND stage=1 AND status='pending'
+          AND created_at <= ?
+    """, (now_bj(), peer_id, since_ts))
+    conn.commit()
+    return cur.rowcount
+
+
+def upgrade_to_stage2(alert_id, new_bot_msg_id=None):
+    """v3.0.0:stage1 升级到 stage2 — 原子 UPDATE WHERE stage=1 避免并发重复升级。
+    new_bot_msg_id = stage2 推送后新消息的 message_id;rowcount=1 代表抢到升级权。"""
+    conn = get_conn()
+    if new_bot_msg_id is not None:
+        cur = conn.execute("""
+            UPDATE alerts SET stage=2, bot_message_id=?
+            WHERE id=? AND stage=1 AND status='pending'
+        """, (new_bot_msg_id, alert_id))
+    else:
+        cur = conn.execute("""
+            UPDATE alerts SET stage=2
+            WHERE id=? AND stage=1 AND status='pending'
+        """, (alert_id,))
     conn.commit()
     return cur.rowcount == 1
 
