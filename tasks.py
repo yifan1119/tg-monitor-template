@@ -1,6 +1,7 @@
 """定时任务 — 巡检、未回复检查、日报"""
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 import gspread
@@ -33,7 +34,8 @@ class TaskScheduler:
             self._peer_name_consistency_loop(),
             self._media_cleanup_loop(),
             self._update_check_loop(),
-            self._session_health_loop(),   # v2.10.4: TG session 吊销检测
+            self._session_health_loop(),      # v2.10.4: TG session 吊销检测
+            self._sheets_backlog_loop(),      # v2.10.23: Sheets 写入积压告警
         )
 
     async def stop(self):
@@ -375,7 +377,13 @@ class TaskScheduler:
             logger.warning("保存 session_states 失败: %s", e)
 
     async def _check_single_session(self, phone, client):
-        """返回 'healthy' | 'revoked' | 'error'"""
+        """返回 'healthy' | 'revoked' | 'error'。
+
+        v2.10.23:加真 RPC 探测(get_me)—— 以前只靠 is_user_authorized() 判活,
+        但 TG 冻结/封号账号的 session key 仍然「有效」,is_user_authorized 返回 True,
+        只有在真正调 API 时才抛 UserDeactivatedBanError / UserDeactivatedError。
+        所以必须加 get_me() 这一步才能识别冻结/封号场景。
+        FloodWait 不算死,当 healthy(限流而已)。"""
         try:
             if not client.is_connected():
                 try:
@@ -384,7 +392,33 @@ class TaskScheduler:
                     logger.warning("[session_check] %s connect 失败: %s", phone, e)
                     return "error"
             authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=10)
-            return "healthy" if authorized else "revoked"
+            if not authorized:
+                return "revoked"
+
+            # v2.10.23: 真 RPC 探测 — 冻结/封号账号在这步才会抛
+            try:
+                await asyncio.wait_for(client.get_me(), timeout=10)
+            except asyncio.TimeoutError:
+                # 网络抖动,本轮当 error(不触发转场,避免 flap)
+                logger.warning("[session_check] %s get_me 超时 (当 error)", phone)
+                return "error"
+            except Exception as e:
+                cls = type(e).__name__
+                msg = str(e)
+                if "FloodWait" in cls:
+                    # 限流 ≠ 死,账号还活着只是 TG 暂时不让查
+                    logger.info("[session_check] %s get_me FloodWait (视为 healthy): %s", phone, msg)
+                    return "healthy"
+                # 关键判定:异常类名或消息命中以下任何关键字 = session 已失效
+                dead_kw = ("Deactivated", "AuthKey", "Revoked", "Banned", "Unauthorized", "SessionExpired")
+                if any(k in cls for k in dead_kw) or any(k in msg for k in dead_kw) or \
+                        any(k in msg for k in ("unauthorized", "deactivated", "banned", "revoked")):
+                    logger.warning("[session_check] %s 判定已失效: %s: %s", phone, cls, msg)
+                    return "revoked"
+                # 其他异常当 error(网络抖动、TG 服务器不稳等)
+                logger.warning("[session_check] %s get_me 异常 (当 error): %s: %s", phone, cls, msg)
+                return "error"
+            return "healthy"
         except Exception as e:
             msg = str(e)
             if any(k in msg for k in ("AuthKey", "Unauthorized", "Deactivated", "Revoked")):
@@ -441,6 +475,29 @@ class TaskScheduler:
         except Exception as e:
             logger.warning("_emit_session_alert 失败 phone=%s kind=%s: %s", phone, kind, e)
     # -----------------------------------------------------------------
+
+    async def _sheets_backlog_loop(self):
+        """v2.10.23:每 5 分钟检查 Sheets 写入积压 — 有 messages.sheet_written=0
+        且超过 10 分钟没补上去的,且积压数超过阈值 → 推预警群告警。
+        防止客户长时间不知道「Sheets 配额爆了导致表格空白」这种情况。
+        冷却时间:同一积压告警每小时最多推 1 次,避免刷屏。"""
+        await asyncio.sleep(300)   # 启动后等服务稳定
+        last_alert_ts = 0
+        cooldown_sec = 3600         # 1 小时只推 1 次
+        while self._running:
+            try:
+                count = db.count_unwritten_older_than(minutes=10)
+                now = time.time()
+                if count > config.SHEETS_BACKLOG_ALERT_THRESHOLD and (now - last_alert_ts) > cooldown_sec:
+                    if self.bot:
+                        try:
+                            await self.bot.send_sheets_backlog_warning(count)
+                            last_alert_ts = now
+                        except Exception as e:
+                            logger.error("积压告警推送失败: %s", e)
+            except Exception as e:
+                logger.error("sheets_backlog_loop 异常: %s", e)
+            await asyncio.sleep(300)
 
     async def _daily_report_loop(self):
         """每天北京时间 00:00 发日报"""

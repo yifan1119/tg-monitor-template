@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.22(2026-04-20) — 升级后自动恢复挂掉的 Caddy(HTTPS 部署不再手动救)
+> 📌 **最新版**:v2.10.23(2026-04-21) — 大修补:Sheets 写入按账号分桶不再全局卡住 + 冻结账号正确标红 + 5 个其他 bug
 
 ---
 
@@ -390,7 +390,45 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.22** (2026-04-20) — 当前稳定版
+- **v2.10.23** (2026-04-21) — 当前稳定版 **(推荐所有部署立即升级)**
+  - [FIX] **Sheets 写入按账号分桶** — 以前 `flush_pending` 全局 LIMIT 500,
+    任一账号撞 429 / 出错整批中断 → 下一轮又卡在同一批老消息 → 客户反馈「DB
+    有消息但表格空白」根因。改成每账号独立桶(100 条/轮/账号),单账号失败 try/except
+    隔离,429 per-account 指数退避(5s → 10s → 20s → ... → 600s),不卡全局
+  - [FIX] **冻结账号 sweep 真 RPC 探测** — `_check_single_session` 加 `get_me()`
+    调用,捕获 `UserDeactivatedBanError` / `UserDeactivatedError` 等 Telethon 异常。
+    以前只用 `is_user_authorized()` 判活,冻结账号 session key 仍有效直接误判
+    healthy → UI 一直显绿色 ONLINE
+  - [FIX] **预警发送失败当天不再重试** — `has_alert_today` 改成只认真送达
+    (`bot_message_id IS NOT NULL` 或 `status='silenced'`)。以前发送失败也会
+    占去重记录导致整天不再重试;`ALERT_XXX_ENABLED=False` 时插入的记录也会
+    错误静默整天
+  - [FIX] **删除消息时序 bug** — 消息收到后立刻被删(sheet_row 还没写),
+    `mark_deleted_in_sheet` 查到 `sheet_row=0` 直接 return → 永远不会标红。
+    新增 `messages.delete_mark_pending` 列,删除时 sheet_written=0 则标 pending,
+    `write_messages` 写完 sheet_row 后检查 pending → 立刻补标红删除线
+  - [FIX] **Callback 原子抢占** — 新 `claim_alert_for_review(alert_id, new_status)`
+    用 `UPDATE WHERE status='pending'` + `rowcount=1` 判断抢到权,避免两个
+    群成员同时点按钮重复写预警分表
+  - [FIX] **Callback 身份校验(可选)** — 新增 `CALLBACK_AUTH_USER_IDS` .env 字段
+    (数字 TG ID 逗号分隔),配了就只允许白名单里的人点审核按钮。空值跳过
+    校验(老部署无感升级)
+  - [FIX] **`upsert_account` 不再覆盖业务字段** — 以前 ON CONFLICT 会把客户在
+    Web 后台填的 `company/operator` 被 listener 启动登录时的空值清空。改成
+    ON CONFLICT 只更新 TG 身份字段(`name/username/tg_id`)。新增
+    `update_account_business(id, company=..., operator=...)` 给 Web 后台用
+  - [FIX] **SQLite 并发锁** — 加 `PRAGMA busy_timeout=5000`(5 秒等锁),避免
+    多协程/多进程并发访问时直接抛 `database is locked`
+  - [NEW] **DB migration 框架** — 加 `PRAGMA user_version` + `_safe_add_column`
+    helper,未来加列走显式 migration 幂等机制,不再靠 CREATE TABLE IF NOT EXISTS
+    的 side effect
+  - [NEW] **Sheets 写入积压告警** — 新增 `_sheets_backlog_loop`(5 分钟一次),
+    超 `SHEETS_BACKLOG_ALERT_THRESHOLD`(默认 500)条 sheet_written=0 且老
+    10 分钟 → 推预警群告警(1 小时冷却不刷屏),提示去查 Google 配额/OAuth
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`(全部 bug fix,行为向后兼容,
+    DB migration 幂等,一键 `bash rollback.sh` 回 v2.10.22)
+
+- **v2.10.22** (2026-04-20)
   - [FIX] `update.sh` 末端新增 HTTPS 保护块 — 如果看到 `tg-caddy-<部门>` 容器
     存在但不在 `running` 状态(例如之前有人跑过 `docker compose down`),
     自动跑 `docker compose -p tg-<部门> --profile https up -d caddy` 把它拉回来

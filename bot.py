@@ -64,30 +64,49 @@ class AlertBot:
             action, alert_id_str = data.split(":", 1)
             alert_id = int(alert_id_str)
 
+            # v2.10.23: 身份校验(可选,白名单为空则不校验,保持老部署兼容)
+            config.reload_if_env_changed()
+            if config.CALLBACK_AUTH_USER_IDS:
+                uid = callback.from_user.id if callback.from_user else 0
+                if uid not in config.CALLBACK_AUTH_USER_IDS:
+                    await callback.answer("⛔ 你没有权限处理这个预警", show_alert=True)
+                    logger.warning(
+                        "[callback_deny] 未授权用户尝试处理预警: tg_id=%s name=%s alert_id=%s",
+                        uid, callback.from_user.full_name if callback.from_user else "?", alert_id,
+                    )
+                    return
+
             alert = db.get_alert(alert_id)
             if not alert:
                 await callback.answer("预警不存在")
                 return
 
-            if alert["status"] != "pending":
+            # v2.10.23: 原子抢占状态转移 — 两人同时点按钮只有一人能抢到 pending→approved
+            new_status = "approved" if action == "approve" else "rejected"
+            claimed = db.claim_alert_for_review(alert_id, new_status)
+            if not claimed:
                 await callback.answer("已处理过了")
                 return
 
-            if action == "approve":
-                db.update_alert_status(alert_id, "approved")
-                # 写入对应的预警分表
-                self._write_alert_to_sheet(alert)
-                # 更新消息，去掉按钮
-                await callback.message.edit_text(
-                    callback.message.text + "\n\n✅ 已通过 — " + (callback.from_user.full_name or ""),
-                )
-                await callback.answer("已通过")
-            else:
-                db.update_alert_status(alert_id, "rejected")
-                await callback.message.edit_text(
-                    callback.message.text + "\n\n❌ 已拒绝 — " + (callback.from_user.full_name or ""),
-                )
-                await callback.answer("已拒绝")
+            try:
+                if action == "approve":
+                    # 写入对应的预警分表
+                    self._write_alert_to_sheet(alert)
+                    await callback.message.edit_text(
+                        callback.message.text + "\n\n✅ 已通过 — " + (callback.from_user.full_name or ""),
+                    )
+                    await callback.answer("已通过")
+                else:
+                    await callback.message.edit_text(
+                        callback.message.text + "\n\n❌ 已拒绝 — " + (callback.from_user.full_name or ""),
+                    )
+                    await callback.answer("已拒绝")
+            except Exception as e:
+                logger.error("审核 callback 异常 alert_id=%s: %s", alert_id, e)
+                try:
+                    await callback.answer("处理时出错了,请再试一次或看日志")
+                except Exception:
+                    pass
 
     def _make_keyboard(self, alert_id):
         return InlineKeyboardMarkup(inline_keyboard=[
@@ -183,7 +202,13 @@ class AlertBot:
             logger.error("发送关键词预警失败: %s", e)
 
     async def send_no_reply_alert(self, account_id, peer, message_text, msg_id):
-        """发送未回复预警（每个广告主每天只推一次）"""
+        """发送未回复预警（每个广告主每天只推一次）
+
+        v2.10.23:
+        - 静默(开关关)→ 插入 alert 并标 status='silenced',has_alert_today 当「已处理」
+        - 推送失败 → 保留 bot_message_id=null,has_alert_today 不认作已推,下次扫描重试
+          (修之前「第一次推送失败后一整天不再重试」的 bug)
+        """
         if not self.bot or not config.ALERT_GROUP_ID:
             return
         if db.has_alert_today("no_reply", peer["id"]):
@@ -193,7 +218,23 @@ class AlertBot:
         if not account:
             return
 
-        # 创建预警记录
+        # 先读开关,再决定要不要真插入 alert — 避免「静默模式又插入又不推」占掉今天的去重名额
+        config.reload_if_env_changed()
+
+        if not config.ALERT_NO_REPLY_ENABLED:
+            # 静默:插入 alert 但标 silenced,当天不再重复扫
+            alert_id = db.insert_alert(
+                alert_type="no_reply",
+                account_id=account_id,
+                peer_id=peer["id"],
+                msg_id=msg_id,
+                message_text=message_text,
+            )
+            db.update_alert_status(alert_id, "silenced")
+            logger.info("[ALERT_NO_REPLY_DISABLED] 跳过未回复推送 peer=%s (静默记录)", peer["id"])
+            return
+
+        # 正常路径:创建 pending alert(bot_message_id=null),推送,成功后 update_alert_bot_msg
         alert_id = db.insert_alert(
             alert_type="no_reply",
             account_id=account_id,
@@ -209,12 +250,6 @@ class AlertBot:
             peer_name=peer["name"],
             message_text=message_text,
         )
-        # v2.6.2: 推送关掉则只记录不推送(alerts 表已在上面 insert_alert,DB 完整)
-        # v2.6.6: 拆出独立子开关 ALERT_NO_REPLY_ENABLED
-        config.reload_if_env_changed()
-        if not config.ALERT_NO_REPLY_ENABLED:
-            logger.info("[ALERT_NO_REPLY_DISABLED] 跳过未回复推送 peer=%s (alerts 已记录)", peer["id"])
-            return
         try:
             sent = await self.bot.send_message(
                 config.ALERT_GROUP_ID, msg,
@@ -222,10 +257,15 @@ class AlertBot:
             )
             db.update_alert_bot_msg(alert_id, sent.message_id)
         except Exception as e:
-            logger.error("发送未回复预警失败: %s", e)
+            # v2.10.23: 推送失败 → bot_message_id 保持 null,has_alert_today 不认作已推
+            # 下次 _no_reply_loop 扫到会重试;这里额外写个日志带 alert_id 方便排查
+            logger.error("发送未回复预警失败 alert_id=%s: %s (下次扫描会重试)", alert_id, e)
 
     async def send_delete_alert(self, account_id, peer, message_text, msg_id):
-        """发送删除预警（每个广告主每天只推一次）"""
+        """发送删除预警（每个广告主每天只推一次)
+
+        v2.10.23:同 send_no_reply_alert 的逻辑 — 静默走 silenced,失败留 pending 下次重试。
+        """
         if not self.bot or not config.ALERT_GROUP_ID:
             return
         if db.has_alert_today("deleted", peer["id"]):
@@ -233,6 +273,20 @@ class AlertBot:
 
         account = db.get_conn().execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
         if not account:
+            return
+
+        config.reload_if_env_changed()
+
+        if not config.ALERT_DELETE_ENABLED:
+            alert_id = db.insert_alert(
+                alert_type="deleted",
+                account_id=account_id,
+                peer_id=peer["id"],
+                msg_id=msg_id,
+                message_text=message_text,
+            )
+            db.update_alert_status(alert_id, "silenced")
+            logger.info("[ALERT_DELETE_DISABLED] 跳过删除推送 peer=%s (静默记录)", peer["id"])
             return
 
         alert_id = db.insert_alert(
@@ -250,12 +304,6 @@ class AlertBot:
             peer_name=peer["name"],
             message_text=message_text,
         )
-        # v2.6.2: 推送关掉则只记录不推送(alerts 表已在上面 insert_alert,DB 完整)
-        # v2.6.6: 拆出独立子开关 ALERT_DELETE_ENABLED
-        config.reload_if_env_changed()
-        if not config.ALERT_DELETE_ENABLED:
-            logger.info("[ALERT_DELETE_DISABLED] 跳过删除推送 peer=%s (alerts 已记录)", peer["id"])
-            return
         try:
             sent = await self.bot.send_message(
                 config.ALERT_GROUP_ID, msg,
@@ -263,7 +311,7 @@ class AlertBot:
             )
             db.update_alert_bot_msg(alert_id, sent.message_id)
         except Exception as e:
-            logger.error("发送删除预警失败: %s", e)
+            logger.error("发送删除预警失败 alert_id=%s: %s (下次会重试)", alert_id, e)
 
     async def send_daily_report(self):
         """发送每日总结"""
@@ -401,6 +449,33 @@ class AlertBot:
             logger.info(f"版本更新通知已推送: {_short}")
         except Exception as e:
             logger.error(f"版本更新通知推送失败: {e}")
+
+    async def send_sheets_backlog_warning(self, backlog_count):
+        """v2.10.23:Sheets 写入积压告警 — 超过阈值时推预警群。
+        1 小时内最多推 1 次(在 tasks.py 侧做 cooldown)。"""
+        if not self.bot or not config.ALERT_GROUP_ID:
+            return
+        company = getattr(config, "COMPANY_NAME", "")
+        company_display = getattr(config, "COMPANY_DISPLAY", company)
+        msg = (
+            f"⚠ <b>Sheets 写入积压告警</b>\n\n"
+            f"部门:{company_display}\n"
+            f"当前有 <b>{backlog_count}</b> 条消息超过 10 分钟还没写进 Google Sheets。\n\n"
+            f"可能原因:Google API 配额用光、OAuth token 失效、Sheet 权限异常。\n"
+            f"系统会自动重试(指数退避),如果持续不下降:\n"
+            f"  • 检查 Google API 控制台的 Sheets 配额\n"
+            f"  • 登入后台 /setup 页重新授权 OAuth\n"
+            f"  • 查看容器日志 <code>docker compose -p tg-{company} logs tg-monitor</code>"
+        )
+        try:
+            await self.bot.send_message(
+                config.ALERT_GROUP_ID, msg,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            logger.warning("[sheets_backlog] 告警已推送: %d 条积压", backlog_count)
+        except Exception as e:
+            logger.error("Sheets 积压告警推送失败: %s", e)
 
     async def start(self):
         """启动 Bot 轮询"""

@@ -38,6 +38,11 @@ class SheetsWriter:
         self._last_api_call = 0
         self._min_interval = 1.5
         self._write_lock = threading.Lock()
+        # v2.10.23: 按账号的 flush 退避状态 — 单账号 429 不影响其他账号写入
+        # {account_id: unix_ts_next_retry}
+        self._flush_backoff = {}
+        # {account_id: 当前退避级别,用于指数退避}
+        self._flush_backoff_level = {}
         logger.info("Google Sheets 连接成功 (OAuth): %s", self.spreadsheet.title)
         self.ensure_alert_tabs()
         self.ensure_account_tabs()  # v2.10.10: 启动时给 DB 里每个账号补缺失的分页
@@ -727,10 +732,25 @@ class SheetsWriter:
             # 普通文字消息不受影响：USER_ENTERED 对纯文本等同 RAW，只是不会自动转日期/数字
             ws.update(f"{col_a}{current_row}:{col_c}{end_row}", rows, value_input_option="USER_ENTERED")
 
+            # v2.10.23: 写完立刻标 sheet_written=1,同时回头看「写入期间是否被删」— 如果
+            # 有消息在 sheet_row 设好前已经删了(delete_mark_pending=1),这里立刻补标红删除线。
+            # 修正之前「消息未写就被删 → 永远不会红字标记」的 bug。
+            pending_delete_rows = []  # [(row, msg_db_id)]
             for i, m in enumerate(messages):
                 db.mark_written(m["id"], current_row + i)
+                if db.check_delete_mark_pending(m["id"]):
+                    pending_delete_rows.append((current_row + i, m["id"]))
 
             logger.info("写入 %d 条到 %s 列组%d (%s-%s列)", len(rows), ws.title, col_group, col_a, col_c)
+
+            # 补红(可能失败但不致命,下次 patrol 也会补)
+            for row, msg_db_id in pending_delete_rows:
+                try:
+                    self._mark_row_red_strikethrough(ws, row, col_group)
+                    db.clear_delete_mark_pending(msg_db_id)
+                    logger.info("[delete_backfill] 补标红 msg_db_id=%s row=%s", msg_db_id, row)
+                except Exception as e:
+                    logger.warning("[delete_backfill] 补标红失败 msg_db_id=%s: %s", msg_db_id, e)
 
     def mark_deleted_in_sheet(self, ws, msg):
         """把被删除的消息标红+删除线"""
@@ -743,11 +763,14 @@ class SheetsWriter:
         if not peer:
             return
 
-        col_start = peer["col_group"] * 3
+        self._mark_row_red_strikethrough(ws, msg["sheet_row"], peer["col_group"])
+
+    def _mark_row_red_strikethrough(self, ws, row, col_group):
+        """v2.10.23: 红字+删除线格式化(3 列宽) — 内部 helper,避免重复查 peer。
+        供 mark_deleted_in_sheet 和 write_messages 的 delete_mark_pending 补红用。"""
+        col_start = col_group * 3
         col_a = _col_letter(col_start)
         col_c = _col_letter(col_start + 2)
-        row = msg["sheet_row"]
-
         self._rate_limit()
         ws.format(f"{col_a}{row}:{col_c}{row}", {
             "textFormat": {
@@ -757,64 +780,110 @@ class SheetsWriter:
         })
 
     def flush_pending(self):
-        """批量写入所有未写入的消息"""
-        unwritten = db.get_unwritten_messages()
-        if not unwritten:
+        """批量写入所有未写入的消息。
+
+        v2.10.23:改成按账号分桶。以前全局 LIMIT 500,任一账号撞 429 / 出错
+        都会中断整批,下一轮又从同一批老消息卡起 → 苏总看到的「表格空白但 DB
+        有」就是这样来的。现在:
+        - 每账号独立桶,每轮最多 100 条/账号
+        - 单账号失败 try/except 隔离,不影响其他账号
+        - 429 per-account 指数退避(5s → 10s → 20s → ... → 600s),不卡全局
+        """
+        account_ids = db.get_accounts_with_unwritten()
+        if not account_ids:
             return 0
 
-        with self._write_lock:
-            return self._do_flush(unwritten)
-
-    def _do_flush(self, unwritten):
-        by_account = {}
-        for m in unwritten:
-            aid = m["account_id"]
-            if aid not in by_account:
-                by_account[aid] = []
-            by_account[aid].append(m)
-
         total = 0
-        for account_id, msgs in by_account.items():
-            account = db.get_conn().execute(
-                "SELECT * FROM accounts WHERE id=?", (account_id,)
-            ).fetchone()
-            if not account:
-                continue
-
-            ws = self.get_or_create_sheet(account)
-            if not ws:
-                continue
-
-            by_peer = {}
-            for m in msgs:
-                pid = m["peer_id"]
-                if pid not in by_peer:
-                    by_peer[pid] = []
-                by_peer[pid].append(m)
-
-            for peer_id, peer_msgs in by_peer.items():
-                peer = db.get_conn().execute(
-                    "SELECT * FROM peers WHERE id=?", (peer_id,)
-                ).fetchone()
-                if not peer:
+        now = time.time()
+        with self._write_lock:
+            for account_id in account_ids:
+                # 在退避中的账号本轮跳过
+                next_retry = self._flush_backoff.get(account_id, 0)
+                if now < next_retry:
                     continue
 
-                col_group = peer["col_group"]
-                col_start = col_group * 3
-                needed_cols = col_start + 3
-                self._ensure_cols(ws, needed_cols)
+                try:
+                    msgs = db.get_unwritten_messages_by_account(account_id, limit=100)
+                    if not msgs:
+                        continue
+                    written = self._flush_account(account_id, msgs)
+                    total += written
+                    # 成功 → 重置退避
+                    if self._flush_backoff_level.get(account_id, 0) > 0:
+                        logger.info("[sheets_flush] account=%s 恢复正常", account_id)
+                    self._flush_backoff_level[account_id] = 0
+                    self._flush_backoff[account_id] = 0
+                except gspread.exceptions.APIError as e:
+                    msg = str(e)
+                    if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
+                        lvl = self._flush_backoff_level.get(account_id, 0)
+                        wait = min(5 * (2 ** lvl), 600)
+                        self._flush_backoff[account_id] = now + wait
+                        self._flush_backoff_level[account_id] = lvl + 1
+                        logger.warning(
+                            "[sheets_flush] account=%s 触 429/quota,退避 %ds (level=%d)",
+                            account_id, wait, lvl + 1,
+                        )
+                    else:
+                        logger.error("[sheets_flush] account=%s gspread 异常: %s", account_id, e)
+                    continue
+                except Exception as e:
+                    logger.error(
+                        "[sheets_flush] account=%s flush 失败,下次重试: %s",
+                        account_id, e,
+                    )
+                    continue
+        return total
 
-                col_c = _col_letter(col_start + 2)
-                self._rate_limit()
-                # 检查 C6 (广告主名) 而不是 A5，避免预建分页时的空标题让检查误判
-                cell_val = ws.acell(f"{col_c}6").value
-                if not cell_val:
-                    self.setup_dialog_columns(ws, peer, col_group)
+    def _flush_account(self, account_id, msgs):
+        """v2.10.23:单账号 flush — 这个账号的所有 peer 都在这里处理。
+        任何异常 raise 出去由 flush_pending 的 try/except 处理退避,不污染其他账号。"""
+        account = db.get_conn().execute(
+            "SELECT * FROM accounts WHERE id=?", (account_id,)
+        ).fetchone()
+        if not account:
+            return 0
 
-                self.write_messages(ws, peer, peer_msgs)
-                total += len(peer_msgs)
+        ws = self.get_or_create_sheet(account)
+        if not ws:
+            return 0
+
+        by_peer = {}
+        for m in msgs:
+            pid = m["peer_id"]
+            if pid not in by_peer:
+                by_peer[pid] = []
+            by_peer[pid].append(m)
+
+        total = 0
+        for peer_id, peer_msgs in by_peer.items():
+            peer = db.get_conn().execute(
+                "SELECT * FROM peers WHERE id=?", (peer_id,)
+            ).fetchone()
+            if not peer:
+                continue
+
+            col_group = peer["col_group"]
+            col_start = col_group * 3
+            needed_cols = col_start + 3
+            self._ensure_cols(ws, needed_cols)
+
+            col_c = _col_letter(col_start + 2)
+            self._rate_limit()
+            # 检查 C6 (广告主名) 而不是 A5，避免预建分页时的空标题让检查误判
+            cell_val = ws.acell(f"{col_c}6").value
+            if not cell_val:
+                self.setup_dialog_columns(ws, peer, col_group)
+
+            self.write_messages(ws, peer, peer_msgs)
+            total += len(peer_msgs)
 
         return total
+
+    def _do_flush(self, unwritten):
+        """[Legacy] 老版本全局 flush — 保留签名向后兼容,内部走按账号分桶。
+        新代码请直接用 flush_pending()。"""
+        return self.flush_pending()
 
 
 def _col_letter(index):

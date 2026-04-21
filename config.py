@@ -114,6 +114,23 @@ WORK_HOUR_END = int(os.environ.get("WORK_HOUR_END", "23"))
 PATROL_DAYS = int(os.environ.get("PATROL_DAYS", "7"))
 HISTORY_DAYS = int(os.environ.get("HISTORY_DAYS", "2"))  # 首次拉取天数
 
+# v2.10.23: Sheets 写入积压告警阈值 — 超过 N 条未写(且 > 10 分钟老)会推预警群
+SHEETS_BACKLOG_ALERT_THRESHOLD = int(os.environ.get("SHEETS_BACKLOG_ALERT_THRESHOLD", "500"))
+
+# v2.10.23: Callback 身份校验白名单(TG 数字 ID,逗号分隔)
+# 空 = 不校验(兼容老部署);填了 = 只允许列表里的 TG 用户点审核/处理按钮
+# 例:CALLBACK_AUTH_USER_IDS=123456,789012
+_callback_auth = os.environ.get("CALLBACK_AUTH_USER_IDS", "").strip()
+CALLBACK_AUTH_USER_IDS = set()
+if _callback_auth:
+    for _x in _callback_auth.split(","):
+        _x = _x.strip()
+        if _x.isdigit():
+            CALLBACK_AUTH_USER_IDS.add(int(_x))
+
+# v2.10.23: 启动期 GetHistory 全局并发上限(避免 200+ 账号同时拉历史触满 TG flood wait)
+HISTORY_PULL_CONCURRENCY = int(os.environ.get("HISTORY_PULL_CONCURRENCY", "3"))
+
 # 工作时段（北京时间，周一=0, 周日=6）
 # 每段格式: (开始小时, 开始分钟, 结束小时, 结束分钟)
 WORK_SCHEDULE = {
