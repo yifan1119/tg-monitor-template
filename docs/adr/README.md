@@ -42,3 +42,4 @@
 | 0010 | v2.10.24.3 | 预警分页整行缺失自动 writeback(alerts.sheet_written + 60s loop 无限重试,保零丢失) | 客户反馈「预警分页缺整行不可接受」(429 > 6 秒写入失败后无补救机制) | [0010](0010-v2.10.24.3-alert-writeback-no-loss.md) |
 | 0011 | v2.10.24.4 | `update_checker` 版本号 regex 支持四段(贪婪 `v\d+(?:\.\d+)+`)— 修后台升级弹窗显示错版本说明 | 客户截图反馈:v2.10.24.3 升级弹窗显示的是 v2.10.24 的容器冲突说明 | [0011](0011-v2.10.24.4-update-checker-four-segment-version.md) |
 | 0012 | v2.10.24.5 | `release_notes.json` 里 `v2.10.24` key 改为四个 hotfix 累计说明(补旧客户展示路径)— 还没升级的旧客户也能看到正确升级说明 | v2.10.24.4 推完后用户追问「还没升级的客户能看到对的吗」 | [0012](0012-v2.10.24.5-release-notes-v2.10.24-cumulative-backfill.md) |
+| 0013 | v2.10.24.6 | `release_notes.json` 文案必须白话原则(禁止文件名 / 函数名 / 技术缩写,改用业务具象词)— 客户看的是业务不是技术 | 用户反馈「这种说明太复杂客户哪看得懂,我都看不懂」 | [0013](0013-v2.10.24.6-release-notes-plain-language.md) |
