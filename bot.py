@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 class AlertBot:
     def __init__(self, sheets_writer=None):
         self.sheets = sheets_writer
+        self.listener = None  # 由 main.py 在 listener 初始化后注入,用于 get_entity 解析显示名
         if not config.BOT_TOKEN:
             logger.warning("BOT_TOKEN 未设置，Bot 功能暂时关闭")
             self.bot = None
@@ -192,6 +193,51 @@ class AlertBot:
             ]
         ])
 
+    async def _resolve_tg_entity(self, tg_id_or_username: str):
+        """用监听号 Telethon client 解析 TG 用户,返回 (numeric_user_id, display_name)。
+
+        - 成功 → (12345, "伊凡") 即使输入是 username 也拿到 numeric ID,
+                 这样无论 username 还是 numeric 都能走 inline mention 格式显示真名
+        - 失败(网络/未找到/listener 未注入) → (None, "") → 调用方退回旧格式
+        - 不抛异常,对推送流程透明
+        """
+        if not tg_id_or_username or not self.listener:
+            return None, ""
+        client = next(iter(self.listener.clients.values()), None)
+        if not client:
+            return None, ""
+        try:
+            val = str(tg_id_or_username).strip().lstrip("@")
+            entity_id = int(val) if val.isdigit() else val
+            entity = await client.get_entity(entity_id)
+            uid = getattr(entity, "id", None)
+            first = getattr(entity, "first_name", "") or ""
+            last  = getattr(entity, "last_name",  "") or ""
+            return uid, (first + " " + last).strip()
+        except Exception as e:
+            logger.debug("_resolve_tg_entity(%s) 失败: %s", tg_id_or_username, e)
+            return None, ""
+
+    async def _build_tg_mention(self, tg_id_or_username: str, fallback_name: str = "") -> str:
+        """构造 TG @ mention 字符串,供 parse_mode=HTML 发送。
+
+        优先走 Telethon 解析: 拿到 numeric ID + 真实显示名 →
+          `<a href="tg://user?id=N">伊凡</a>` (最可靠,对方没 username 也能 @)
+
+        退化路径(Telethon 查不到 / listener 未注入):
+          - 数字输入 → `<a href="tg://user?id=N">{fallback_name}</a>`
+          - username → `@username` (TG 不支持 username 形式的自定义显示名)
+          - 空 → ""
+        """
+        if not tg_id_or_username:
+            return ""
+        uid, resolved = await self._resolve_tg_entity(tg_id_or_username)
+        if uid:
+            name = resolved or fallback_name or "请处理"
+            return f'<a href="tg://user?id={uid}">{html.escape(name)}</a>'
+        # Telethon 查不到 → 退回纯文本处理
+        return self._format_tg_mention(tg_id_or_username, display_name=fallback_name)
+
     @staticmethod
     def _format_tg_mention(tg_id_or_username, display_name=""):
         """v3.0.0 批次 B: 把账号填的 business_tg_id / owner_tg_id 渲染成 TG @mention。
@@ -238,14 +284,9 @@ class AlertBot:
                 with self.sheets._write_lock:
                     if alert["type"] == "no_reply":
                         ws = self.sheets.spreadsheet.worksheet(f"信息未回复预警{config.COMPANY_DISPLAY}")
-                        # v3.0.0 批次 B: stage=2(两段式升级后「登记违规」)时末列多写一个标记,
-                        # 老路径(单段 stage=0)保持 6 列不变,老表格结构零改动
-                        stage = 0
-                        if "stage" in alert.keys():
-                            stage = alert["stage"] or 0
+                        # v2.10.26 客户反馈:stage=2「登记违规」写入跟老 6 列完全一致,不加末列标记,
+                        # 客户表格结构零变化
                         row = [company, operator, account_name, peer_name, alert["message_text"], now]
-                        if stage == 2:
-                            row.append("违规登记")
                         self.sheets._rate_limit()
                         ws.append_row(row)
                     elif alert["type"] == "deleted":
@@ -429,11 +470,10 @@ class AlertBot:
             message_text=message_text,
         )
 
-        business_mention = self._format_tg_mention(
-            account["business_tg_id"] if "business_tg_id" in account.keys() else "",
-            display_name="商务人员",
-        )
-        custom_text = account["remind_30min_text"] if "remind_30min_text" in account.keys() else ""
+        business_tg = account["business_tg_id"] if "business_tg_id" in account.keys() else ""
+        business_mention = await self._build_tg_mention(business_tg, fallback_name="商务人员")
+        # v2.10.26 客户反馈: 文案改全域统一,不再每个号单独配
+        custom_text = getattr(config, "REMIND_30MIN_TEXT", "") or ""
 
         msg = templates.no_reply_alert_stage1(
             company=account["company"],
@@ -442,7 +482,7 @@ class AlertBot:
             peer_name=peer["name"],
             message_text=message_text,
             business_mention=business_mention,
-            custom_text=custom_text or "",
+            custom_text=custom_text,
         )
         try:
             sent = await self.bot.send_message(
@@ -497,11 +537,10 @@ class AlertBot:
         if not db.upgrade_to_stage2(alert_id, new_bot_msg_id=None):
             return
 
-        owner_mention = self._format_tg_mention(
-            account["owner_tg_id"] if "owner_tg_id" in account.keys() else "",
-            display_name="负责人",
-        )
-        custom_text = account["remind_40min_text"] if "remind_40min_text" in account.keys() else ""
+        owner_tg = account["owner_tg_id"] if "owner_tg_id" in account.keys() else ""
+        owner_mention = await self._build_tg_mention(owner_tg, fallback_name="负责人")
+        # v2.10.26 客户反馈: 文案改全域统一
+        custom_text = getattr(config, "REMIND_40MIN_TEXT", "") or ""
 
         msg = templates.no_reply_alert_stage2(
             company=account["company"],
@@ -510,7 +549,7 @@ class AlertBot:
             peer_name=peer["name"],
             message_text=alert["message_text"],
             owner_mention=owner_mention,
-            custom_text=custom_text or "",
+            custom_text=custom_text,
         )
         try:
             sent = await self.bot.send_message(

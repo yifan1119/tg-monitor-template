@@ -80,6 +80,8 @@ async def main():
         on_keyword=bot.send_keyword_alert if bot.bot else None,
         on_deleted=_on_realtime_deleted,
     )
+    # v2.10.26: 把 listener 注入给 bot,让 bot 能用 Telethon client 解析 TG 显示名
+    bot.listener = listener
 
     # 5. 自动扫描 sessions 目录，登录所有账号
     session_files = list(config.SESSION_DIR.glob("*.session"))

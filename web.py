@@ -812,6 +812,9 @@ def setup_page():
         "unreplied_alert_group_id": env.get("UNREPLIED_ALERT_GROUP_ID", ""),
         "two_stage_no_reply_enabled": env.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true",
         "no_reply_stage2_after_min": env.get("NO_REPLY_STAGE2_AFTER_MIN", "10"),
+        # v2.10.26: 全域提醒文案(所有账号共用)
+        "remind_30min_text": env.get("REMIND_30MIN_TEXT", ""),
+        "remind_40min_text": env.get("REMIND_40MIN_TEXT", ""),
         "sheet_id": env.get("SHEET_ID", ""),
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
@@ -847,6 +850,9 @@ def settings_page():
         "unreplied_alert_group_id": env.get("UNREPLIED_ALERT_GROUP_ID", ""),
         "two_stage_no_reply_enabled": env.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true",
         "no_reply_stage2_after_min": env.get("NO_REPLY_STAGE2_AFTER_MIN", "10"),
+        # v2.10.26: 全域提醒文案(所有账号共用)
+        "remind_30min_text": env.get("REMIND_30MIN_TEXT", ""),
+        "remind_40min_text": env.get("REMIND_40MIN_TEXT", ""),
         "sheet_id": env.get("SHEET_ID", ""),
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
@@ -1397,17 +1403,14 @@ def _save_settings(is_first):
     if is_first:
         updates["WEB_PORT"] = read_env().get("WEB_PORT", "5001")
 
-    # v2.10.26: TWO_STAGE_NO_REPLY_ENABLED checkbox
-    # settings 页新增 checkbox,未勾选时 key 不在 form(HTML 标准),勾选时值为 "on"。
-    # setup 首次配置不显示这个 checkbox → is_first=True 时不动该 flag。
-    if not is_first:
-        updates["TWO_STAGE_NO_REPLY_ENABLED"] = (
-            "true" if form.get("two_stage_no_reply_enabled") == "on" else "false"
-        )
+    # v2.10.26: 两段式预警全域文案(客户反馈:统一管理,不要每个号填一遍)
+    if "remind_30min_text" in form:
+        updates["REMIND_30MIN_TEXT"] = (form.get("remind_30min_text") or "").strip()
+    if "remind_40min_text" in form:
+        updates["REMIND_40MIN_TEXT"] = (form.get("remind_40min_text") or "").strip()
 
     # v2.10.25 (Codex Major #2 + Minor #1):
-    # UNREPLIED_ALERT_GROUP_ID 只在 form 里真的有这个 key(flag 开且 input 未 disabled)才写入,
-    # 避免 flag 关时保存其他设置把已有值清掉。
+    # UNREPLIED_ALERT_GROUP_ID 直接从 form 取(字段已无条件渲染,无需 flag 判断)。
     # 写入前做数字校验,非法值直接拒绝保存,避免 config.py 启动期 int() 炸。
     if "unreplied_alert_group_id" in form:
         _urg = (form.get("unreplied_alert_group_id") or "").strip()

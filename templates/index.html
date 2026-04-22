@@ -1009,17 +1009,8 @@
                placeholder="例 @manager 或 987654321,留空则不 at 任何人"
                style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:monospace;font-size:12px;box-sizing:border-box;">
       </div>
-      <div>
-        <label style="display:block;color:#a5c4e0;font-size:11px;letter-spacing:1px;margin-bottom:6px;">30 分钟提醒文案 <span style="color:#5a7c9a;">(选填,留空走默认)</span></label>
-        <textarea id="nc_remind_30min_text" rows="2"
-                  placeholder="例:请十分钟内及时处理该客户"
-                  style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;resize:vertical;box-sizing:border-box;"></textarea>
-      </div>
-      <div>
-        <label style="display:block;color:#a5c4e0;font-size:11px;letter-spacing:1px;margin-bottom:6px;">40 分钟升级提醒文案 <span style="color:#5a7c9a;">(选填,留空走默认)</span></label>
-        <textarea id="nc_remind_40min_text" rows="2"
-                  placeholder="例:员工 10 分钟未处理,请确认是否在岗"
-                  style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;resize:vertical;box-sizing:border-box;"></textarea>
+      <div style="background:rgba(126,201,255,0.06);border:1px dashed rgba(126,201,255,0.25);border-radius:6px;padding:10px 12px;font-size:11px;color:#7c9ab5;line-height:1.5;">
+        💡 <b>30 / 40 分钟提醒文案</b>统一在 <a href="/settings" style="color:#7ec9ff;" target="_blank">系统设置</a> 里设置,所有账号共用一套,不用每个号填一遍。
       </div>
     </div>
 
@@ -1059,7 +1050,7 @@ async function openNotifyConfig(accountId, accountName) {
   document.getElementById('ncMsg').textContent = '加载中...';
   document.getElementById('ncMsg').style.color = '#5a7c9a';
   // 清空输入
-  ['nc_business_tg_id', 'nc_owner_tg_id', 'nc_remind_30min_text', 'nc_remind_40min_text'].forEach(id => {
+  ['nc_business_tg_id', 'nc_owner_tg_id'].forEach(id => {
     document.getElementById(id).value = '';
   });
   document.getElementById('notifyConfigModal').style.display = 'block';
@@ -1070,8 +1061,6 @@ async function openNotifyConfig(accountId, accountName) {
     if (j.ok) {
       document.getElementById('nc_business_tg_id').value = j.business_tg_id || '';
       document.getElementById('nc_owner_tg_id').value = j.owner_tg_id || '';
-      document.getElementById('nc_remind_30min_text').value = j.remind_30min_text || '';
-      document.getElementById('nc_remind_40min_text').value = j.remind_40min_text || '';
       document.getElementById('ncMsg').textContent = '';
     } else {
       document.getElementById('ncMsg').textContent = '✗ ' + (j.error || '加载失败');
@@ -1093,8 +1082,6 @@ async function saveNotifyConfig() {
   const body = {
     business_tg_id:   document.getElementById('nc_business_tg_id').value,
     owner_tg_id:      document.getElementById('nc_owner_tg_id').value,
-    remind_30min_text: document.getElementById('nc_remind_30min_text').value,
-    remind_40min_text: document.getElementById('nc_remind_40min_text').value,
   };
   document.getElementById('ncMsg').textContent = '保存中...';
   document.getElementById('ncMsg').style.color = '#5a7c9a';

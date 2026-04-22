@@ -726,33 +726,33 @@
         </div>
       </div>
 
-      <!-- v2.10.26: 两段式未回复预警总开关 checkbox(settings 页可直接开关,无需改 .env) -->
+      <!-- v2.10.26: 未回复预警专用群(无条件渲染;填了就推这里,留空退回主预警群) -->
       <div class="field">
-        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:500;">
-          <input type="checkbox" name="two_stage_no_reply_enabled" id="two_stage_no_reply_enabled"
-                 value="on" {% if d.two_stage_no_reply_enabled %}checked{% endif %}
-                 style="width:16px;height:16px;accent-color:#4fc3f7;cursor:pointer;">
-          启用两段式未回复预警
-          <span style="color:#7c8a9a;font-weight:400;">（30 分钟 @ 商务 + 40 分钟升级 @ 负责人）</span>
-        </label>
-        <div class="hint" style="margin-top:6px;">
-          开启后账号管理页出现「配置两段式」按钮，可为每个账号单独设置 @ 对象和自定义提醒文案。
-          <b>关闭时行为跟旧版完全一样，零感知。</b>
+        <label>未回复预警专用群 Chat ID <span style="color:#7c8a9a;font-weight:400;">(选填,留空=跟其他预警推同一群)</span></label>
+        <input type="text" name="unreplied_alert_group_id" id="unreplied_alert_group_id"
+               value="{{ d.unreplied_alert_group_id }}"
+               placeholder="-100xxxxxxxxxx(两段式未回复预警单独推这个群,留空则推主预警群)">
+        <div class="hint">
+          <b>两段式未回复预警</b>(30 分钟未回复 + 40 分钟升级)会推到这个独立群，
+          <b>删除消息 / 关键词预警仍推主预警群</b>。留空则全部推主预警群(跟以前一样)。<br>
+          群 ID 取法跟「预警群 Chat ID」一样，邀请 @userinfobot 进群看它回的 <code>Id:</code>。
         </div>
       </div>
-      <div id="two_stage_extra" {% if not d.two_stage_no_reply_enabled %}style="display:none"{% endif %}>
-        <div class="field">
-          <label>未回复预警专用群 Chat ID <span style="color:#7c8a9a;font-weight:400;">(选填,留空=跟其他预警推同一群)</span></label>
-          <input type="text" name="unreplied_alert_group_id" id="unreplied_alert_group_id"
-                 value="{{ d.unreplied_alert_group_id }}"
-                 placeholder="-100xxxxxxxxxx(两段式未回复预警单独推这个群,留空则推主预警群)"
-                 {% if not d.two_stage_no_reply_enabled %}disabled{% endif %}>
-          <div class="hint">
-            <b>两段式未回复预警</b>(30 分钟未回复 + 40 分钟升级)会推到这个独立群，
-            <b>删除消息 / 关键词预警仍推主预警群</b>。留空则全部推主预警群(跟以前一样)。<br>
-            群 ID 取法跟「预警群 Chat ID」一样，邀请 @userinfobot 进群看它回的 <code>Id:</code>。
-          </div>
-        </div>
+
+      <!-- v2.10.26: 两段式预警全域提醒文案(所有账号共用,不再每个号单独填) -->
+      <div class="field">
+        <label>30 分钟提醒文案 <span style="color:#7c8a9a;font-weight:400;">(选填,留空用内置默认「请尽快回复」)</span></label>
+        <textarea name="remind_30min_text" id="remind_30min_text" rows="2"
+                  placeholder="例:请十分钟内及时处理该客户"
+                  style="width:100%;box-sizing:border-box;">{{ d.remind_30min_text }}</textarea>
+        <div class="hint">所有账号 30 分钟未回复提醒都用这段文案,末尾会自动 @ 对应账号的商务人员。</div>
+      </div>
+      <div class="field">
+        <label>40 分钟升级提醒文案 <span style="color:#7c8a9a;font-weight:400;">(选填,留空用内置默认)</span></label>
+        <textarea name="remind_40min_text" id="remind_40min_text" rows="2"
+                  placeholder="例:员工 10 分钟未处理,请确认是否在岗"
+                  style="width:100%;box-sizing:border-box;">{{ d.remind_40min_text }}</textarea>
+        <div class="hint">所有账号 40 分钟升级预警都用这段文案,末尾会自动 @ 对应账号的负责人。</div>
       </div>
     </div>
 
@@ -1256,17 +1256,6 @@
 const byId = id => document.getElementById(id);
 const progress = byId('progress');
 
-// v2.10.26: 两段式预警开关 toggle
-(function() {
-  const cb = document.getElementById('two_stage_no_reply_enabled');
-  if (!cb) return;
-  cb.addEventListener('change', function() {
-    const extra = document.getElementById('two_stage_extra');
-    const inp   = document.getElementById('unreplied_alert_group_id');
-    extra.style.display = this.checked ? '' : 'none';
-    if (inp) inp.disabled = !this.checked;
-  });
-})();
 function log(msg, cls) {
   if (!progress) return;
   progress.style.display = 'block';

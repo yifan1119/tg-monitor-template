@@ -29,6 +29,7 @@ def reload_if_env_changed():
     global KEYWORDS, NO_REPLY_MINUTES, PEER_ROLE_LABEL, OPERATOR_LABEL, COMPANY_DISPLAY
     global CALLBACK_AUTH_USER_IDS
     global TWO_STAGE_NO_REPLY_ENABLED, NO_REPLY_STAGE2_AFTER_MIN, UNREPLIED_ALERT_GROUP_ID
+    global REMIND_30MIN_TEXT, REMIND_40MIN_TEXT
     try:
         m = _ENV_PATH.stat().st_mtime
     except OSError:
@@ -73,6 +74,8 @@ def reload_if_env_changed():
         NO_REPLY_STAGE2_AFTER_MIN = int(os.environ.get("NO_REPLY_STAGE2_AFTER_MIN", "10"))
     except ValueError:
         pass
+    REMIND_30MIN_TEXT = os.environ.get("REMIND_30MIN_TEXT", "").strip()
+    REMIND_40MIN_TEXT = os.environ.get("REMIND_40MIN_TEXT", "").strip()
     _unreplied_group_new = os.environ.get("UNREPLIED_ALERT_GROUP_ID", "0").strip()
     UNREPLIED_ALERT_GROUP_ID = (
         int(_unreplied_group_new)
@@ -175,6 +178,11 @@ UNREPLIED_ALERT_GROUP_ID = (
     if _unreplied_group and _unreplied_group != "0" and _unreplied_group.lstrip("-").isdigit()
     else 0
 )
+
+# v2.10.26 客户反馈: 两段式提醒文案改成全域统一,不再每个外事号写一遍
+# 留空即用内置默认文案,支持热 reload
+REMIND_30MIN_TEXT = os.environ.get("REMIND_30MIN_TEXT", "").strip()
+REMIND_40MIN_TEXT = os.environ.get("REMIND_40MIN_TEXT", "").strip()
 
 # 工作时段（北京时间，周一=0, 周日=6）
 # 每段格式: (开始小时, 开始分钟, 结束小时, 结束分钟)
