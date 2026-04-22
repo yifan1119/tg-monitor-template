@@ -91,6 +91,7 @@ commit message 里明确标出「影响文档」:
 | v2.10.24 | `update.sh` orphan cleanup 放宽 + 容器缺失检测(修升级撞冲突) | [0007](docs/adr/0007-v2.10.24-update-sh-robust-container-recreate.md) |
 | v2.10.25 | 两段式预警批次 A:DB migration_v2 + 3 flag + notify-config API + 账号模态框 + 设置页专用群入口 | [0008](docs/adr/0008-v2.10.25-two-stage-data-layer-ui.md) |
 | v2.10.26 | 两段式预警批次 B:stage1/stage2 推送函数 + violation/cancel callback + `_format_tg_mention` 工具 + Sheets 末列 stage 标记 | [0009](docs/adr/0009-v2.10.26-two-stage-push-callback.md) |
+| v2.10.26 | 客户反馈调整:文案改全域 REMIND_30/40MIN_TEXT、Sheet 不加末列标记、Telethon 解析 @ 真名(listener 注入 bot)、modal 只剩 2 个 TG ID 字段 | commit `d5d4451` |
 
 ## 发布流程
 
@@ -107,11 +108,18 @@ commit message 里明确标出「影响文档」:
 **真实客户 / 部门列表 / 联系人 / VPS 地址** 放在 `.claude/private-notes.md`
 (gitignored,不进 GitHub)。需要时本地查。
 
-## 当前状态(2026-04-21)
+## 当前状态(2026-04-22)
 
-- main:`v2.10.23`(大修补:6 个 bug + 积压告警 + 白名单 UI)
-- feature/v3.0.0:Day 1 完 + Day 2 WIP(两段式预警开发中)
-- 某客户 demo 待升级验证 v2.10.23
+- main:`v2.10.24`(+ 可能已 merge v2.10.24.1 sync_headers 限流 hotfix,待确认)
+- feature/v3.0.0:**批次 B 完成 + 客户反馈调整收尾**(commit `d5d4451`)
+  - stage1/stage2 推送 / Telethon @ 真名解析 / 全域文案 / Sheet 末列不加违规登记 — 全部手动触发验证通过
+  - 下一步:**批次 C**(`_no_reply_stage2_loop` 自动升级 + listener outbound 事件 → `mark_stage1_handled_by_reply`)
+  - 已测 ✅: stage1/2 推送、@ 真名、专用群 fallback、全域文案、Sheet B2/B3 同步、label 改动、空 TG ID 退化
+  - 待测 ⚠️: 非白名单权限、HTML 特殊字符、天级去重、推送失败重试
+- demo VPS 结构:**两个 container**
+  - `tg-monitor-demo` = listener + bot
+  - `tg-web-demo` = Flask Web 后台(Caddy 反代到这个,改 HTML/web.py 要 cp 进两个容器)
+- **坑**:`update.sh` 会从 main 拉覆盖 demo,会把 v2.10.24.1 的 tasks.py 放到 demo 但 config.py 没有对应 flag → 容器崩溃重启循环。v3.0.0 发布前:demo 上别点更新按钮,改动我 scp 上去就好
 
 ## 升级 / 回滚命令(客户侧)
 
