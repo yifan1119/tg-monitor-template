@@ -241,6 +241,19 @@ SHEETS_FLUSH_INTERVAL = int(os.environ.get("SHEETS_FLUSH_INTERVAL", "5"))
 # 巡检间隔（秒）
 PATROL_INTERVAL = int(os.environ.get("PATROL_INTERVAL", "60"))
 
+# v2.10.24.1: Sheets 读 API 配额保护(ADR-0008)
+# 背景：sync_headers 每账号 2 个读请求(A2:B3 + row 6),150 账号 × 2 / 60s = 300 reads/min,
+# 打爆 Google Sheets 读配额(60/min/user)。2026-04-22 某客户实测。
+# 解法：把 sync_headers 从每 60 秒降到每 10 分钟 + 紧急开关。
+SYNC_HEADERS_INTERVAL_SEC = int(os.environ.get("SYNC_HEADERS_INTERVAL_SEC", "600"))
+SYNC_HEADERS_DISABLED = os.environ.get("SYNC_HEADERS_DISABLED", "false").lower() == "true"
+
+# v2.10.24.1: 广告主名一致性巡检独立间隔(原 docstring 写每 10 分钟,实际代码用 PATROL_INTERVAL = 60 秒)
+# 每账号 1 个读请求(row 6),150 账号 × 1 / 60s = 150 reads/min,单独也会打爆配额。
+# 默认 600s 跟原 docstring 对齐。
+PEER_NAME_CONSISTENCY_INTERVAL_SEC = int(os.environ.get("PEER_NAME_CONSISTENCY_INTERVAL_SEC", "600"))
+PEER_NAME_CONSISTENCY_DISABLED = os.environ.get("PEER_NAME_CONSISTENCY_DISABLED", "false").lower() == "true"
+
 # 会话文件目录
 SESSION_DIR = BASE_DIR / "sessions"
 SESSION_DIR.mkdir(exist_ok=True)

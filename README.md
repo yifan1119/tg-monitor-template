@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.24(2026-04-21) — 升级流程修补:升级不再撞容器冲突 + 手动清容器后能自动重建
+> 📌 **最新版**:v2.10.24.1(2026-04-22) — 🚨 **紧急修复** Sheets 读 API 配额爆(账号多客户必升)— `sync_headers` + `peer_name_consistency` 间隔从 60s 降到 600s(可配置)+ 紧急开关
 
 ---
 
@@ -390,7 +390,20 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.24** (2026-04-21) — 当前稳定版 **(升级流程修补,推荐升级避免卡住)**
+- **v2.10.24.1** (2026-04-22) — 当前稳定版 🚨 **(账号多客户必升 — Sheets 读配额保护)**
+  - [FIX] **`sync_headers` 节流**(ADR-0008)— 原来每 60 秒对每个账号读 2 次 Sheets(`A2:B3` + `row 6`),
+    150 账号 × 2 = 300 reads/min,打爆 Google 读配额(60/min/user)。连锁导致消息实时写入也 429。
+    改成独立节流 `SYNC_HEADERS_INTERVAL_SEC=600`(10 分钟),默认读频降到 30 reads/min
+  - [FIX] **`_peer_name_consistency_loop` 间隔独立化**(ADR-0008)— 原 docstring 写「每 10 分钟」
+    但代码用 `PATROL_INTERVAL`(60s),每账号 1 读也能打爆配额。独立配置 `PEER_NAME_CONSISTENCY_INTERVAL_SEC=600`,
+    顺手修 docstring-代码不一致 bug
+  - [NEW] **紧急开关** `SYNC_HEADERS_DISABLED` / `PEER_NAME_CONSISTENCY_DISABLED`,遇到配额问题可一键关
+  - 客户反馈:某 150+ 账号客户 2026-04-22 15:07 线上撞配额爆(sed 止血 16:25 立即生效,sed 见 ADR-0008)
+  - 副作用:B2/B3 / 第 6 行手改后同步到 DB 延迟从 60s → 最多 600s(业务影响极小)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+  - ⚠ **如果你之前跑过 sed 止血**(`tasks.py:165 pass`):升级前先 `cp tasks.py.bak-* tasks.py` 回滚,不然 `git pull` 会冲突
+
+- **v2.10.24** (2026-04-21) — **(升级流程修补,推荐升级避免卡住)**
   - [FIX] **`update.sh` orphan cleanup 放宽**(ADR-0007)— 以前只清 `compose
     project label` 对不上的同名容器,label 匹配但容器异常(上次升级中断残留)
     会跳过不清 → `docker compose up --build` 撞 `container name "/tg-xxx"

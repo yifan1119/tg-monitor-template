@@ -89,6 +89,7 @@ commit message 里明确标出「影响文档」:
 | v3.0.0 | 两段式预警用 `alerts.stage` 字段而不是改 `type`(向后兼容回滚) | [0005](docs/adr/0005-v3.0.0-two-stage-use-stage-column.md) |
 | v2.10.23 | `sync_headers` 单账号异常隔离(同 flush_pending 逻辑,修 B2/B3 推送空白) | [0006](docs/adr/0006-v2.10.23-sync-headers-per-account-isolation.md) |
 | v2.10.24 | `update.sh` orphan cleanup 放宽 + 容器缺失检测(修升级撞冲突) | [0007](docs/adr/0007-v2.10.24-update-sh-robust-container-recreate.md) |
+| v2.10.24.1 | Sheets 读 API 配额保护:`sync_headers` + `peer_name_consistency` 间隔独立化(默认 60s → 600s)+ 紧急开关 + 修 docstring-代码不一致 | [0008](docs/adr/0008-v2.10.24.1-sheets-read-quota-fix.md) |
 
 ## 发布流程
 
@@ -105,11 +106,11 @@ commit message 里明确标出「影响文档」:
 **真实客户 / 部门列表 / 联系人 / VPS 地址** 放在 `.claude/private-notes.md`
 (gitignored,不进 GitHub)。需要时本地查。
 
-## 当前状态(2026-04-21)
+## 当前状态(2026-04-22)
 
-- main:`v2.10.23`(大修补:6 个 bug + 积压告警 + 白名单 UI)
-- feature/v3.0.0:Day 1 完 + Day 2 WIP(两段式预警开发中)
-- 某客户 demo 待升级验证 v2.10.23
+- main:`v2.10.24.1`(hotfix:Sheets 读 API 配额保护 — 账号多客户必升)
+- feature/v3.0.0:Day 1 完 + Day 2 WIP(两段式预警开发中)— **需 rebase 到 v2.10.24.1 main 拿 hotfix**
+- 某客户(150+ 账号)2026-04-22 15:07 线上遇到 429 配额爆,sed 止血成功(16:25),待 v2.10.24.1 正式升级
 
 ## 升级 / 回滚命令(客户侧)
 

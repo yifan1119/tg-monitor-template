@@ -37,3 +37,4 @@
 | 0005 | v3.0.0 | 两段式预警用 stage 字段不改 type | Codex 审计 Critical B1/B2/B3 | [0005](0005-v3.0.0-two-stage-use-stage-column.md) |
 | 0006 | v2.10.23 | `sync_headers` 单账号异常隔离(跟 0001 同逻辑) | 客户「B2/B3 填了推送空白」反馈 | [0006](0006-v2.10.23-sync-headers-per-account-isolation.md) |
 | 0007 | v2.10.24 | `update.sh` orphan cleanup 放宽 + 容器缺失检测 | 客户升级撞 "container name already in use" | [0007](0007-v2.10.24-update-sh-robust-container-recreate.md) |
+| 0008 | v2.10.24.1 | Sheets 读 API 配额保护:`sync_headers` + `peer_name_consistency` 间隔独立化 + 紧急开关 + 修 docstring-代码不一致 | 客户(150+ 账号)线上 429 配额爆 | [0008](0008-v2.10.24.1-sheets-read-quota-fix.md) |

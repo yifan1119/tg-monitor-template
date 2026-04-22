@@ -4,8 +4,6 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
-import gspread
-
 import config
 import database as db
 from sheets import _col_letter
@@ -95,31 +93,41 @@ class TaskScheduler:
                 logger.warning("昵称同步失败 [%s]: %s", phone, e)
 
     async def _enforce_sheet_tab_consistency(self):
-        """确保 Sheets 分页名 = account.name。用户手改分页名会被自动改回 TG 名字。"""
+        """确保 Sheets 分页名 = account.name。用户手改分页名会被自动改回 TG 名字。
+
+        v2.10.24.1(ADR-0008 P0 修复):原实现对每个账号调一次 spreadsheet.worksheet(title),
+        gspread 6.x 每次都会 fetch_sheet_metadata(真 API 读),150 账号 = 150 reads/轮。
+        改成一次 worksheets() 拿全部标题,内存里 set lookup(150 读 → 1 读)。
+        """
+        try:
+            self.sheets._rate_limit()
+            all_worksheets = {ws.title: ws for ws in self.sheets.spreadsheet.worksheets()}
+        except Exception as e:
+            logger.warning("分页列表读取失败,跳过本轮巡检: %s", e)
+            return
+
         for account in db.get_all_accounts():
             target = account["name"]
             if not target:
                 continue
             # 已存在正确分页 → OK
-            try:
-                self.sheets._rate_limit()
-                self.sheets.spreadsheet.worksheet(target)
+            if target in all_worksheets:
                 # 顺手把 sheet_tab 对齐
                 if account["sheet_tab"] != target:
                     conn = db.get_conn()
                     conn.execute("UPDATE accounts SET sheet_tab=? WHERE id=?", (target, account["id"]))
                     conn.commit()
                 continue
-            except gspread.WorksheetNotFound:
-                pass
 
-            # 找旧 sheet_tab 对应的分页，改名回 target
+            # 找旧 sheet_tab 对应的分页,改名回 target
             old = account["sheet_tab"]
             if not old or old == target:
                 continue
+            ws = all_worksheets.get(old)
+            if ws is None:
+                logger.warning("分页名修正：旧分页「%s」也不存在，跳过", old)
+                continue
             try:
-                self.sheets._rate_limit()
-                ws = self.sheets.spreadsheet.worksheet(old)
                 self.sheets._rate_limit()
                 ws.update_title(target)
                 conn = db.get_conn()
@@ -139,8 +147,6 @@ class TaskScheduler:
                     logger.info("表头外事号名称已修正")
                 except Exception as e:
                     logger.warning("表头修正失败: %s", e)
-            except gspread.WorksheetNotFound:
-                logger.warning("分页名修正：旧分页「%s」也不存在，跳过", old)
             except Exception as e:
                 logger.warning("分页名修正失败 %s → %s: %s", old, target, e)
 
@@ -156,13 +162,29 @@ class TaskScheduler:
             await asyncio.sleep(config.SHEETS_FLUSH_INTERVAL)
 
     async def _patrol_loop(self):
-        """每 60 秒巡检：补漏 + 删除检测 + 同步表头 + 昵称同步"""
+        """每 60 秒巡检：补漏 + 删除检测 + 同步表头(节流)+ 昵称同步
+
+        v2.10.24.1: sync_headers 从跟随 PATROL_INTERVAL 改成独立节流
+        (SYNC_HEADERS_INTERVAL_SEC,默认 600s),保护 Google Sheets 读配额。
+        """
         # 启动后等一会儿再开始巡检
         await asyncio.sleep(30)
+        # v2.10.24.1(Codex P1 修复): 时间戳式节流,避免 sync_headers 异常时 counter 卡住
+        # → 下一轮 60s 再试 → 429 自我循环。用 monotonic 记上次运行时间,异常也会更新。
+        _last_sync_headers_at = 0.0
         while self._running:
             try:
-                # 从 Sheets 同步表头（商务人员、所属公司）
-                self.sheets.sync_headers()
+                # v2.10.24.1: sync_headers 独立节流,默认每 10 分钟一次。
+                # 原每 60 秒一次,150 账号 × 2 reads / 60s = 300 reads/min,
+                # 打爆 Google Sheets 60/min/user 读配额。
+                if not config.SYNC_HEADERS_DISABLED:
+                    _now = time.monotonic()
+                    if (_now - _last_sync_headers_at) >= config.SYNC_HEADERS_INTERVAL_SEC:
+                        try:
+                            self.sheets.sync_headers()
+                        finally:
+                            # 异常也要更新(不然下一轮立刻又重试 → 429 loop)
+                            _last_sync_headers_at = _now
 
                 # 检查账号昵称是否改变
                 await self._sync_account_names()
@@ -258,11 +280,21 @@ class TaskScheduler:
             await asyncio.sleep(60)
 
     async def _peer_name_consistency_loop(self):
-        """每 10 分钟巡检广告主名是否跟 DB 一致，对方在 TG 改名会通过新消息更新到 DB，
-        这个 loop 把 DB 的最新名字同步回 Sheets 表头的第 6 行 C 列（或 F6, I6, L6...）"""
+        """每 PEER_NAME_CONSISTENCY_INTERVAL_SEC 秒(默认 600 = 10 分钟)巡检广告主名是否跟 DB 一致。
+
+        对方在 TG 改名会通过新消息更新到 DB,这个 loop 把 DB 的最新名字同步回 Sheets
+        表头的第 6 行 C 列(或 F6, I6, L6...)。
+
+        v2.10.24.1: 间隔从 PATROL_INTERVAL (60s) 拆出独立配置 (默认 600s),
+        保护 Google Sheets 读配额(每账号 1 read,原 150/min 已能打爆 60/min 配额)。
+        原来 docstring 写「每 10 分钟」但实际代码用 PATROL_INTERVAL(60s),文档-代码不一致(ADR-0008 顺手修)。
+        """
         # 启动后等一会儿
         await asyncio.sleep(120)
         while self._running:
+            if config.PEER_NAME_CONSISTENCY_DISABLED:
+                await asyncio.sleep(config.PEER_NAME_CONSISTENCY_INTERVAL_SEC)
+                continue
             try:
                 for account in db.get_all_accounts():
                     ws = self.sheets.get_or_create_sheet(account)
@@ -309,7 +341,7 @@ class TaskScheduler:
                             logger.warning("广告主名批量更新失败 [%s]: %s", account["name"], e)
             except Exception as e:
                 logger.error("广告主名一致性巡检失败: %s", e)
-            await asyncio.sleep(config.PATROL_INTERVAL)  # 预设 60 秒
+            await asyncio.sleep(config.PEER_NAME_CONSISTENCY_INTERVAL_SEC)  # v2.10.24.1: 从 PATROL_INTERVAL 独立,默认 600s
 
     async def _media_cleanup_loop(self):
         """每天北京时间 03:00 清理 Drive 里超过 MEDIA_RETENTION_DAYS 天的旧媒体。
