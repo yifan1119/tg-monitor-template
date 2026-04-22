@@ -254,6 +254,14 @@ SYNC_HEADERS_DISABLED = os.environ.get("SYNC_HEADERS_DISABLED", "false").lower()
 PEER_NAME_CONSISTENCY_INTERVAL_SEC = int(os.environ.get("PEER_NAME_CONSISTENCY_INTERVAL_SEC", "600"))
 PEER_NAME_CONSISTENCY_DISABLED = os.environ.get("PEER_NAME_CONSISTENCY_DISABLED", "false").lower() == "true"
 
+# v2.10.24.2: 预警分页历史空白回填(ADR-0009)
+# 背景:v2.10.24.1 之前 sync_headers 被 429/sed 止血卡住时,客户在外事号分页 B2 填的
+# 商务人员 / B3 填的所属公司无法同步到 DB,后续关键词命中 / 未回复预警 / 删除预警写入
+# 三个预警分页时 A/B 栏为空。历史行不会自动回填,需要独立巡检补上。
+# 启动时立即跑一次 + 独立 loop 周期巡检,幂等只填空栏不改已有值。
+BACKFILL_ALERT_HISTORY = os.environ.get("BACKFILL_ALERT_HISTORY", "true").lower() == "true"
+BACKFILL_ALERT_INTERVAL_SEC = int(os.environ.get("BACKFILL_ALERT_INTERVAL_SEC", "3600"))
+
 # 会话文件目录
 SESSION_DIR = BASE_DIR / "sessions"
 SESSION_DIR.mkdir(exist_ok=True)

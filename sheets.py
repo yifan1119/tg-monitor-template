@@ -46,6 +46,12 @@ class SheetsWriter:
         logger.info("Google Sheets 连接成功 (OAuth): %s", self.spreadsheet.title)
         self.ensure_alert_tabs()
         self.ensure_account_tabs()  # v2.10.10: 启动时给 DB 里每个账号补缺失的分页
+        # v2.10.24.2: 启动时立即补一次历史空白(ADR-0009)
+        if config.BACKFILL_ALERT_HISTORY:
+            try:
+                self.backfill_alert_history()
+            except Exception as e:
+                logger.warning("backfill_alert_history 启动时失败(不阻塞启动): %s", e)
 
     def ensure_account_tabs(self):
         """v2.10.10: 扫 DB 所有账号,分页不存在就建一个(对齐登录时 _create_sheet_tab 的承诺)。
@@ -514,6 +520,126 @@ class SheetsWriter:
                     self._write_alert_header(ws, prefix)
                 except Exception as e:
                     logger.warning("建立预警分页失败: %s", e)
+
+    def backfill_alert_history(self):
+        """v2.10.24.2(ADR-0009): 扫三个预警分页,把空的 A(所属公司)/ B(商务人员)栏
+        用 DB accounts 里的 company/operator 回填。
+
+        背景:v2.10.24.1 之前 sync_headers 被 429 / sed 止血卡住时,新登录外事号在
+        分页 B2/B3 填的值同步不到 DB,后续预警写入三张分页时 A/B 栏为空(见 bot.py:142/147/190)。
+        历史行不会自动回填,这个方法负责一次性扫三个分页把能补的空栏用 DB 值填上。
+
+        幂等:只填空栏,已有值的行不动。跑多少次都安全。
+        配额:~7 次 API 调用(1 次 worksheets + 3 次 get_all_values + 3 次 batch_update)。
+        返回:(filled_rows, skipped_rows_db_empty) — 填了几行 / DB 里也空没法补的几行。
+        """
+        suffix = config.COMPANY_DISPLAY
+        alert_tabs = [
+            f"信息未回复预警{suffix}",
+            f"关键词监听{suffix}",
+            f"信息删除预警{suffix}",
+        ]
+        # DB 里每个外事号的 operator/company 映射
+        # Codex P1 修复:同名外事号(两个号昵称一样)下,不能用 name 做 key
+        # 静默保留最后一个 → 会把同名所有历史行错误归属到同一人。
+        # 策略:检测重复 name,标 ambiguous → 该 name 跳过回填 + 日志提醒。
+        try:
+            rows = db.get_conn().execute(
+                "SELECT name, operator, company FROM accounts WHERE name IS NOT NULL AND name != ''"
+            ).fetchall()
+            name_to_info = {}
+            ambiguous_names = set()
+            for r in rows:
+                name = r["name"]
+                info = (r["operator"] or "", r["company"] or "")
+                if name in name_to_info and name_to_info[name] != info:
+                    ambiguous_names.add(name)
+                else:
+                    name_to_info[name] = info
+            for name in ambiguous_names:
+                name_to_info.pop(name, None)
+            if ambiguous_names:
+                logger.warning(
+                    "backfill_alert_history: 检测到 %d 个同名外事号(DB 中存在多条 operator/company 不一致记录),"
+                    "这些外事号的历史行跳过回填(避免错误归属): %s",
+                    len(ambiguous_names), sorted(ambiguous_names),
+                )
+        except Exception as e:
+            logger.warning("backfill_alert_history: 读 DB 失败 %s", e)
+            return (0, 0)
+
+        self._rate_limit()
+        try:
+            existing = {ws.title: ws for ws in self.spreadsheet.worksheets()}
+        except Exception as e:
+            logger.warning("backfill_alert_history: 读分页列表失败 %s", e)
+            return (0, 0)
+
+        total_filled = 0
+        total_skipped = 0
+        missing_accounts = set()
+
+        for tab_name in alert_tabs:
+            ws = existing.get(tab_name)
+            if ws is None:
+                logger.info("backfill_alert_history: 分页「%s」不存在,跳过", tab_name)
+                continue
+            try:
+                self._rate_limit()
+                values = ws.get_all_values()
+            except Exception as e:
+                logger.warning("backfill_alert_history: 读「%s」失败 %s", tab_name, e)
+                continue
+            if not values or len(values) <= 1:
+                continue  # 只有表头或空分页
+            # 三个预警分页统一结构: A=所属公司, B=商务人员, C=外事号, D=广告主, ...
+            # Codex P1 修复:按单元格更新(A{i} 和 B{i} 分开),不一次性写 A{i}:B{i}
+            # 否则客户手填值所在栏会被重写,有公式时会被替换成显示值。
+            batch_updates = []
+            changed_row_count = 0
+            for i, row in enumerate(values[1:], start=2):  # row 1 是表头, 数据从 row 2 起
+                company_cell = row[0] if len(row) > 0 else ""
+                operator_cell = row[1] if len(row) > 1 else ""
+                account_name = row[2] if len(row) > 2 else ""
+                if not account_name:
+                    continue  # 连外事号都没的行跳过
+                if company_cell and operator_cell:
+                    continue  # 两栏都有值,不用补
+                db_operator, db_company = name_to_info.get(account_name, ("", ""))
+                if not db_operator and not db_company:
+                    # DB 里对应账号没值,或同名外事号被标 ambiguous 跳过
+                    if account_name not in missing_accounts:
+                        missing_accounts.add(account_name)
+                    total_skipped += 1
+                    continue
+                row_changed = False
+                if not company_cell and db_company:
+                    batch_updates.append({"range": f"A{i}", "values": [[db_company]]})
+                    row_changed = True
+                if not operator_cell and db_operator:
+                    batch_updates.append({"range": f"B{i}", "values": [[db_operator]]})
+                    row_changed = True
+                if row_changed:
+                    changed_row_count += 1
+            if not batch_updates:
+                continue
+            try:
+                self._rate_limit()
+                ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
+                total_filled += changed_row_count
+                logger.info("backfill_alert_history: 「%s」补填 %d 行(%d 个单元格)",
+                            tab_name, changed_row_count, len(batch_updates))
+            except Exception as e:
+                logger.warning("backfill_alert_history: 「%s」batch_update 失败 %s", tab_name, e)
+
+        if missing_accounts:
+            logger.info(
+                "backfill_alert_history: 共 %d 个外事号 DB 里 operator/company 都空,无法回填,"
+                "客户需要去对应外事号分页 B2/B3 填写后等 sync_headers 同步(默认 600s): %s",
+                len(missing_accounts), sorted(missing_accounts),
+            )
+        logger.info("backfill_alert_history: 完成 — 补填 %d 行,跳过 %d 行(DB 空)", total_filled, total_skipped)
+        return (total_filled, total_skipped)
 
     def _rate_limit(self):
         elapsed = time.time() - self._last_api_call

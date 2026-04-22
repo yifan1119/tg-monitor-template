@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.24.1(2026-04-22) — 🚨 **紧急修复** Sheets 读 API 配额爆(账号多客户必升)— `sync_headers` + `peer_name_consistency` 间隔从 60s 降到 600s(可配置)+ 紧急开关
+> 📌 **最新版**:v2.10.24.2(2026-04-22) — 🧹 **承接 v2.10.24.1** 自动补填预警分页历史空白(关键词监听/未回复/删除预警 A/B 栏)— 启动立刻补一次 + 每小时巡检补漏
 
 ---
 
@@ -390,7 +390,17 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.24.1** (2026-04-22) — 当前稳定版 🚨 **(账号多客户必升 — Sheets 读配额保护)**
+- **v2.10.24.2** (2026-04-22) — 当前稳定版 🧹 **(承接 v2.10.24.1 — 自动补填预警分页历史空白)**
+  - [NEW] **预警分页历史空白自动回填**(ADR-0009)— v2.10.24.1 之前 sync_headers 被 429/sed 止血卡住时,
+    客户在外事号分页 B2(商务人员)/ B3(所属公司)填了也同步不到 DB,导致后续关键词监听/未回复/删除预警
+    三个分页 A/B 栏一大片空白(历史脏数据)
+  - 启动时 `sheets.__init__` 立即调 `backfill_alert_history()` 补一次,`_alert_backfill_loop` 每小时巡检一次
+  - 幂等 — 只填空栏,有值的不动,跑多少次都安全。DB 里也空的外事号会 log 清单,客户按清单补 B2/B3
+  - 配额 — 每轮 ~7 次 API 调用,远低于 60/min 配额
+  - [NEW] 配置 `BACKFILL_ALERT_HISTORY=true`(默认) / `BACKFILL_ALERT_INTERVAL_SEC=3600`(默认 1 小时)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.24.1** (2026-04-22) 🚨 **(账号多客户必升 — Sheets 读配额保护)**
   - [FIX] **`sync_headers` 节流**(ADR-0008)— 原来每 60 秒对每个账号读 2 次 Sheets(`A2:B3` + `row 6`),
     150 账号 × 2 = 300 reads/min,打爆 Google 读配额(60/min/user)。连锁导致消息实时写入也 429。
     改成独立节流 `SYNC_HEADERS_INTERVAL_SEC=600`(10 分钟),默认读频降到 30 reads/min
@@ -400,8 +410,7 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
   - [NEW] **紧急开关** `SYNC_HEADERS_DISABLED` / `PEER_NAME_CONSISTENCY_DISABLED`,遇到配额问题可一键关
   - 客户反馈:某 150+ 账号客户 2026-04-22 15:07 线上撞配额爆(sed 止血 16:25 立即生效,sed 见 ADR-0008)
   - 副作用:B2/B3 / 第 6 行手改后同步到 DB 延迟从 60s → 最多 600s(业务影响极小)
-  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
-  - ⚠ **如果你之前跑过 sed 止血**(`tasks.py:165 pass`):升级前先 `cp tasks.py.bak-* tasks.py` 回滚,不然 `git pull` 会冲突
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`(sed 止血改动会被 update.sh 自动 stash + reset,无需手动回滚)
 
 - **v2.10.24** (2026-04-21) — **(升级流程修补,推荐升级避免卡住)**
   - [FIX] **`update.sh` orphan cleanup 放宽**(ADR-0007)— 以前只清 `compose

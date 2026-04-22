@@ -90,6 +90,7 @@ commit message 里明确标出「影响文档」:
 | v2.10.23 | `sync_headers` 单账号异常隔离(同 flush_pending 逻辑,修 B2/B3 推送空白) | [0006](docs/adr/0006-v2.10.23-sync-headers-per-account-isolation.md) |
 | v2.10.24 | `update.sh` orphan cleanup 放宽 + 容器缺失检测(修升级撞冲突) | [0007](docs/adr/0007-v2.10.24-update-sh-robust-container-recreate.md) |
 | v2.10.24.1 | Sheets 读 API 配额保护:`sync_headers` + `peer_name_consistency` 间隔独立化(默认 60s → 600s)+ 紧急开关 + 修 docstring-代码不一致 | [0008](docs/adr/0008-v2.10.24.1-sheets-read-quota-fix.md) |
+| v2.10.24.2 | 预警分页历史空白自动回填(承接 v2.10.24.1):启动立刻补 + 每小时巡检;幂等只填空栏;DB 也空的 log 清单 | [0009](docs/adr/0009-v2.10.24.2-backfill-alert-history.md) |
 
 ## 发布流程
 
@@ -108,9 +109,9 @@ commit message 里明确标出「影响文档」:
 
 ## 当前状态(2026-04-22)
 
-- main:`v2.10.24.1`(hotfix:Sheets 读 API 配额保护 — 账号多客户必升)
-- feature/v3.0.0:Day 1 完 + Day 2 WIP(两段式预警开发中)— **需 rebase 到 v2.10.24.1 main 拿 hotfix**
-- 某客户(150+ 账号)2026-04-22 15:07 线上遇到 429 配额爆,sed 止血成功(16:25),待 v2.10.24.1 正式升级
+- main:`v2.10.24.2`(承接 v2.10.24.1:自动补填预警分页历史空白)
+- feature/v3.0.0:Day 1 完 + Day 2 WIP(两段式预警开发中)— **需 rebase 到 v2.10.24.2 main 拿 hotfix**
+- 某客户(150+ 账号)2026-04-22 15:07 线上遇到 429 配额爆,sed 止血成功(16:25),已发 v2.10.24.1 + v2.10.24.2,待客户 `./update.sh` 升级
 
 ## 升级 / 回滚命令(客户侧)
 

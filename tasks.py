@@ -34,6 +34,7 @@ class TaskScheduler:
             self._update_check_loop(),
             self._session_health_loop(),      # v2.10.4: TG session 吊销检测
             self._sheets_backlog_loop(),      # v2.10.23: Sheets 写入积压告警
+            self._alert_backfill_loop(),      # v2.10.24.2: 预警分页历史空白回填巡检
         )
 
     async def stop(self):
@@ -530,6 +531,24 @@ class TaskScheduler:
             except Exception as e:
                 logger.error("sheets_backlog_loop 异常: %s", e)
             await asyncio.sleep(300)
+
+    async def _alert_backfill_loop(self):
+        """v2.10.24.2(ADR-0009):定期扫三个预警分页,把空 A/B 栏用 DB 值补上。
+
+        背景:v2.10.24.1 之前 sync_headers 被 429 / sed 止血卡住时,新登录外事号在
+        分页 B2/B3 填的值同步不到 DB,后续预警写入时 A/B 栏为空。启动时 sheets.__init__
+        已经补过一次历史,这个 loop 负责补新命中的漏。
+
+        频率默认 1 小时一次,7 次 API/轮,对配额几乎无影响。
+        """
+        await asyncio.sleep(600)  # 启动后等 10 分钟,让 sync_headers 先同步到 DB 再回填
+        while self._running:
+            try:
+                if config.BACKFILL_ALERT_HISTORY and self.sheets:
+                    self.sheets.backfill_alert_history()
+            except Exception as e:
+                logger.error("alert_backfill_loop 异常: %s", e)
+            await asyncio.sleep(config.BACKFILL_ALERT_INTERVAL_SEC)
 
     async def _daily_report_loop(self):
         """每天北京时间 00:00 发日报"""
