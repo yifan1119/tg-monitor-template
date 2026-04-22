@@ -1,4 +1,5 @@
 """推送消息模板 — 按商务提供的格式"""
+import html as _html
 import config
 
 
@@ -11,6 +12,56 @@ def no_reply_alert(company, operator, account_name, peer_name, message_text):
         f"{config.PEER_ROLE_LABEL}：{peer_name}\n"
         f"未回复信息：{message_text}"
     )
+
+
+def no_reply_alert_stage1(company, operator, account_name, peer_name,
+                          message_text, business_mention="", custom_text=""):
+    """v3.0.0 批次 B: stage1 未回复预警(30 分钟触发,@ 商务人员,无按钮)。
+
+    business_mention: `_format_tg_mention` 生成的 HTML mention 片段;空字串代表账号没配置商务 TG ID,
+                      模板会直接省略尾行 @,整条消息仍可发出(降级体验)。
+    custom_text:      accounts.remind_30min_text;空则用内置默认文案。
+
+    模板使用 HTML parse_mode 发送。正文纯文本字段在此统一 html.escape,
+    business_mention 已由 _format_tg_mention 处理,无需二次 escape。
+    """
+    e = _html.escape  # 简写
+    base = (
+        f"【信息未回复预警{config.COMPANY_DISPLAY}】\n\n"
+        f"中心/部门：{e(company)}\n"
+        f"{config.OPERATOR_LABEL}：{e(operator)}\n"
+        f"外事号：{e(account_name)}\n"
+        f"{config.PEER_ROLE_LABEL}：{e(peer_name)}\n"
+        f"未回复信息：{e(message_text)}"
+    )
+    tail_text = e(custom_text.strip()) if custom_text else "请尽快回复"
+    if business_mention:
+        return f"{base}\n\n{business_mention} {tail_text}"
+    # 账号没填 business_tg_id → 只写提醒文案,不带 @
+    return f"{base}\n\n{tail_text}"
+
+
+def no_reply_alert_stage2(company, operator, account_name, peer_name,
+                          message_text, owner_mention="", custom_text=""):
+    """v3.0.0 批次 B: stage2 未回复升级(40 分钟仍未回复触发,@ 负责人,带按钮)。
+
+    owner_mention: `_format_tg_mention` 生成;空字串 = 账号没配 owner_tg_id,退化无 @。
+    custom_text:   accounts.remind_40min_text;空则用内置默认文案。
+    正文纯文本字段统一 html.escape,owner_mention 已处理。
+    """
+    e = _html.escape
+    base = (
+        f"【信息未回复升级{config.COMPANY_DISPLAY}】\n\n"
+        f"中心/部门：{e(company)}\n"
+        f"{config.OPERATOR_LABEL}：{e(operator)}\n"
+        f"外事号：{e(account_name)}\n"
+        f"{config.PEER_ROLE_LABEL}：{e(peer_name)}\n"
+        f"未回复信息：{e(message_text)}"
+    )
+    tail_text = e(custom_text.strip()) if custom_text else "已超过 40 分钟未回复,请处理"
+    if owner_mention:
+        return f"{base}\n\n{owner_mention} {tail_text}"
+    return f"{base}\n\n{tail_text}"
 
 
 def delete_alert(company, operator, account_name, peer_name, message_text=""):

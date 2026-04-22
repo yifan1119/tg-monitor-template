@@ -35,12 +35,13 @@ venv/
 .dashboard-backup-*
 .metrics-backup/
 
-# Claude 专案本地设置(每台机权限白名单、私有备注,不进 git)
+# Claude 专案本地设置(每台机权限白名单、私有备注、会话状态,不进 git)
 .claude/settings.local.json
 .claude/sessions/
 .claude/memory/
 .claude/private-*.md
 .claude/*.local.md
+.claude/*-status.md
 
 # 推送前敏感词扫描脚本 — 内容本身含真实客户名 / 部门代号等,不能进 git
 scripts/check-secrets.sh

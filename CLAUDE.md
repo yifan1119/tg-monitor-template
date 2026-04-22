@@ -89,6 +89,8 @@ commit message 里明确标出「影响文档」:
 | v3.0.0 | 两段式预警用 `alerts.stage` 字段而不是改 `type`(向后兼容回滚) | [0005](docs/adr/0005-v3.0.0-two-stage-use-stage-column.md) |
 | v2.10.23 | `sync_headers` 单账号异常隔离(同 flush_pending 逻辑,修 B2/B3 推送空白) | [0006](docs/adr/0006-v2.10.23-sync-headers-per-account-isolation.md) |
 | v2.10.24 | `update.sh` orphan cleanup 放宽 + 容器缺失检测(修升级撞冲突) | [0007](docs/adr/0007-v2.10.24-update-sh-robust-container-recreate.md) |
+| v2.10.25 | 两段式预警批次 A:DB migration_v2 + 3 flag + notify-config API + 账号模态框 + 设置页专用群入口 | [0008](docs/adr/0008-v2.10.25-two-stage-data-layer-ui.md) |
+| v2.10.26 | 两段式预警批次 B:stage1/stage2 推送函数 + violation/cancel callback + `_format_tg_mention` 工具 + Sheets 末列 stage 标记 | [0009](docs/adr/0009-v2.10.26-two-stage-push-callback.md) |
 
 ## 发布流程
 

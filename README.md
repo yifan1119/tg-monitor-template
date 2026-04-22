@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.25(2026-04-22) — 两段式预警数据层 + UI 配置入口(批次 A,`TWO_STAGE_NO_REPLY_ENABLED` 默认关,行为不变)
+> 📌 **最新版**:v2.10.26(2026-04-22) — 两段式预警推送 + callback(批次 B,`TWO_STAGE_NO_REPLY_ENABLED` 默认关,行为不变;批次 C 的自动升级 loop 下版才接上)
 
 ---
 
@@ -390,7 +390,31 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.25** (2026-04-22) — 当前稳定版 **(两段式预警数据层 + UI 批次 A,`TWO_STAGE_NO_REPLY_ENABLED` 默认关行为不变)**
+- **v2.10.26** (2026-04-22) — 当前稳定版 **(两段式预警推送 + callback 批次 B,`TWO_STAGE_NO_REPLY_ENABLED` 默认关行为不变)**
+  - [NEW] **`templates.py` 加 `no_reply_alert_stage1` / `no_reply_alert_stage2`**(ADR-0009)
+    — 30 分钟 @ 商务 + 40 分钟 @ 负责人,模板都支持 `custom_text` 账号自定义尾行;
+    `mention` 为空时退化为纯提醒文案(不报错)
+  - [NEW] **`bot.py` 加 `send_no_reply_alert_stage1` / `send_no_reply_alert_stage2`**
+    — 推送群路由 `UNREPLIED_ALERT_GROUP_ID or ALERT_GROUP_ID` fallback;
+    `parse_mode="HTML"` 渲染 inline mention;沿用老 `has_alert_today` 天级去重 +
+    `ALERT_NO_REPLY_ENABLED` 子开关 + 失败重试语义(ADR-0003)
+  - [NEW] **老 `send_no_reply_alert` 入口加 flag 分流**(单点分流,flag 关时老路径
+    一行未改,向后兼容)
+  - [NEW] **`_format_tg_mention` 工具**:纯数字 → HTML `<a href="tg://user?id=N">` inline
+    mention(最可靠);字母 → `@username`;空值退化无 @
+  - [NEW] **stage2 按钮 callback**:`violation:{id}` / `cancel:{id}` — 复用
+    `claim_alert_for_review` 原子抢占 + 老 `CALLBACK_AUTH_USER_IDS` 白名单;
+    `violation` 走 `_write_alert_to_sheet` 写违规登记
+  - [NEW] **`_write_alert_to_sheet` 扩展** — `stage=2` 末列多写「违规登记」,
+    `stage=0`(老路径)保持 6 列不变,客户表格结构零改动
+  - [SAFE] **flag 默认关 = 完全等于 v2.10.25/v2.10.24 行为**:老 `send_no_reply_alert`
+    走原路径,Sheets 写入 6 列不变,`ALERT_GROUP_ID` 继续收推
+  - [SKIP] 批次 C 的 `_no_reply_stage2_loop`(scan 升级)+ listener outbound 事件驱动
+    (`mark_stage1_handled_by_reply`)不在本版本,留给 v2.10.27。
+    **本版 stage2 函数已就绪,但没 loop 调用它,所以目前只有 stage1 会自动触发**
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.25** (2026-04-22) — 前一版 **(两段式预警数据层 + UI 批次 A)**
   - [NEW] **DB migration_v2**(ADR-0008)— `accounts` 加 4 字段(`business_tg_id`
     / `owner_tg_id` / `remind_30min_text` / `remind_40min_text`)+ `alerts` 加
     `stage INTEGER DEFAULT 0`(保留 `type='no_reply'` 不变见 ADR-0005)

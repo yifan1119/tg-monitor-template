@@ -1,4 +1,5 @@
 """TG Bot — 预警推送 + 审核按钮"""
+import html
 import json
 import logging
 import asyncio
@@ -108,6 +109,67 @@ class AlertBot:
                 except Exception:
                     pass
 
+        # v3.0.0 批次 B: stage2 升级预警的「登记违规 / 取消」按钮回调
+        @self.dp.callback_query(F.data.startswith("violation:") | F.data.startswith("cancel:"))
+        async def on_stage2_action(callback: CallbackQuery):
+            data = callback.data
+            action, alert_id_str = data.split(":", 1)
+            try:
+                alert_id = int(alert_id_str)
+            except ValueError:
+                await callback.answer("预警 ID 非法")
+                return
+
+            # 权限校验:沿用老 CALLBACK_AUTH_USER_IDS 白名单逻辑
+            # (跟 Q1 确认:管理员都能点,不强制只能 owner_tg_id 本人)
+            config.reload_if_env_changed()
+            if config.CALLBACK_AUTH_USER_IDS:
+                uid = callback.from_user.id if callback.from_user else 0
+                if uid not in config.CALLBACK_AUTH_USER_IDS:
+                    await callback.answer("⛔ 你没有权限处理这个预警", show_alert=True)
+                    logger.warning(
+                        "[stage2_deny] 未授权用户: tg_id=%s name=%s alert_id=%s",
+                        uid,
+                        callback.from_user.full_name if callback.from_user else "?",
+                        alert_id,
+                    )
+                    return
+
+            alert = db.get_alert(alert_id)
+            if not alert:
+                await callback.answer("预警不存在")
+                return
+
+            # 原子抢占状态转移:两人同时点按钮只有一人能抢到 pending→violation_logged/cancelled
+            # 复用老 claim_alert_for_review — WHERE status='pending' 就行,不限 stage
+            new_status = "violation_logged" if action == "violation" else "cancelled"
+            claimed = db.claim_alert_for_review(alert_id, new_status)
+            if not claimed:
+                await callback.answer("已处理过了")
+                return
+
+            try:
+                original_text = callback.message.text or callback.message.caption or ""
+                if action == "violation":
+                    # 写「信息未回复预警{部门}」同一张表(Q2 确认的方案 A)
+                    # _write_alert_to_sheet 会根据 alert["stage"] 在末列标记
+                    self._write_alert_to_sheet(alert)
+                    await callback.message.edit_text(
+                        original_text + "\n\n✅ 已登记违规 — " + (callback.from_user.full_name or ""),
+                    )
+                    await callback.answer("已登记违规")
+                else:
+                    await callback.message.edit_text(
+                        original_text + "\n\n❌ 已取消 — " + (callback.from_user.full_name or ""),
+                    )
+                    await callback.answer("已取消")
+            except Exception as e:
+                logger.error("stage2 callback 异常 alert_id=%s: %s", alert_id, e)
+                try:
+                    await callback.answer("处理时出错了,请再试一次或看日志")
+                except Exception:
+                    pass
+
     def _make_keyboard(self, alert_id):
         return InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -115,6 +177,44 @@ class AlertBot:
                 InlineKeyboardButton(text="拒绝", callback_data=f"reject:{alert_id}"),
             ]
         ])
+
+    def _make_keyboard_stage2(self, alert_id):
+        """v3.0.0 批次 B: stage2(40 分钟升级)按钮 — 登记违规 / 取消。
+
+        action 名 violation / cancel 在 on_stage2_action handler 映射到状态:
+          violation → status='violation_logged',写 Sheets 记录违规
+          cancel    → status='cancelled',只 edit_text,不写 Sheets
+        """
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="登记违规", callback_data=f"violation:{alert_id}"),
+                InlineKeyboardButton(text="取消", callback_data=f"cancel:{alert_id}"),
+            ]
+        ])
+
+    @staticmethod
+    def _format_tg_mention(tg_id_or_username, display_name=""):
+        """v3.0.0 批次 B: 把账号填的 business_tg_id / owner_tg_id 渲染成 TG @mention。
+
+        - 纯数字 → HTML inline mention `<a href="tg://user?id=N">name</a>`
+          (最可靠:对方没设 username 也能触发群 @ 通知)
+        - 其他(字母 / 下划线 / 混合) → 当作 TG username,渲染成 @xxx
+          (字符串拼接即可触发群 @ 通知,前提对方设了 username)
+        - 空值 / 空白 → 返回空串,由调用方/模板决定要不要省略尾行
+
+        display_name 仅对 numeric 分支有用,会 html.escape 后作为 inline mention 的可见文字。
+        """
+        if not tg_id_or_username:
+            return ""
+        val = str(tg_id_or_username).strip().lstrip("@")
+        if not val:
+            return ""
+        if val.isdigit():
+            # numeric user_id → HTML inline mention(需 parse_mode="HTML")
+            safe_name = html.escape(display_name) if display_name else "请处理"
+            return f'<a href="tg://user?id={val}">{safe_name}</a>'
+        # username 形式
+        return f"@{val}"
 
     def _write_alert_to_sheet(self, alert):
         """审核通过后写入预警分表"""
@@ -138,8 +238,16 @@ class AlertBot:
                 with self.sheets._write_lock:
                     if alert["type"] == "no_reply":
                         ws = self.sheets.spreadsheet.worksheet(f"信息未回复预警{config.COMPANY_DISPLAY}")
+                        # v3.0.0 批次 B: stage=2(两段式升级后「登记违规」)时末列多写一个标记,
+                        # 老路径(单段 stage=0)保持 6 列不变,老表格结构零改动
+                        stage = 0
+                        if "stage" in alert.keys():
+                            stage = alert["stage"] or 0
+                        row = [company, operator, account_name, peer_name, alert["message_text"], now]
+                        if stage == 2:
+                            row.append("违规登记")
                         self.sheets._rate_limit()
-                        ws.append_row([company, operator, account_name, peer_name, alert["message_text"], now])
+                        ws.append_row(row)
                     elif alert["type"] == "deleted":
                         ws = self.sheets.spreadsheet.worksheet(f"信息删除预警{config.COMPANY_DISPLAY}")
                         self.sheets._rate_limit()
@@ -208,7 +316,15 @@ class AlertBot:
         - 静默(开关关)→ 插入 alert 并标 status='silenced',has_alert_today 当「已处理」
         - 推送失败 → 保留 bot_message_id=null,has_alert_today 不认作已推,下次扫描重试
           (修之前「第一次推送失败后一整天不再重试」的 bug)
+        v3.0.0 批次 B:
+        - TWO_STAGE_NO_REPLY_ENABLED=true → 分流到 send_no_reply_alert_stage1,走两段式新路径
+        - flag=false(默认)→ 走以下原 v2.10.24 老单段路径,100% 向后兼容
         """
+        # v3.0.0 批次 B: feature flag 分流 — 入口单点,保证 flag 关时老行为零差异
+        config.reload_if_env_changed()
+        if config.TWO_STAGE_NO_REPLY_ENABLED:
+            return await self.send_no_reply_alert_stage1(account_id, peer, message_text, msg_id)
+
         if not self.bot or not config.ALERT_GROUP_ID:
             return
         if db.has_alert_today("no_reply", peer["id"]):
@@ -260,6 +376,155 @@ class AlertBot:
             # v2.10.23: 推送失败 → bot_message_id 保持 null,has_alert_today 不认作已推
             # 下次 _no_reply_loop 扫到会重试;这里额外写个日志带 alert_id 方便排查
             logger.error("发送未回复预警失败 alert_id=%s: %s (下次扫描会重试)", alert_id, e)
+
+    # ========== v3.0.0 批次 B: 两段式未回复预警 ==========
+
+    async def send_no_reply_alert_stage1(self, account_id, peer, message_text, msg_id):
+        """v3.0.0 批次 B: stage1(30 分钟)未回复预警 — @ 商务人员,无按钮。
+
+        入口:`send_no_reply_alert` 在 `TWO_STAGE_NO_REPLY_ENABLED=true` 时分流到这里。
+
+        推送群路由:
+          UNREPLIED_ALERT_GROUP_ID(若设置)> ALERT_GROUP_ID(fallback)
+          两段式群单独配,便于把 no_reply 类跟关键词/删除类分流到不同审查员。
+
+        行为语义:
+          - 沿用 has_alert_today("no_reply") 天级去重(跟老单段版一致)
+          - 沿用 ALERT_NO_REPLY_ENABLED 子开关,关时插静默 stage1 占去重名额
+          - 成功推送 → update_alert_bot_msg 写 bot_message_id 才算「真送达」
+          - 推送失败 → bot_message_id 保持 null,has_alert_today 不认作已推,下轮重试
+            (跟 v2.10.23 为 no_reply / delete 立下的失败重试语义一致)
+
+        parse_mode="HTML" 是关键:渲染 numeric tg_id 的 inline mention 必须 HTML。
+        """
+        target_group = config.UNREPLIED_ALERT_GROUP_ID or config.ALERT_GROUP_ID
+        if not self.bot or not target_group:
+            return
+        if db.has_alert_today("no_reply", peer["id"]):
+            return
+
+        account = db.get_account_by_id(account_id)
+        if not account:
+            return
+
+        config.reload_if_env_changed()
+
+        if not config.ALERT_NO_REPLY_ENABLED:
+            # 静默:插入 stage1 alert 但标 silenced,当天不再重复扫
+            alert_id = db.insert_stage1_alert(
+                account_id=account_id,
+                peer_id=peer["id"],
+                msg_id=msg_id,
+                message_text=message_text,
+            )
+            db.update_alert_status(alert_id, "silenced")
+            logger.info("[ALERT_NO_REPLY_DISABLED] stage1 静默记录 peer=%s", peer["id"])
+            return
+
+        # 正常路径:创建 pending stage1 alert(bot_message_id=null),推送,成功后 update_alert_bot_msg
+        alert_id = db.insert_stage1_alert(
+            account_id=account_id,
+            peer_id=peer["id"],
+            msg_id=msg_id,
+            message_text=message_text,
+        )
+
+        business_mention = self._format_tg_mention(
+            account["business_tg_id"] if "business_tg_id" in account.keys() else "",
+            display_name="商务人员",
+        )
+        custom_text = account["remind_30min_text"] if "remind_30min_text" in account.keys() else ""
+
+        msg = templates.no_reply_alert_stage1(
+            company=account["company"],
+            operator=account["operator"],
+            account_name=account["name"],
+            peer_name=peer["name"],
+            message_text=message_text,
+            business_mention=business_mention,
+            custom_text=custom_text or "",
+        )
+        try:
+            sent = await self.bot.send_message(
+                target_group, msg,
+                parse_mode="HTML",  # 渲染 inline mention 必须
+            )
+            db.update_alert_bot_msg(alert_id, sent.message_id)
+        except Exception as e:
+            # 失败不 update bot_message_id,has_alert_today 不认作已推 → 下次扫描重试
+            logger.error(
+                "[stage1] 发送失败 alert_id=%s peer=%s group=%s: %s (下次扫描会重试)",
+                alert_id, peer["id"], target_group, e,
+            )
+
+    async def send_no_reply_alert_stage2(self, alert_id):
+        """v3.0.0 批次 B: stage2(升级)未回复预警 — @ 负责人,带「登记违规 / 取消」按钮。
+
+        入口:批次 C 会加 `_no_reply_stage2_loop`,扫到过期未回复的 stage1 后调本函数。
+              批次 B 先写好函数,批次 C loop 接上就能跑完整两段式。
+
+        并发保护:`upgrade_to_stage2` 是原子 UPDATE WHERE stage=1 AND status='pending',
+                  rowcount=1 表示抢到升级权;两个 loop 同时扫同一条只会一人成功。
+                  bot_message_id 会在 upgrade 成功后被 stage2 的新 message_id 覆盖,
+                  老的 stage1 消息仍在群里,不删(保留上下文)。
+
+        写入失败回滚:推送失败时目前已经 UPDATE 了 stage=2,无法回退到 stage=1;
+                      但 status 仍是 pending,下轮 stage2_loop 扫到仍会重推(bot_message_id
+                      可能为 old stage1 id 或 null,不影响重推逻辑 — 因为我们不是按 stage1 扫的)。
+                      实际 trade-off:极少数推送失败的 stage2 会在群里少一条消息,可接受。
+        """
+        alert = db.get_alert(alert_id)
+        if not alert:
+            return
+        if alert["stage"] != 1 or alert["status"] != "pending":
+            # 防御:非 stage=1 pending 的不升级(可能已被 handled_by_reply / 已升级过)
+            return
+
+        account = db.get_account_by_id(alert["account_id"])
+        if not account:
+            return
+        peer = db.get_conn().execute(
+            "SELECT * FROM peers WHERE id=?", (alert["peer_id"],)
+        ).fetchone()
+        if not peer:
+            return
+
+        target_group = config.UNREPLIED_ALERT_GROUP_ID or config.ALERT_GROUP_ID
+        if not self.bot or not target_group:
+            return
+
+        # 先原子升级,抢到才推;抢不到直接跳(别人已经升级了 / 状态变了)
+        if not db.upgrade_to_stage2(alert_id, new_bot_msg_id=None):
+            return
+
+        owner_mention = self._format_tg_mention(
+            account["owner_tg_id"] if "owner_tg_id" in account.keys() else "",
+            display_name="负责人",
+        )
+        custom_text = account["remind_40min_text"] if "remind_40min_text" in account.keys() else ""
+
+        msg = templates.no_reply_alert_stage2(
+            company=account["company"],
+            operator=account["operator"],
+            account_name=account["name"],
+            peer_name=peer["name"],
+            message_text=alert["message_text"],
+            owner_mention=owner_mention,
+            custom_text=custom_text or "",
+        )
+        try:
+            sent = await self.bot.send_message(
+                target_group, msg,
+                parse_mode="HTML",
+                reply_markup=self._make_keyboard_stage2(alert_id),
+            )
+            # 把 bot_message_id 覆盖成 stage2 的新 message_id(callback edit_text 要用)
+            db.update_alert_bot_msg(alert_id, sent.message_id)
+        except Exception as e:
+            logger.error(
+                "[stage2] 发送失败 alert_id=%s peer=%s group=%s: %s",
+                alert_id, alert["peer_id"], target_group, e,
+            )
 
     async def send_delete_alert(self, account_id, peer, message_text, msg_id):
         """发送删除预警（每个广告主每天只推一次)
