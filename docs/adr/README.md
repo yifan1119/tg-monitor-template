@@ -35,3 +35,4 @@
 | 0003 | v2.10.23 | has_alert_today 只认真送达的(修失败不重试) | Codex 审计 Critical A2 | [0003](0003-v2.10.23-has-alert-today-sent-only.md) |
 | 0004 | v2.10.23 | upsert_account 不再覆盖业务字段 | Codex 审计 Major A5 | [0004](0004-v2.10.23-upsert-account-no-business-override.md) |
 | 0005 | v3.0.0 | 两段式预警用 stage 字段不改 type | Codex 审计 Critical B1/B2/B3 | [0005](0005-v3.0.0-two-stage-use-stage-column.md) |
+| 0006 | v2.10.23 | `sync_headers` 单账号异常隔离(跟 0001 同逻辑) | 客户「B2/B3 填了推送空白」反馈 | [0006](0006-v2.10.23-sync-headers-per-account-isolation.md) |

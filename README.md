@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.23(2026-04-21) — 大修补:Sheets 写入按账号分桶不再全局卡住 + 冻结账号正确标红 + 5 个其他 bug
+> 📌 **最新版**:v2.10.23(2026-04-21) — 大修补 7 bug:Sheets 按账号分桶 + 冻结账号正确标红 + 预警失败重试 + 表头同步隔离 等
 
 ---
 
@@ -417,6 +417,11 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
     Web 后台填的 `company/operator` 被 listener 启动登录时的空值清空。改成
     ON CONFLICT 只更新 TG 身份字段(`name/username/tg_id`)。新增
     `update_account_business(id, company=..., operator=...)` 给 Web 后台用
+  - [FIX] **`sync_headers` 单账号异常隔离**(ADR-0006)— 以前 accounts 表里某个
+    账号分页出错(被手改名/删分页/单账号撞 429),`ws.get("A2:B3")` 抛出导致
+    **后面的账号永远不被同步**,客户在 B2/B3 填了「渠道人员/中心·部门」但 DB
+    没读到 → 预警推送显示空白。改成每账号 try/except 隔离,单账号失败只跳过
+    该账号,其他账号照常同步(跟 ADR-0001 `flush_pending` 同逻辑)
   - [FIX] **SQLite 并发锁** — 加 `PRAGMA busy_timeout=5000`(5 秒等锁),避免
     多协程/多进程并发访问时直接抛 `database is locked`
   - [NEW] **DB migration 框架** — 加 `PRAGMA user_version` + `_safe_add_column`

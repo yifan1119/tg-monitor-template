@@ -569,55 +569,69 @@ class SheetsWriter:
         v2.6.5: 同时检查每个对话槽 row 6 的 PEER_ROLE_LABEL (B6/E6/H6/K6/...),
         不一致就批量 update。覆盖客户改 PEER_ROLE_LABEL 后,把现有所有对话槽角色字样
         从「广告主」改成新 label 的需求。
+        v2.10.23: 单账号 try/except 隔离 — 以前任一账号 API 错误会抛出整个中断,
+        导致排在后面的账号永远不被同步。现在每个账号独立 try,失败只跳过该账号。
         """
         accounts = db.get_conn().execute("SELECT * FROM accounts").fetchall()
         for account in accounts:
-            ws = self.get_or_create_sheet(account)
-            if not ws:
-                continue
-            # 读取行2-3的 A 列(label) + B 列(value)
-            self._rate_limit()
-            header_data = ws.get("A2:B3")
-            if header_data:
-                a2_label = header_data[0][0] if len(header_data) > 0 and len(header_data[0]) > 0 else ""
-                operator = header_data[0][1] if len(header_data) > 0 and len(header_data[0]) > 1 else ""
-                company  = header_data[1][1] if len(header_data) > 1 and len(header_data[1]) > 1 else ""
-                # 更新数据库
-                if operator != (account["operator"] or "") or company != (account["company"] or ""):
-                    db.get_conn().execute(
-                        "UPDATE accounts SET operator=?, company=? WHERE id=?",
-                        (operator, company, account["id"])
-                    )
-                    db.get_conn().commit()
-                    logger.info("从 Sheets 同步: 操作人员=%s, 所属公司=%s", operator, company)
-                # v2.6.4: 同步 A2 label(操作人员标签)
-                if a2_label and a2_label != config.OPERATOR_LABEL:
-                    try:
-                        self._rate_limit()
-                        ws.update("A2", [[config.OPERATOR_LABEL]])
-                        logger.info("外事号分页操作人员标签同步 [%s] %s → %s",
-                                    ws.title, a2_label, config.OPERATOR_LABEL)
-                    except Exception as e:
-                        logger.warning("外事号分页 A2 标签同步失败 [%s]: %s", ws.title, e)
-
-            # v2.6.5: 同步对话槽 row 6 的 PEER_ROLE_LABEL (B6/E6/H6/K6/...)
-            # 对话槽布局: 每槽占 3 列,起始列 = col_group * 3, 角色 label 在 col_group * 3 + 1
             try:
-                self._rate_limit()
-                row6 = ws.row_values(6)
-                updates = []
-                for i, val in enumerate(row6):
-                    # 位置 1, 4, 7, 10, ... (i % 3 == 1) 是角色 label 单元格
-                    if i % 3 == 1 and val and val != config.PEER_ROLE_LABEL:
-                        col = _col_letter(i)
-                        updates.append({"range": f"{col}6", "values": [[config.PEER_ROLE_LABEL]]})
-                if updates:
-                    self._rate_limit()
-                    ws.batch_update(updates)
-                    logger.info("外事号分页对话槽角色标签同步 [%s] %d 处 → %s",
-                                ws.title, len(updates), config.PEER_ROLE_LABEL)
+                self._sync_one_account_headers(account)
             except Exception as e:
-                logger.warning("外事号分页 row6 角色标签同步失败 [%s]: %s", ws.title, e)
+                # v2.10.23: 单账号失败不影响其他账号同步
+                logger.warning(
+                    "[sync_headers] 账号 id=%s phone=%s 同步失败,跳过: %s",
+                    account["id"], account["phone"], e,
+                )
+                continue
+
+    def _sync_one_account_headers(self, account):
+        """v2.10.23: sync_headers 单账号逻辑 — 抛异常由 sync_headers 的 try/except 捕获隔离。"""
+        ws = self.get_or_create_sheet(account)
+        if not ws:
+            return
+        # 读取行2-3的 A 列(label) + B 列(value)
+        self._rate_limit()
+        header_data = ws.get("A2:B3")
+        if header_data:
+            a2_label = header_data[0][0] if len(header_data) > 0 and len(header_data[0]) > 0 else ""
+            operator = header_data[0][1] if len(header_data) > 0 and len(header_data[0]) > 1 else ""
+            company  = header_data[1][1] if len(header_data) > 1 and len(header_data[1]) > 1 else ""
+            # 更新数据库
+            if operator != (account["operator"] or "") or company != (account["company"] or ""):
+                db.get_conn().execute(
+                    "UPDATE accounts SET operator=?, company=? WHERE id=?",
+                    (operator, company, account["id"])
+                )
+                db.get_conn().commit()
+                logger.info("从 Sheets 同步: 操作人员=%s, 所属公司=%s", operator, company)
+            # v2.6.4: 同步 A2 label(操作人员标签)
+            if a2_label and a2_label != config.OPERATOR_LABEL:
+                try:
+                    self._rate_limit()
+                    ws.update("A2", [[config.OPERATOR_LABEL]])
+                    logger.info("外事号分页操作人员标签同步 [%s] %s → %s",
+                                ws.title, a2_label, config.OPERATOR_LABEL)
+                except Exception as e:
+                    logger.warning("外事号分页 A2 标签同步失败 [%s]: %s", ws.title, e)
+
+        # v2.6.5: 同步对话槽 row 6 的 PEER_ROLE_LABEL (B6/E6/H6/K6/...)
+        # 对话槽布局: 每槽占 3 列,起始列 = col_group * 3, 角色 label 在 col_group * 3 + 1
+        try:
+            self._rate_limit()
+            row6 = ws.row_values(6)
+            updates = []
+            for i, val in enumerate(row6):
+                # 位置 1, 4, 7, 10, ... (i % 3 == 1) 是角色 label 单元格
+                if i % 3 == 1 and val and val != config.PEER_ROLE_LABEL:
+                    col = _col_letter(i)
+                    updates.append({"range": f"{col}6", "values": [[config.PEER_ROLE_LABEL]]})
+            if updates:
+                self._rate_limit()
+                ws.batch_update(updates)
+                logger.info("外事号分页对话槽角色标签同步 [%s] %d 处 → %s",
+                            ws.title, len(updates), config.PEER_ROLE_LABEL)
+        except Exception as e:
+            logger.warning("外事号分页 row6 角色标签同步失败 [%s]: %s", ws.title, e)
 
     def setup_dialog_columns(self, ws, peer, col_group):
         """设置某个对话框的表头 (行5-6) + 整列置中 + 斑马纹 (与舒舒格式一致)"""
