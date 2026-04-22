@@ -40,3 +40,4 @@
 | 0008 | v2.10.24.1 | Sheets 读 API 配额保护:`sync_headers` + `peer_name_consistency` 间隔独立化 + 紧急开关 + 修 docstring-代码不一致 | 客户(150+ 账号)线上 429 配额爆 | [0008](0008-v2.10.24.1-sheets-read-quota-fix.md) |
 | 0009 | v2.10.24.2 | 预警分页历史空白自动回填(启动立刻补 + 每小时巡检;幂等只填空栏;DB 也空的 log 清单) | 客户升级 v2.10.24.1 后发现 sed 止血期间遗留的空白 A/B 栏 | [0009](0009-v2.10.24.2-backfill-alert-history.md) |
 | 0010 | v2.10.24.3 | 预警分页整行缺失自动 writeback(alerts.sheet_written + 60s loop 无限重试,保零丢失) | 客户反馈「预警分页缺整行不可接受」(429 > 6 秒写入失败后无补救机制) | [0010](0010-v2.10.24.3-alert-writeback-no-loss.md) |
+| 0011 | v2.10.24.4 | `update_checker` 版本号 regex 支持四段(贪婪 `v\d+(?:\.\d+)+`)— 修后台升级弹窗显示错版本说明 | 客户截图反馈:v2.10.24.3 升级弹窗显示的是 v2.10.24 的容器冲突说明 | [0011](0011-v2.10.24.4-update-checker-four-segment-version.md) |

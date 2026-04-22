@@ -71,17 +71,17 @@ def _notes_for(short_sha: str, all_notes: dict, commit_subject: str = "") -> dic
     """
     if short_sha in all_notes:
         return all_notes[short_sha]
-    # 从 commit subject 找 v2.x.x 这种版本号
+    # 从 commit subject 找 v2.x.x / v2.x.x.x 这种版本号(greedy,吃完所有连续 .\d+)
     import re
-    m = re.search(r"v\d+\.\d+\.\d+", commit_subject or "")
+    m = re.search(r"v\d+(?:\.\d+)+", commit_subject or "")
     if m and m.group(0) in all_notes:
         return all_notes[m.group(0)]
 
     # v2.10.3+: commit subject 自动转白话
     subject = (commit_subject or "").strip()
     if subject:
-        # 剥掉 "v2.10.2: " 或 "docs: " / "fix: " 这种前缀
-        desc = re.sub(r"^(v\d+\.\d+\.\d+|docs|fix|feat|chore|refactor|perf|sec|ui|ux|style|test|build|ci)[:\s]*", "", subject, flags=re.IGNORECASE).strip()
+        # 剥掉 "v2.10.2: " / "v2.10.24.3: " 或 "docs: " / "fix: " 这种前缀
+        desc = re.sub(r"^(v\d+(?:\.\d+)+|docs|fix|feat|chore|refactor|perf|sec|ui|ux|style|test|build|ci)[:\s]*", "", subject, flags=re.IGNORECASE).strip()
         if desc:
             emoji = _auto_emoji(subject)
             return {
