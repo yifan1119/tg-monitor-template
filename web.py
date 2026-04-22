@@ -1397,8 +1397,16 @@ def _save_settings(is_first):
     if is_first:
         updates["WEB_PORT"] = read_env().get("WEB_PORT", "5001")
 
+    # v2.10.26: TWO_STAGE_NO_REPLY_ENABLED checkbox
+    # settings 页新增 checkbox,未勾选时 key 不在 form(HTML 标准),勾选时值为 "on"。
+    # setup 首次配置不显示这个 checkbox → is_first=True 时不动该 flag。
+    if not is_first:
+        updates["TWO_STAGE_NO_REPLY_ENABLED"] = (
+            "true" if form.get("two_stage_no_reply_enabled") == "on" else "false"
+        )
+
     # v2.10.25 (Codex Major #2 + Minor #1):
-    # UNREPLIED_ALERT_GROUP_ID 只在 form 里真的有这个 key(flag 开时 UI 才渲染)才写入,
+    # UNREPLIED_ALERT_GROUP_ID 只在 form 里真的有这个 key(flag 开且 input 未 disabled)才写入,
     # 避免 flag 关时保存其他设置把已有值清掉。
     # 写入前做数字校验,非法值直接拒绝保存,避免 config.py 启动期 int() 炸。
     if "unreplied_alert_group_id" in form:
