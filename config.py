@@ -262,6 +262,18 @@ PEER_NAME_CONSISTENCY_DISABLED = os.environ.get("PEER_NAME_CONSISTENCY_DISABLED"
 BACKFILL_ALERT_HISTORY = os.environ.get("BACKFILL_ALERT_HISTORY", "true").lower() == "true"
 BACKFILL_ALERT_INTERVAL_SEC = int(os.environ.get("BACKFILL_ALERT_INTERVAL_SEC", "3600"))
 
+# v2.10.24.3: 预警分页整行缺失自动 writeback(ADR-0010)
+# 背景:bot.py 写预警分页碰到 429 > 6 秒(3 retry × 2s)或短暂不可达 → 静默失败 → 整行缺失。
+# 新增 _alert_writeback_loop:每 60s 扫 alerts.sheet_written=0 的预警 → 补写 → 成功 mark=1。
+# 语义保零丢失(无限重试直到成功)。
+# 默认开启,有问题可关:ALERT_WRITEBACK_DISABLED=true
+ALERT_WRITEBACK_DISABLED = os.environ.get("ALERT_WRITEBACK_DISABLED", "false").lower() == "true"
+ALERT_WRITEBACK_INTERVAL_SEC = int(os.environ.get("ALERT_WRITEBACK_INTERVAL_SEC", "60"))
+# v2.10.24.3 Codex round3 P0:claim-first 的 stale 回收阈值(默认 300s = 5 min)。
+# claim 成功后进程 crash → sheet_written=1 卡着 claimed_at 不清 → 超过这个秒数后
+# writeback loop 会重新 claim 重试(at-least-once:极端场景可能多写一行,宁可重复不漏)。
+ALERT_WRITEBACK_CLAIM_STALE_SEC = int(os.environ.get("ALERT_WRITEBACK_CLAIM_STALE_SEC", "300"))
+
 # 会话文件目录
 SESSION_DIR = BASE_DIR / "sessions"
 SESSION_DIR.mkdir(exist_ok=True)

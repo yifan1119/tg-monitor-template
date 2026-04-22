@@ -91,6 +91,7 @@ commit message 里明确标出「影响文档」:
 | v2.10.24 | `update.sh` orphan cleanup 放宽 + 容器缺失检测(修升级撞冲突) | [0007](docs/adr/0007-v2.10.24-update-sh-robust-container-recreate.md) |
 | v2.10.24.1 | Sheets 读 API 配额保护:`sync_headers` + `peer_name_consistency` 间隔独立化(默认 60s → 600s)+ 紧急开关 + 修 docstring-代码不一致 | [0008](docs/adr/0008-v2.10.24.1-sheets-read-quota-fix.md) |
 | v2.10.24.2 | 预警分页历史空白自动回填(承接 v2.10.24.1):启动立刻补 + 每小时巡检;幂等只填空栏;DB 也空的 log 清单 | [0009](docs/adr/0009-v2.10.24.2-backfill-alert-history.md) |
+| v2.10.24.3 | 预警分页整行缺失自动 writeback(alerts.sheet_written + 60s loop 无限重试,保零丢失;升级后新预警不再因 429/短暂抖动丢行) | [0010](docs/adr/0010-v2.10.24.3-alert-writeback-no-loss.md) |
 
 ## 发布流程
 
@@ -109,7 +110,7 @@ commit message 里明确标出「影响文档」:
 
 ## 当前状态(2026-04-22)
 
-- main:`v2.10.24.2`(承接 v2.10.24.1:自动补填预警分页历史空白)
+- main:`v2.10.24.3`(承接 v2.10.24.2:预警分页整行缺失 writeback 无限重试,保零丢失)
 - feature/v3.0.0:Day 1 完 + Day 2 WIP(两段式预警开发中)— **需 rebase 到 v2.10.24.2 main 拿 hotfix**
 - 某客户(150+ 账号)2026-04-22 15:07 线上遇到 429 配额爆,sed 止血成功(16:25),已发 v2.10.24.1 + v2.10.24.2,待客户 `./update.sh` 升级
 

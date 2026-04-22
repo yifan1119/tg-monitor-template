@@ -35,6 +35,7 @@ class TaskScheduler:
             self._session_health_loop(),      # v2.10.4: TG session 吊销检测
             self._sheets_backlog_loop(),      # v2.10.23: Sheets 写入积压告警
             self._alert_backfill_loop(),      # v2.10.24.2: 预警分页历史空白回填巡检
+            self._alert_writeback_loop(),     # v2.10.24.3: 预警分页整行缺失无限重试(ADR-0010)
         )
 
     async def stop(self):
@@ -531,6 +532,32 @@ class TaskScheduler:
             except Exception as e:
                 logger.error("sheets_backlog_loop 异常: %s", e)
             await asyncio.sleep(300)
+
+    async def _alert_writeback_loop(self):
+        """v2.10.24.3(ADR-0010):每 N 秒扫 alerts.sheet_written=0 的预警,补写到分页。
+
+        背景:bot.py 写分页时碰 429 > 6 秒(3 retry × 2s)或 worksheet 短暂不可达
+        会静默失败 → 预警分页整行缺失。这个 loop 负责无限重试,保证预警零丢失。
+
+        语义:
+        - 仅处理 keyword(全部 sheet_written=0)+ no_reply/deleted(仅 approved)
+        - 每轮 default 60s,sheets.writeback_pending_alerts 每轮最多写 50 条
+        - 碰 429 → writeback 层自己截断本轮,loop 层等到下个周期再试 → 天然退避
+        - 关闭开关:ALERT_WRITEBACK_DISABLED=true
+
+        Codex(medium reasoning)Major 1 修复:writeback_pending_alerts 内部有
+        _rate_limit() 的 time.sleep(满 50 条一轮 ~75s)+ gspread 同步 I/O,若直接 await
+        会阻塞 event loop(bot 回调 / listener / 其他 loop)。改用 asyncio.to_thread
+        隔到 thread pool 执行。
+        """
+        await asyncio.sleep(30)  # 启动后短等,让 Sheets / DB 初始化完
+        while self._running:
+            try:
+                if not config.ALERT_WRITEBACK_DISABLED and self.sheets:
+                    await asyncio.to_thread(self.sheets.writeback_pending_alerts)
+            except Exception as e:
+                logger.error("alert_writeback_loop 异常: %s", e)
+            await asyncio.sleep(config.ALERT_WRITEBACK_INTERVAL_SEC)
 
     async def _alert_backfill_loop(self):
         """v2.10.24.2(ADR-0009):定期扫三个预警分页,把空 A/B 栏用 DB 值补上。

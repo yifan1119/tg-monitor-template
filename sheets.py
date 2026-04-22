@@ -641,6 +641,116 @@ class SheetsWriter:
         logger.info("backfill_alert_history: 完成 — 补填 %d 行,跳过 %d 行(DB 空)", total_filled, total_skipped)
         return (total_filled, total_skipped)
 
+    def writeback_pending_alerts(self, limit=50):
+        """v2.10.24.3(ADR-0010):扫 alerts.sheet_written=0 且应写分页的预警,补写回分页。
+
+        背景:bot.py 写分页时碰到 429 > 6 秒(3 retry × 2s)或 worksheet 短暂不可达
+        会静默失败 → 预警分页整行缺失(客户反馈「预警分页缺整行数据不可接受」)。
+        本 method 由 _alert_writeback_loop 每 N 秒调一次,保证 sheet_written=0 的
+        alert 被无限重试写入,直到成功。
+
+        语义:
+        - keyword 类型:全部 sheet_written=0 且非 silenced 的都补写
+        - no_reply / deleted:只补 status='approved' 的(pending/rejected 本来不写分页)
+        - 一轮最多 limit 条(默认 50,避免一次撞配额;积压多的下一轮继续)
+        - 每次 append_row 前经 _rate_limit(1.5s),一轮 50 条 ~ 75 秒 API 消耗
+        - 碰到 429 立刻停本轮,下一轮间隔(默认 60s)再试 → loop 层级退避
+        - 成功 mark sheet_written=1;失败记 last_write_error,sheet_written 保持 0
+
+        幂等:mark 后这个 alert 不会再被撈;跑多少次都不会重复写同一行。
+        返回:(written_count, failed_count)。
+        """
+        if not self.spreadsheet:
+            return (0, 0)
+        try:
+            rows = db.get_unwritten_alerts(limit=limit)
+        except Exception as e:
+            logger.warning("writeback_pending_alerts: 读 DB 失败 %s", e)
+            return (0, 0)
+        if not rows:
+            return (0, 0)
+
+        suffix = config.COMPANY_DISPLAY
+        tab_names = {
+            "no_reply": f"信息未回复预警{suffix}",
+            "keyword":  f"关键词监听{suffix}",
+            "deleted":  f"信息删除预警{suffix}",
+        }
+        ws_cache = {}  # 本轮内一个分页只 worksheet() 一次(省 fetch_sheet_metadata)
+        written = 0
+        failed = 0
+        hit_429 = False
+
+        for row in rows:
+            if hit_429:
+                break  # 配额爆 → 放弃本轮,loop 间隔后再试
+            alert_id = row["id"]
+            alert_type = row["type"]
+            tab_name = tab_names.get(alert_type)
+            if not tab_name:
+                # 防御:未知 type(不该出现)
+                logger.warning("writeback_pending_alerts: alert_id=%s 未知 type=%s,跳过", alert_id, alert_type)
+                continue
+            # v2.10.24.3 Codex round2 Major A 修复:claim-first —— append 前把 sheet_written
+            # 置 1 抢写权,rowcount=0 代表别路径/上轮已经写过,这轮跳过不重复。
+            if not db.claim_alert_for_sheet_write(alert_id):
+                logger.debug("writeback_pending_alerts: alert_id=%s 已被 claim,跳过", alert_id)
+                continue
+            append_ok = False
+            last_err = None
+            try:
+                with self._write_lock:
+                    if tab_name not in ws_cache:
+                        self._rate_limit()
+                        ws_cache[tab_name] = self.spreadsheet.worksheet(tab_name)
+                    ws = ws_cache[tab_name]
+                    created_at = row["created_at"] or db.now_bj()
+                    company = row["account_company"] or ""
+                    operator = row["account_operator"] or ""
+                    account_name = row["account_name"] or ""
+                    peer_name = row["peer_name"] or ""
+                    message_text = row["message_text"] or ""
+                    self._rate_limit()
+                    if alert_type == "keyword":
+                        keyword = row["keyword"] or ""
+                        ws.append_row([company, operator, account_name, peer_name,
+                                       keyword, message_text, created_at])
+                    else:  # no_reply / deleted 同列结构(A-F:公司/商务/外事号/广告主/消息/时间)
+                        ws.append_row([company, operator, account_name, peer_name,
+                                       message_text, created_at])
+                append_ok = True
+            except Exception as e:
+                last_err = e
+                failed += 1
+                err_str = str(e)
+                logger.warning(
+                    "writeback_pending_alerts: alert_id=%s type=%s 写入失败 %s(回滚 claim,下轮重试)",
+                    alert_id, alert_type, e,
+                )
+                # 429 / 配额爆 → 本轮不再继续,等 loop 下一轮
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "Quota exceeded" in err_str:
+                    hit_429 = True
+            if append_ok:
+                # claim-first + final done:清 claimed_at,此后 writeback 不再触碰
+                db.mark_alert_sheet_done(alert_id)
+                written += 1
+            else:
+                # claim 成功但 append 失败 → rollback sheet_written=0 + 记 last_write_error
+                db.rollback_alert_sheet_claim(alert_id, last_err)
+
+        # Codex Minor 1 修复:log 完成时附带积压量,方便观察永久性失败
+        if written or failed:
+            try:
+                backlog = db.count_unwritten_alerts()
+            except Exception:
+                backlog = -1
+            logger.info(
+                "writeback_pending_alerts: 完成 — 写入 %d 行,失败 %d 行,剩余积压 %s%s",
+                written, failed, backlog if backlog >= 0 else "?",
+                "(配额爆,本轮提前结束)" if hit_429 else "",
+            )
+        return (written, failed)
+
     def _rate_limit(self):
         elapsed = time.time() - self._last_api_call
         if elapsed < self._min_interval:

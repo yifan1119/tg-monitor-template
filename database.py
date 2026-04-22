@@ -97,6 +97,17 @@ def _run_migrations(conn):
     if version < 1:
         _migrate_to_1(conn)
         conn.execute("PRAGMA user_version=1")
+        conn.commit()  # v2.10.24.3 Codex Minor 3:每步独立 commit,缩小崩溃窗口
+
+    if version < 2:
+        _migrate_to_2(conn)
+        conn.execute("PRAGMA user_version=2")
+        conn.commit()
+
+    if version < 3:
+        _migrate_to_3(conn)
+        conn.execute("PRAGMA user_version=3")
+        conn.commit()
 
 
 def _migrate_to_1(conn):
@@ -104,6 +115,35 @@ def _migrate_to_1(conn):
     - messages 加 delete_mark_pending(删除时序修复:消息写 Sheet 前被删 → 写完立刻补标红)
     """
     _safe_add_column(conn, "messages", "delete_mark_pending", "INTEGER DEFAULT 0")
+
+
+def _migrate_to_2(conn):
+    """v2.10.24.3 → user_version=2(ADR-0010):
+    - alerts 加 sheet_written / keyword / last_write_error
+      → 支持预警分页写入失败自动 writeback(429 > 6 秒 / worksheet 短暂不可达时保零丢失)
+    - 历史 alerts 全标 sheet_written=1(不追补,仅保障升级后新产生的零损失)
+    - 历史 keyword 类型 message_text 保持 `[kw] text` 不动;新产生的拆 keyword + message_text
+    """
+    _safe_add_column(conn, "alerts", "sheet_written", "INTEGER DEFAULT 0")
+    _safe_add_column(conn, "alerts", "keyword", "TEXT DEFAULT ''")
+    _safe_add_column(conn, "alerts", "last_write_error", "TEXT DEFAULT ''")
+    # 历史 alerts 全部标 1 —— 避免 writeback loop 拿历史去重复写分页
+    conn.execute("UPDATE alerts SET sheet_written=1 WHERE sheet_written=0")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_sheet_written ON alerts(sheet_written)")
+
+
+def _migrate_to_3(conn):
+    """v2.10.24.3 → user_version=3(ADR-0010 Codex round3 P0 修复):
+    - alerts 加 claimed_at 时间戳:claim-first 语义下,claim 成功后 crash 会让
+      sheet_written 卡 1 → 永久跳过 writeback。引入 claimed_at 形成三态:
+        sheet_written=0              → 未写(writeback 捡起)
+        sheet_written=1 + claimed_at !=NULL → 进行中(stale 时 writeback 捡起重试)
+        sheet_written=1 + claimed_at IS NULL → 写完(writeback 不再触碰)
+    - 历史 alerts 升级到 user_version=2 时已全 sheet_written=1,claimed_at 默认 NULL →
+      天然视为 "已写完",不会被 writeback 误拾。
+    """
+    _safe_add_column(conn, "alerts", "claimed_at", "TEXT DEFAULT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_claimed_at ON alerts(claimed_at)")
 
 
 def _safe_add_column(conn, table, column, definition):
@@ -383,14 +423,215 @@ def get_unanswered_candidates(account_id):
 
 # ===== 预警 =====
 
-def insert_alert(alert_type, account_id, peer_id=None, msg_id=None, message_text=""):
+def insert_alert(alert_type, account_id, peer_id=None, msg_id=None, message_text="", keyword=""):
+    """v2.10.24.3:新增 keyword 参数(ADR-0010)— keyword 类型的关键词单独存栏位,
+    方便 writeback loop 在分页 append_row 时填正确列(以前 message_text 含 `[kw] text`
+    混存,拆不干净。历史 alerts 不动,迁移后新插入的 keyword 类型才分开存)。"""
     conn = get_conn()
     conn.execute("""
-        INSERT INTO alerts (type, account_id, peer_id, msg_id, message_text, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (alert_type, account_id, peer_id, msg_id, message_text, now_bj()))
+        INSERT INTO alerts (type, account_id, peer_id, msg_id, message_text, keyword, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (alert_type, account_id, peer_id, msg_id, message_text, keyword, now_bj()))
     conn.commit()
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+# v2.10.24.3(ADR-0010):预警分页写入成功/失败/巡检的 helper
+
+def claim_alert_for_sheet_write(alert_id):
+    """v2.10.24.3(ADR-0010,Codex round3 P0 修复):claim-first + stale 回收。
+
+    三态:
+      sheet_written=0                       → 未写(可 claim)
+      sheet_written=1 + claimed_at=NULL     → 写完(跳过)
+      sheet_written=1 + claimed_at!=NULL    → 进行中(超过 stale 阈值可重 claim)
+
+    SQL:
+      UPDATE sheet_written=1, claimed_at=now
+       WHERE id=? AND (sheet_written=0 OR claimed_at < stale_threshold)
+
+    返回 True:本调用 rowcount=1,caller 必须 append Sheet;成功调 mark_alert_sheet_done
+      (把 claimed_at=NULL)final done;失败调 rollback_alert_sheet_claim(回 0)。
+    返回 False:别路径已 claim 且未超 stale(或已 done)→ 跳过。
+
+    crash 场景:claim 后 append 前 crash → sheet_written=1 + claimed_at=<crash时>
+      → 过 stale 阈值(config.ALERT_WRITEBACK_CLAIM_STALE_SEC,默认 300s)后,
+      writeback loop 会再次 claim 重试。at-least-once 语义:极端 crash 窗内
+      「append 成功未 mark done」会导致下轮重复写一行(选重复 vs 永久漏行)。
+    """
+    import time as _time
+    import config as _config
+    conn = get_conn()
+    now_str = now_bj()
+    # stale_threshold 用字符串比较(格式 YYYY-MM-DD HH:MM:SS,可字典序)
+    stale_seconds = getattr(_config, "ALERT_WRITEBACK_CLAIM_STALE_SEC", 300)
+    stale_dt = datetime.now(TZ_BJ) - timedelta(seconds=stale_seconds)
+    stale_str = stale_dt.strftime("%Y-%m-%d %H:%M:%S")
+    for attempt in range(3):
+        try:
+            cur = conn.execute(
+                "UPDATE alerts SET sheet_written=1, claimed_at=?, last_write_error='' "
+                "WHERE id=? AND ("
+                "   sheet_written=0 "
+                "   OR (sheet_written=1 AND claimed_at IS NOT NULL AND claimed_at < ?)"
+                ")",
+                (now_str, alert_id, stale_str),
+            )
+            conn.commit()
+            return cur.rowcount == 1
+        except sqlite3.OperationalError as e:
+            if attempt == 2:
+                import logging as _logging
+                _logging.getLogger(__name__).error(
+                    "claim_alert_for_sheet_write 3 次都 locked alert_id=%s: %s — "
+                    "放弃 claim(本路径不写分页,下轮 loop 再试)",
+                    alert_id, e,
+                )
+                return False
+            _time.sleep(0.5 * (attempt + 1))
+    return False
+
+
+def mark_alert_sheet_done(alert_id):
+    """v2.10.24.3(ADR-0010,Codex round3 P0):claim + append 成功后标 final done
+    (清 claimed_at)。之后 writeback 不再触碰(即便 sheet_written=1 但 claimed_at=NULL
+    视为完成状态)。3 次 retry 扛 SQLite locked;全败返回 False 时 claimed_at 留着
+    → stale 阈值(5 min)后 writeback 会重试,造成最多多写一行(at-least-once)。
+    """
+    import time as _time
+    conn = get_conn()
+    for attempt in range(3):
+        try:
+            conn.execute(
+                "UPDATE alerts SET claimed_at=NULL, last_write_error='' WHERE id=?",
+                (alert_id,),
+            )
+            conn.commit()
+            return True
+        except sqlite3.OperationalError as e:
+            if attempt == 2:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "mark_alert_sheet_done 3 次都 locked alert_id=%s: %s — "
+                    "claimed_at 留着,stale 后会被 writeback 重试(可能多写一行)",
+                    alert_id, e,
+                )
+                return False
+            _time.sleep(0.5 * (attempt + 1))
+    return False
+
+
+def rollback_alert_sheet_claim(alert_id, error_text=None):
+    """v2.10.24.3(ADR-0010):claim 后 Sheet 写入失败 → 把 sheet_written 回 0,
+    claimed_at 也清,让后续 loop / bot 能立刻重新 claim 重试(不用等 stale 阈值)。
+    同时记 last_write_error。
+
+    注意:rollback 若失败(SQLite 坏 / 磁盘满,3 retry 都 locked)→ sheet_written 卡 1
+    + claimed_at 留着 —— 不会永久丢,stale 阈值后 writeback 自动重拾(代价:可能多写一行)。
+    """
+    import time as _time
+    conn = get_conn()
+    err_str = str(error_text)[:500] if error_text is not None else ''
+    for attempt in range(3):
+        try:
+            conn.execute(
+                "UPDATE alerts SET sheet_written=0, claimed_at=NULL, last_write_error=? WHERE id=?",
+                (err_str, alert_id),
+            )
+            conn.commit()
+            return True
+        except sqlite3.OperationalError as e:
+            if attempt == 2:
+                import logging as _logging
+                _logging.getLogger(__name__).error(
+                    "rollback_alert_sheet_claim 3 次都 locked alert_id=%s: %s "
+                    "(claim 留着,stale 后 writeback 会重试 —— 见 ADR-0010)",
+                    alert_id, e,
+                )
+                return False
+            _time.sleep(0.5 * (attempt + 1))
+    return False
+
+
+# 保留兼容别名(v2.10.24.3 round1 代码引入 mark_alert_sheet_written)→ round3 之后
+# 等价于 mark_alert_sheet_done,维持 API 不破。新代码请直接用 mark_alert_sheet_done。
+def mark_alert_sheet_written(alert_id):
+    """v2.10.24.3 兼容别名 → mark_alert_sheet_done"""
+    return mark_alert_sheet_done(alert_id)
+
+
+def record_alert_write_error(alert_id, error_text):
+    """v2.10.24.3:记录写入失败原因(供排查用,不影响 writeback 重试)。
+    错误字符串截 500 字避免异常 traceback 撑爆 DB。"""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE alerts SET last_write_error=? WHERE id=?",
+        (str(error_text)[:500], alert_id),
+    )
+    conn.commit()
+
+
+def _writeback_candidate_where_clause():
+    """v2.10.24.3 Codex round3 P0:sheet_written=0 OR stale claim(sheet_written=1
+    但 claimed_at 已超过 stale 阈值 = 进程 crash 遗留) —— 两者都应被 writeback 重拾。
+
+    claimed_at IS NULL 的 sheet_written=1 视为"已写完",永不重拾。
+    """
+    import config as _config
+    stale_seconds = getattr(_config, "ALERT_WRITEBACK_CLAIM_STALE_SEC", 300)
+    stale_dt = datetime.now(TZ_BJ) - timedelta(seconds=stale_seconds)
+    stale_str = stale_dt.strftime("%Y-%m-%d %H:%M:%S")
+    clause = (
+        "((a.sheet_written = 0) OR "
+        " (a.sheet_written = 1 AND a.claimed_at IS NOT NULL AND a.claimed_at < ?))"
+    )
+    return clause, stale_str
+
+
+def get_unwritten_alerts(limit=100):
+    """v2.10.24.3:取出待 writeback 的预警供 loop 扫。
+
+    规则:
+    - sheet_written=0(从未 claim)+ stale claim(sheet_written=1 且 claimed_at 超期,
+      即进程 crash 后 claim 没清也没完成)—— 两者都捡
+    - keyword 类型:status!='silenced' 就撈(命中即应写分页)
+    - no_reply / deleted 类型:只撈 status='approved'
+    - JOIN accounts + peers 一次撈齐 company/operator/account_name/peer_name
+    - LIMIT 控制一轮量(默认 100),避免一次掏光撞配额
+    """
+    where_clause, stale_str = _writeback_candidate_where_clause()
+    sql = f"""
+        SELECT
+            a.id, a.type, a.keyword, a.message_text, a.created_at, a.status,
+            acc.company AS account_company,
+            acc.operator AS account_operator,
+            acc.name AS account_name,
+            p.name AS peer_name
+        FROM alerts a
+        JOIN accounts acc ON acc.id = a.account_id
+        LEFT JOIN peers p ON p.id = a.peer_id
+        WHERE {where_clause}
+          AND a.status != 'silenced'
+          AND (
+              a.type = 'keyword'
+              OR (a.type IN ('no_reply', 'deleted') AND a.status = 'approved')
+          )
+        ORDER BY a.id
+        LIMIT ?
+    """
+    return get_conn().execute(sql, (stale_str, limit)).fetchall()
+
+
+def count_unwritten_alerts():
+    """v2.10.24.3:统计待 writeback 积压量(含 stale claim)供日志/监控用。"""
+    where_clause, stale_str = _writeback_candidate_where_clause()
+    sql = f"""
+        SELECT COUNT(*) FROM alerts a
+        WHERE {where_clause}
+          AND a.status != 'silenced'
+          AND (a.type = 'keyword' OR (a.type IN ('no_reply','deleted') AND a.status = 'approved'))
+    """
+    return get_conn().execute(sql, (stale_str,)).fetchone()[0]
 
 
 def update_alert_status(alert_id, status, bot_message_id=None):
@@ -433,15 +674,26 @@ def get_alert(alert_id):
 def has_alert_today(alert_type, peer_id):
     """检查某个对话今天是否已经有过此类预警。
 
-    v2.10.23:只认真正送达(bot_message_id IS NOT NULL)或明确静默(status='silenced')
-    的记录参与去重 — 以前发送失败也会占去重记录导致当天不再重试,
-    还有 ALERT_XXX_ENABLED=False 时也会写 DB 记录静默掉整天。"""
+    v2.10.23:no_reply / deleted 走审批流 — 只认真正送达(bot_message_id IS NOT NULL)
+    或明确静默(status='silenced')的记录参与去重 — 以前发送失败也会占去重记录导致
+    当天不再重试,还有 ALERT_XXX_ENABLED=False 时也会写 DB 记录静默掉整天。
+
+    v2.10.24.3:keyword 类型没有审批流,v2.10.24.3 改成先 insert_alert 再推 TG 再写 Sheet
+    (保证 Sheet 不丢行的 writeback 前提)。此时 bot_message_id 可能一直 NULL(keyword
+    路径没记 message id),只要 DB 里有今日的 keyword 行,就算已处理 — 不然 TG 推送失败
+    时下一次触发会再插一条、再写一行 Sheet 造成重复。"""
     today = datetime.now(TZ_BJ).strftime("%Y-%m-%d")
-    row = get_conn().execute(
-        "SELECT COUNT(*) FROM alerts WHERE type=? AND peer_id=? AND created_at LIKE ? "
-        "AND (bot_message_id IS NOT NULL OR status='silenced')",
-        (alert_type, peer_id, f"{today}%")
-    ).fetchone()
+    if alert_type == "keyword":
+        row = get_conn().execute(
+            "SELECT COUNT(*) FROM alerts WHERE type='keyword' AND peer_id=? AND created_at LIKE ?",
+            (peer_id, f"{today}%")
+        ).fetchone()
+    else:
+        row = get_conn().execute(
+            "SELECT COUNT(*) FROM alerts WHERE type=? AND peer_id=? AND created_at LIKE ? "
+            "AND (bot_message_id IS NOT NULL OR status='silenced')",
+            (alert_type, peer_id, f"{today}%")
+        ).fetchone()
     return row[0] > 0
 
 

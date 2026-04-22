@@ -117,9 +117,22 @@ class AlertBot:
         ])
 
     def _write_alert_to_sheet(self, alert):
-        """审核通过后写入预警分表"""
+        """审核通过后写入预警分表。
+
+        v2.10.24.3(ADR-0010 + Codex round2 Major A 修复):claim-first 语义 ——
+        - 先 claim_alert_for_sheet_write(sheet_written=1)抢到写权
+        - 写成功 → 保留 sheet_written=1 返回(DB 已经持久,不会重写)
+        - 写失败 3 次 → rollback_alert_sheet_claim(sheet_written=0 + last_write_error)
+          交给 _alert_writeback_loop 接力重试(无限次,保零丢失)
+        - 没 claim 到(sheet_written 已是 1)→ 别的路径已写,直接跳过
+        """
         if not self.sheets:
             return
+        if not db.claim_alert_for_sheet_write(alert["id"]):
+            logger.debug("alert_id=%s 已被其他路径 claim,跳过 _write_alert_to_sheet", alert["id"])
+            return
+        last_err = None
+        append_ok = False
         for attempt in range(3):
             try:
                 account = db.get_conn().execute(
@@ -146,14 +159,28 @@ class AlertBot:
                         # 第 5 列写入"删除前消息内容"方便主管看板回溯
                         ws.append_row([company, operator, account_name, peer_name,
                                        alert["message_text"] or "", now])
-                return
+                append_ok = True
+                break
             except Exception as e:
-                logger.error("写入预警分表失败 (尝试 %d/3): %s", attempt + 1, e)
+                last_err = e
+                logger.error("写入预警分表失败 alert_id=%s (尝试 %d/3): %s", alert["id"], attempt + 1, e)
                 if attempt < 2:
                     import time; time.sleep(2)
+        if append_ok:
+            # claim-first + final done:清 claimed_at,此后 writeback 不再触碰这条
+            db.mark_alert_sheet_done(alert["id"])
+        else:
+            # claim 已成功但写分页 3 次失败 → 回滚让 writeback loop 接力
+            db.rollback_alert_sheet_claim(alert["id"], last_err)
 
     async def send_keyword_alert(self, account_id, peer, keyword, text):
-        """发送关键词预警（每个对话框每天只推一次）"""
+        """发送关键词预警（每个对话框每天只推一次）
+
+        v2.10.24.3(ADR-0010):顺序反转 — 先 insert_alert 拿 id(sheet_written=0),
+        再写分页,成功 mark 为 1;失败静默保留 0,交 _alert_writeback_loop 接力
+        无限重试(保证 429 > 6 秒或 worksheet 短暂不可达时零丢失)。
+        message_text 只存 text,keyword 单独栏位(之前 `[kw] text` 混存,writeback 时拆不干净)。
+        """
         if not self.bot or not config.ALERT_GROUP_ID:
             return
         if db.has_alert_today("keyword", peer["id"]):
@@ -162,6 +189,11 @@ class AlertBot:
         account = db.get_conn().execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
         if not account:
             return
+
+        # v2.10.24.3: 先插 DB 拿 alert_id,写入分页失败由 writeback loop 接力
+        alert_id = db.insert_alert(
+            "keyword", account_id, peer["id"], message_text=text, keyword=keyword,
+        )
 
         msg = templates.keyword_alert(
             company=account["company"],
@@ -180,26 +212,39 @@ class AlertBot:
                 await self.bot.send_message(config.ALERT_GROUP_ID, msg)
             else:
                 logger.info("[ALERT_KEYWORD_DISABLED] 跳过关键词推送 peer=%s keyword=%s (Sheet 仍写入)", peer["id"], keyword)
-            # 写入关键词监听分表: 所属公司,商务人员,外事号,广告主,关键词,消息内容,记录时间
-            if self.sheets:
-                for attempt in range(3):
-                    try:
-                        with self.sheets._write_lock:
-                            ws = self.sheets.spreadsheet.worksheet(f"关键词监听{config.COMPANY_DISPLAY}")
-                            self.sheets._rate_limit()
-                            ws.append_row([
-                                account["company"], account["operator"], account["name"],
-                                peer["name"], keyword, text, db.now_bj()
-                            ])
-                        break
-                    except Exception as e2:
-                        logger.error("写入关键词分表失败 (尝试 %d/3): %s", attempt + 1, e2)
-                        if attempt < 2:
-                            import time; time.sleep(2)
-            # 记录到 alerts 表
-            db.insert_alert("keyword", account_id, peer["id"], message_text=f"[{keyword}] {text}")
         except Exception as e:
-            logger.error("发送关键词预警失败: %s", e)
+            logger.error("发送关键词预警(TG 推送)失败 alert_id=%s: %s", alert_id, e)
+
+        # 写入关键词监听分表: 所属公司,商务人员,外事号,广告主,关键词,消息内容,记录时间
+        # v2.10.24.3 Codex round2 Major A 修复:claim-first,append 前 mark,append 失败 rollback
+        if self.sheets:
+            if not db.claim_alert_for_sheet_write(alert_id):
+                logger.debug("alert_id=%s 已被其他路径 claim,跳过关键词分页写入", alert_id)
+                return
+            last_err = None
+            append_ok = False
+            for attempt in range(3):
+                try:
+                    with self.sheets._write_lock:
+                        ws = self.sheets.spreadsheet.worksheet(f"关键词监听{config.COMPANY_DISPLAY}")
+                        self.sheets._rate_limit()
+                        ws.append_row([
+                            account["company"], account["operator"], account["name"],
+                            peer["name"], keyword, text, db.now_bj()
+                        ])
+                    append_ok = True
+                    break
+                except Exception as e2:
+                    last_err = e2
+                    logger.error("写入关键词分表失败 alert_id=%s (尝试 %d/3): %s", alert_id, attempt + 1, e2)
+                    if attempt < 2:
+                        import time; time.sleep(2)
+            if append_ok:
+                # claim-first + final done:清 claimed_at,此后 writeback 不再触碰这条
+                db.mark_alert_sheet_done(alert_id)
+            else:
+                # claim 已成功但写分页 3 次失败 → 回滚让 writeback loop 接力
+                db.rollback_alert_sheet_claim(alert_id, last_err)
 
     async def send_no_reply_alert(self, account_id, peer, message_text, msg_id):
         """发送未回复预警（每个广告主每天只推一次）
