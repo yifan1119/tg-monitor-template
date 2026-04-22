@@ -67,6 +67,18 @@ def reload_if_env_changed():
             if _x.isdigit():
                 _new_set.add(int(_x))
     CALLBACK_AUTH_USER_IDS = _new_set
+    # v3.0.0 批次 A: 两段式开关 + 独立预警群 + stage2 等待分钟 都支持热 reload
+    TWO_STAGE_NO_REPLY_ENABLED = os.environ.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true"
+    try:
+        NO_REPLY_STAGE2_AFTER_MIN = int(os.environ.get("NO_REPLY_STAGE2_AFTER_MIN", "10"))
+    except ValueError:
+        pass
+    _unreplied_group_new = os.environ.get("UNREPLIED_ALERT_GROUP_ID", "0").strip()
+    UNREPLIED_ALERT_GROUP_ID = (
+        int(_unreplied_group_new)
+        if _unreplied_group_new and _unreplied_group_new != "0" and _unreplied_group_new.lstrip("-").isdigit()
+        else 0
+    )
     return True
 
 
@@ -148,12 +160,21 @@ HISTORY_PULL_CONCURRENCY = int(os.environ.get("HISTORY_PULL_CONCURRENCY", "3"))
 TWO_STAGE_NO_REPLY_ENABLED = os.environ.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true"
 
 # v3.0.0: stage1 → stage2 的等待分钟数(默认 10 分钟,合计 30+10=40 分钟才会 at 负责人)
-NO_REPLY_STAGE2_AFTER_MIN = int(os.environ.get("NO_REPLY_STAGE2_AFTER_MIN", "10"))
+# v2.10.25(Codex Major #2):非数字 fallback 10 不崩启动
+try:
+    NO_REPLY_STAGE2_AFTER_MIN = int(os.environ.get("NO_REPLY_STAGE2_AFTER_MIN", "10"))
+except ValueError:
+    NO_REPLY_STAGE2_AFTER_MIN = 10
 
 # v3.0.0: 未回复预警专用群(空则 fallback 到 ALERT_GROUP_ID,老部署无感)
 # 配了 = 未回复 stage1/stage2 推这个群,删除 + 关键词仍推 ALERT_GROUP_ID
+# v2.10.25(Codex Major #2):启动期也用安全 parser,非数字值 fallback 0 不崩启动
 _unreplied_group = os.environ.get("UNREPLIED_ALERT_GROUP_ID", "0").strip()
-UNREPLIED_ALERT_GROUP_ID = int(_unreplied_group) if _unreplied_group and _unreplied_group != "0" else 0
+UNREPLIED_ALERT_GROUP_ID = (
+    int(_unreplied_group)
+    if _unreplied_group and _unreplied_group != "0" and _unreplied_group.lstrip("-").isdigit()
+    else 0
+)
 
 # 工作时段（北京时间，周一=0, 周日=6）
 # 每段格式: (开始小时, 开始分钟, 结束小时, 结束分钟)

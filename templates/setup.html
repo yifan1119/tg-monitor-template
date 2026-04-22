@@ -725,6 +725,21 @@
           多个人用英文逗号分隔,例如:<code>123456789,987654321</code>
         </div>
       </div>
+
+      {% if d.two_stage_no_reply_enabled %}
+      <!-- v3.0.0 批次 A: 两段式未回复预警独立群(条件渲染) -->
+      <div class="field">
+        <label>未回复预警专用群 Chat ID <span style="color:#7c8a9a;font-weight:400;">(选填,留空=跟其他预警推同一群)</span></label>
+        <input type="text" name="unreplied_alert_group_id" id="unreplied_alert_group_id"
+               value="{{ d.unreplied_alert_group_id }}"
+               placeholder="-100xxxxxxxxxx(两段式未回复预警单独推这个群,留空则推主预警群)">
+        <div class="hint">
+          <b>两段式未回复预警</b>(30 分钟未回复 + 40 分钟升级)会推到这个独立群,
+          <b>删除消息 / 关键词预警仍推主预警群</b>。留空则全部推主预警群(跟以前一样)。<br>
+          群 ID 取法跟「预警群 Chat ID」一样,邀请 @userinfobot 进群看它回的 <code>Id:</code>。
+        </div>
+      </div>
+      {% endif %}
     </div>
 
     <div class="section">

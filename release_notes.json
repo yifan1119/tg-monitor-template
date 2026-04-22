@@ -123,6 +123,10 @@
     "title": "v2.10.22",
     "body": "修复: 升级后自动恢复挂掉的 Caddy(HTTPS 部署不再手动救)\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   },
+  "v2.10.25": {
+    "title": "🆕 两段式预警配置 UI(批次 A — 数据就位不触发)",
+    "body": "两段式未回复预警拆成 4 版发布,本版是批次 A:数据层 + UI 入口就位,**不改变任何行为**。\n\n功能:\n- 设置页新增「未回复预警专用群」输入(空则跟老群共用)\n- 账号管理页每个账号加「配置两段式」按钮 + 模态框:填商务人员 TG / 负责人 TG / 30-40 分钟提醒文案\n\n激活条件:在 .env 里写 `TWO_STAGE_NO_REPLY_ENABLED=true` 才会显示以上 UI(默认关 = UI 完全不可见 = 行为跟 v2.10.24 一样)。\n\n新 API:`GET/PATCH /api/accounts/<id>/notify-config`(curl 也可以用,方便批量脚本预配置)\n\n**注意**:本版只是数据和 UI 就位,真正的 stage1/stage2 推送要等后续批次 B+C,填了字段不会立刻生效。\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"
+  },
   "v2.10.24": {
     "title": "🔧 升级流程修补 — 升级不再撞容器冲突",
     "body": "修两个升级体验 bug:\n\n1. 升级时遇到「container name already in use」冲突 — 以前只清 compose label 对不上的同名容器,label 匹配但容器异常(上次升级中断残留)会跳过不清,导致 compose 创建新容器撞冲突升级失败。现在见同名就清,Caddy 除外(避免破坏 HTTPS 自恢复)\n\n2. 手动 docker rm 清过容器后跑 ./update.sh 被「当前已是最新版」误导退出 — 以前只看代码 SHA,容器不存在也不管。现在会检测 tg-monitor / tg-web 容器是否存在,缺失的话跳过 git pull 但继续重建\n\n升级:\n`cd /root/tg-monitor-<部门> && ./update.sh`"

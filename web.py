@@ -708,6 +708,8 @@ def get_sessions():
         account = db.get_account_by_phone(phone)
         if account and account["name"]:
             sessions.append({
+                # v3.0.0 批次 A: 多返一个 id 给模板调 /api/accounts/<id>/notify-config 用
+                "id": account["id"],
                 "phone": phone,
                 "name": account["name"],
                 "username": account["username"] or "",
@@ -727,9 +729,11 @@ def get_sessions():
                     me = run_async(_get_me(client))
                     name = ((me.first_name or "") + " " + (me.last_name or "")).strip()
                     username = me.username or ""
-                    # 写入 DB
-                    db.upsert_account(phone=phone, name=name, username=username, tg_id=me.id)
+                    # 写入 DB(返回新建/更新的 account row,方便取 id)
+                    # v2.10.25(Codex Major #4 修复):所有分支返回 dict 都加 id 字段
+                    new_acc = db.upsert_account(phone=phone, name=name, username=username, tg_id=me.id)
                     sessions.append({
+                        "id": new_acc["id"] if new_acc else None,
                         "phone": phone, "name": name, "username": username,
                         "tg_id": me.id, "company": "", "operator": "", "status": "active",
                         "session_status": (_session_states.get(phone) or {}).get("status", "healthy"),
@@ -737,6 +741,7 @@ def get_sessions():
                     run_async(_disconnect(client))
                 else:
                     sessions.append({
+                        "id": None,   # v2.10.25: 无 DB 记录的 session,模板条件渲染时 id 为空不出按钮
                         "phone": phone, "name": "", "username": "",
                         "tg_id": "", "company": "", "operator": "", "status": "expired",
                         "session_status": "revoked",
@@ -744,6 +749,7 @@ def get_sessions():
                     run_async(_disconnect(client))
             except Exception as e:
                 sessions.append({
+                    "id": None,   # v2.10.25: 异常 session 也给 id=None
                     "phone": phone, "name": "", "username": "",
                     "tg_id": "", "company": "", "operator": "", "status": "error",
                     "session_status": "error",
@@ -802,6 +808,10 @@ def setup_page():
         "alert_group_id": env.get("ALERT_GROUP_ID", ""),
         # v2.10.23: 审核按钮白名单(空=不校验)
         "callback_auth_user_ids": env.get("CALLBACK_AUTH_USER_IDS", ""),
+        # v3.0.0 批次 A: 两段式未回复预警 — 独立预警群 + 总开关(UI 条件渲染)
+        "unreplied_alert_group_id": env.get("UNREPLIED_ALERT_GROUP_ID", ""),
+        "two_stage_no_reply_enabled": env.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true",
+        "no_reply_stage2_after_min": env.get("NO_REPLY_STAGE2_AFTER_MIN", "10"),
         "sheet_id": env.get("SHEET_ID", ""),
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
@@ -833,6 +843,10 @@ def settings_page():
         "alert_group_id": env.get("ALERT_GROUP_ID", ""),
         # v2.10.23: 审核按钮白名单(空=不校验)
         "callback_auth_user_ids": env.get("CALLBACK_AUTH_USER_IDS", ""),
+        # v3.0.0 批次 A: 两段式未回复预警 — 独立预警群 + 总开关(UI 条件渲染)
+        "unreplied_alert_group_id": env.get("UNREPLIED_ALERT_GROUP_ID", ""),
+        "two_stage_no_reply_enabled": env.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true",
+        "no_reply_stage2_after_min": env.get("NO_REPLY_STAGE2_AFTER_MIN", "10"),
         "sheet_id": env.get("SHEET_ID", ""),
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
@@ -1382,6 +1396,17 @@ def _save_settings(is_first):
     }
     if is_first:
         updates["WEB_PORT"] = read_env().get("WEB_PORT", "5001")
+
+    # v2.10.25 (Codex Major #2 + Minor #1):
+    # UNREPLIED_ALERT_GROUP_ID 只在 form 里真的有这个 key(flag 开时 UI 才渲染)才写入,
+    # 避免 flag 关时保存其他设置把已有值清掉。
+    # 写入前做数字校验,非法值直接拒绝保存,避免 config.py 启动期 int() 炸。
+    if "unreplied_alert_group_id" in form:
+        _urg = (form.get("unreplied_alert_group_id") or "").strip()
+        if _urg and not _urg.lstrip("-").isdigit():
+            return jsonify({"ok": False, "msg": f"未回复预警群 ID 必须是整数(可以是负数),当前填的是: {_urg}"})
+        updates["UNREPLIED_ALERT_GROUP_ID"] = _urg
+
     write_env(updates)
 
     # 重新加载 config 模块，让 web 这一进程立即看到新的 API_ID / API_HASH / BOT_TOKEN / SHEET_ID
@@ -1698,6 +1723,13 @@ def logout():
 @login_required
 def index():
     db.init_db()
+    # v2.10.25 (Codex Minor #2): 手工改 .env 打开 TWO_STAGE_NO_REPLY_ENABLED 后,首页
+    # 应立刻能看到「配置两段式」按钮。调 reload_if_env_changed() 拉一次最新 flag
+    # 到本进程 config 模块(无变化时开销极低,就一次 os.stat)。
+    try:
+        config.reload_if_env_changed()
+    except Exception:
+        pass
     sessions = get_sessions()
     return render_template(
         "index.html",
@@ -1709,6 +1741,8 @@ def index():
         alert_no_reply_enabled=config.ALERT_NO_REPLY_ENABLED,
         alert_delete_enabled=config.ALERT_DELETE_ENABLED,
         operator_label=config.OPERATOR_LABEL,
+        # v3.0.0 批次 A: 两段式预警总开关(模板用来条件渲染 4 字段配置 UI)
+        two_stage_no_reply_enabled=getattr(config, "TWO_STAGE_NO_REPLY_ENABLED", False),
     )
 
 
@@ -2074,6 +2108,50 @@ def restart_monitor():
         return jsonify({"ok": True, "msg": "监控已重启，新账号将自动开始监听"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
+
+
+# v3.0.0: 两段式未回复预警的 4 字段 per-account 配置
+# v2.10.25 (Codex Major #3): 加 @admin_required,防止普通用户 IDOR 枚举/修改
+#   所有账号的通知配置(业务影响:4 字段保存的是 TG ID,泄漏可能导致恶意 @ 或推送)
+@app.route("/api/accounts/<int:account_id>/notify-config", methods=["GET", "PATCH"])
+@admin_required
+def api_account_notify_config(account_id):
+    """v3.0.0(批次 A):读写账号的两段式预警配置。
+
+    GET  → 返回 {business_tg_id, owner_tg_id, remind_30min_text, remind_40min_text}
+    PATCH → body 含上述任一字段,只更新传入的字段(db.update_account_two_stage)
+    需要 TWO_STAGE_NO_REPLY_ENABLED=true 才启用;关闭时 API 仍可读写(方便预配置),
+    UI 由模板自己的 {% if two_stage_no_reply_enabled %} 控制可见性。"""
+    acc = db.get_account_by_id(account_id)
+    if not acc:
+        return jsonify({"ok": False, "error": "账号不存在"}), 404
+
+    if request.method == "GET":
+        return jsonify({
+            "ok": True,
+            "business_tg_id":   acc["business_tg_id"] or "" if "business_tg_id" in acc.keys() else "",
+            "owner_tg_id":      acc["owner_tg_id"] or ""    if "owner_tg_id"    in acc.keys() else "",
+            "remind_30min_text": acc["remind_30min_text"] or "" if "remind_30min_text" in acc.keys() else "",
+            "remind_40min_text": acc["remind_40min_text"] or "" if "remind_40min_text" in acc.keys() else "",
+        })
+
+    # PATCH
+    data = request.get_json(silent=True) or {}
+    # 只接受预期字段 + 归一化(去首尾空格)
+    kwargs = {}
+    for k in ("business_tg_id", "owner_tg_id", "remind_30min_text", "remind_40min_text"):
+        if k in data:
+            v = (data.get(k) or "").strip()
+            kwargs[k] = v
+    if not kwargs:
+        return jsonify({"ok": False, "error": "没有要更新的字段"}), 400
+
+    try:
+        db.update_account_two_stage(account_id, **kwargs)
+        return jsonify({"ok": True, "updated": list(kwargs.keys())})
+    except Exception as e:
+        logger.error("更新账号通知配置失败 id=%s: %s", account_id, e)
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/remove", methods=["POST"])

@@ -130,11 +130,21 @@ def _migrate_to_2(conn):
 
 
 def _safe_add_column(conn, table, column, definition):
-    """幂等 ADD COLUMN — 列已存在则跳过,避免 migration 重复跑炸"""
+    """幂等 ADD COLUMN — 列已存在则跳过,避免 migration 重复跑炸。
+
+    v2.10.25(Codex Major #1 修复):web + tg-monitor 两个容器并发启动都会调
+    init_db,check-then-alter 有竞态。加 try/except 捕获 SQLite 的 duplicate column
+    错误作为兜底,即使第一次 check 过关但实际 alter 撞并发也不会炸。"""
     existing = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
     if column in existing:
         return
-    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except sqlite3.OperationalError as e:
+        # "duplicate column name: xxx" 说明另一个进程已经加过 — 幂等吞掉
+        if "duplicate column" in str(e).lower():
+            return
+        raise
 
 
 def now_bj():

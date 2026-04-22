@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.24(2026-04-21) — 升级流程修补:升级不再撞容器冲突 + 手动清容器后能自动重建
+> 📌 **最新版**:v2.10.25(2026-04-22) — 两段式预警数据层 + UI 配置入口(批次 A,`TWO_STAGE_NO_REPLY_ENABLED` 默认关,行为不变)
 
 ---
 
@@ -390,7 +390,25 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.24** (2026-04-21) — 当前稳定版 **(升级流程修补,推荐升级避免卡住)**
+- **v2.10.25** (2026-04-22) — 当前稳定版 **(两段式预警数据层 + UI 批次 A,`TWO_STAGE_NO_REPLY_ENABLED` 默认关行为不变)**
+  - [NEW] **DB migration_v2**(ADR-0008)— `accounts` 加 4 字段(`business_tg_id`
+    / `owner_tg_id` / `remind_30min_text` / `remind_40min_text`)+ `alerts` 加
+    `stage INTEGER DEFAULT 0`(保留 `type='no_reply'` 不变见 ADR-0005)
+  - [NEW] **3 个 feature flag**:`TWO_STAGE_NO_REPLY_ENABLED`(默认 false) /
+    `NO_REPLY_STAGE2_AFTER_MIN`(默认 10) / `UNREPLIED_ALERT_GROUP_ID`(默认 0,
+    fallback 到主预警群)— 全部加入 `config.reload_if_env_changed()` 热 reload
+  - [NEW] **设置页加「未回复预警专用群」输入**(条件渲染,flag 关时不显示)—
+    `templates/setup.html` + `web.py:settings_page` / `_save_settings`
+  - [NEW] **账号管理页加「配置两段式」按钮 + 模态框**(条件渲染)— 每账号可填
+    4 字段 + 保存,`templates/index.html` + 新 API `/api/accounts/<id>/notify-config`
+    (GET/PATCH)
+  - [SAFE] **flag 默认关 = 完全等于 v2.10.24 行为**:UI 不显示、数据字段留空、
+    alerts 扫描不带 stage 过滤照常工作
+  - [SKIP] 批次 B(bot 两段式推送函数)和批次 C(scan loop + listener 事件
+    驱动)不在本版本,留给 v2.10.26 / v2.10.27
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.24** (2026-04-21) **(升级流程修补,推荐升级避免卡住)**
   - [FIX] **`update.sh` orphan cleanup 放宽**(ADR-0007)— 以前只清 `compose
     project label` 对不上的同名容器,label 匹配但容器异常(上次升级中断残留)
     会跳过不清 → `docker compose up --build` 撞 `container name "/tg-xxx"
