@@ -88,6 +88,7 @@ commit message 里明确标出「影响文档」:
 | v2.10.23 | `upsert_account` 不再覆盖业务字段(改成 ON CONFLICT 只更新 TG 身份) | [0004](docs/adr/0004-v2.10.23-upsert-account-no-business-override.md) |
 | v3.0.0 | 两段式预警用 `alerts.stage` 字段而不是改 `type`(向后兼容回滚) | [0005](docs/adr/0005-v3.0.0-two-stage-use-stage-column.md) |
 | v2.10.23 | `sync_headers` 单账号异常隔离(同 flush_pending 逻辑,修 B2/B3 推送空白) | [0006](docs/adr/0006-v2.10.23-sync-headers-per-account-isolation.md) |
+| v2.10.24 | `update.sh` orphan cleanup 放宽 + 容器缺失检测(修升级撞冲突) | [0007](docs/adr/0007-v2.10.24-update-sh-robust-container-recreate.md) |
 
 ## 发布流程
 

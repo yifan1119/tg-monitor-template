@@ -65,38 +65,62 @@ REMOTE_SHA=$(git rev-parse origin/main)
 REMOTE_SHORT=$(git rev-parse --short origin/main)
 
 if [ "$OLD_SHA" = "$REMOTE_SHA" ]; then
-    echo ""
-    echo "ℹ 当前已是最新版 (${OLD_SHORT}),无需升级"
-    echo "  如需强制重建容器: docker compose -p tg-${COMPANY_NAME} up -d --build"
-    exit 0
-fi
+    # v2.10.24: 即使代码是最新,也要检查容器是否缺失。
+    # 如果 tg-monitor / tg-web 任一容器不存在(可能被 docker rm 清过),跳过 pull 但继续重建。
+    # 避免客户误删容器后跑 update.sh 被「已是最新版」误导不知道下一步。
+    MISSING=""
+    for c in "tg-monitor-${COMPANY_NAME}" "tg-web-${COMPANY_NAME}"; do
+        if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${c}$"; then
+            MISSING="${MISSING} ${c}"
+        fi
+    done
 
-echo "  本地: ${OLD_SHORT}  →  远端: ${REMOTE_SHORT}"
-echo "$OLD_SHA" > .last_commit
-echo "📌 升级前版本: ${OLD_SHORT}"
-
-# ===== 2. 本地修改保护:有 modified 的 tracked 文件就 stash =====
-if git status --porcelain | grep -qE "^[ MARC]M|^M[ MARC]"; then
-    STASH_TAG="auto-stash-update-$(date +%Y%m%d-%H%M%S)"
-    echo ""
-    echo "⚠ 检测到本地修改的 tracked 文件,自动 stash 保护:"
-    git status --porcelain | grep -E "^[ MARC]M|^M[ MARC]" | sed 's/^/   /'
-    if git stash push -m "$STASH_TAG" >/dev/null 2>&1; then
-        echo "   ✅ 已 stash (标签: ${STASH_TAG})"
-        echo "   想还原本地修改: git stash list / git stash pop"
+    if [ -z "$MISSING" ]; then
+        echo ""
+        echo "ℹ 当前已是最新版 (${OLD_SHORT}),所有容器存在,无需升级"
+        echo "  如需强制重建容器: docker compose -p tg-${COMPANY_NAME} up -d --build"
+        exit 0
     else
-        echo "   ⚠ stash 失败,仍会强制覆盖"
-        STASH_TAG=""
+        echo ""
+        echo "ℹ 当前代码已是最新 (${OLD_SHORT}),但检测到容器缺失:${MISSING}"
+        echo "  跳过 git pull,继续重建容器..."
+        NEW_SHA="$OLD_SHA"
+        NEW_SHORT="$OLD_SHORT"
+        echo "$OLD_SHA" > .last_commit
+        # 跳到重建步骤,不走 git stash / git reset 流程
+        SKIP_CODE_PULL=1
     fi
 fi
 
-# ===== 3. 拉最新代码 =====
-echo ""
-echo "📥 拉取最新代码..."
-git reset --hard origin/main
-NEW_SHA=$(git rev-parse HEAD)
-NEW_SHORT=$(git rev-parse --short HEAD)
-echo "  ✅ 代码已同步到 ${NEW_SHORT}"
+# v2.10.24: 如果是「代码最新但容器缺失」走过来的,跳过 stash / git reset
+if [ -z "$SKIP_CODE_PULL" ]; then
+    echo "  本地: ${OLD_SHORT}  →  远端: ${REMOTE_SHORT}"
+    echo "$OLD_SHA" > .last_commit
+    echo "📌 升级前版本: ${OLD_SHORT}"
+
+    # ===== 2. 本地修改保护:有 modified 的 tracked 文件就 stash =====
+    if git status --porcelain | grep -qE "^[ MARC]M|^M[ MARC]"; then
+        STASH_TAG="auto-stash-update-$(date +%Y%m%d-%H%M%S)"
+        echo ""
+        echo "⚠ 检测到本地修改的 tracked 文件,自动 stash 保护:"
+        git status --porcelain | grep -E "^[ MARC]M|^M[ MARC]" | sed 's/^/   /'
+        if git stash push -m "$STASH_TAG" >/dev/null 2>&1; then
+            echo "   ✅ 已 stash (标签: ${STASH_TAG})"
+            echo "   想还原本地修改: git stash list / git stash pop"
+        else
+            echo "   ⚠ stash 失败,仍会强制覆盖"
+            STASH_TAG=""
+        fi
+    fi
+
+    # ===== 3. 拉最新代码 =====
+    echo ""
+    echo "📥 拉取最新代码..."
+    git reset --hard origin/main
+    NEW_SHA=$(git rev-parse HEAD)
+    NEW_SHORT=$(git rev-parse --short HEAD)
+    echo "  ✅ 代码已同步到 ${NEW_SHORT}"
+fi
 
 # ===== 3.5 .env migrate — 老部署升级时自动补新字段 =====
 #   v2.8.0: METRICS_TOKEN (中央台接入)
@@ -124,19 +148,19 @@ fi
 
 # ===== 4. 重建容器 =====
 echo ""
-# v2.10.20: compose up --build 遇到 "container name already in use" 时不会自动清,
-#   常见于:旧版本 compose 文件 project label 跟当前 -p 参数不一致,或者 label 丢失。
-#   强制清跟当前 project 不一致的同名容器(跟 install.sh 逻辑对齐),
-#   tg-(monitor|web|caddy)-<部门> 三个名字本来就是当前部门独占。
+# v2.10.24: 放宽 orphan cleanup 逻辑,解决「label 匹配但容器异常」场景下还是撞
+#   "container name already in use" 的问题(客户反馈)。
+#   - 不再检查 compose project label:tg-(monitor|web)-<部门> 这两个名字本来就是
+#     当前部门独占的,见到同名容器无条件清。(跟 install.sh v2.10.20+ 对齐)
+#   - 不清 tg-caddy-<部门>:Caddy 是 profile 服务,v2.10.22 末端的 HTTPS 保护
+#     块需要它"存在"才能检测 + 拉起;清了反而破坏 HTTPS 自恢复机制。
 ORPHANS=$(docker ps -a --format '{{.Names}}' 2>/dev/null \
-    | grep -E "^tg-(monitor|web|caddy)-${COMPANY_NAME}$" || true)
+    | grep -E "^tg-(monitor|web)-${COMPANY_NAME}$" || true)
 if [ -n "$ORPHANS" ]; then
     for c in $ORPHANS; do
         proj=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$c" 2>/dev/null || echo "")
-        if [ "$proj" != "tg-${COMPANY_NAME}" ]; then
-            echo "  🧹 清理同名容器: $c (compose project=\"$proj\")"
-            docker rm -f "$c" >/dev/null 2>&1 || true
-        fi
+        echo "  🧹 清理同名容器: $c (compose project=\"$proj\")"
+        docker rm -f "$c" >/dev/null 2>&1 || true
     done
 fi
 
