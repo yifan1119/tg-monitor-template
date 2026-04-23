@@ -1,4 +1,5 @@
 """TG Bot — 预警推送 + 审核按钮"""
+import html
 import json
 import logging
 import asyncio
@@ -73,7 +74,9 @@ class AlertBot:
             chat = message.chat
             chat_id = chat.id
             chat_type = chat.type
-            title = chat.title or (message.from_user.full_name if message.from_user else "") or "?"
+            # Codex round2 P1:title 是用户可控,直接拼 HTML 遇到 & / < 会让 parse_mode=HTML 解析失败
+            raw_title = chat.title or (message.from_user.full_name if message.from_user else "") or "?"
+            title = html.escape(raw_title)
             if chat_type == "supergroup":
                 reply = (
                     f"🆔 <b>Chat ID</b>:<code>{chat_id}</code>\n"
