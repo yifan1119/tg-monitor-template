@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -641,11 +642,17 @@ def run_async(coro):
 
 
 async def _make_client(session_path):
-    """在 _loop 线程内创建 TelegramClient（避免 no event loop 错误）"""
+    """在 _loop 线程内创建 TelegramClient（避免 no event loop 错误）
+
+    v3.0.0 Codex P3:web 登录流建 client 也用 TG_* 伪装字段,跟 listener 端到端一致,
+    避免首次登入就在 TG「其他会话」留下 openclaw/shencha 等不一致标识。"""
     return TelegramClient(
         session_path, config.API_ID, config.API_HASH,
-        device_model=config.DEVICE_NAME,
-        system_version="1.0", app_version="1.0",
+        device_model=config.TG_DEVICE_MODEL,
+        system_version=config.TG_SYSTEM_VERSION,
+        app_version=config.TG_APP_VERSION,
+        lang_code=config.TG_LANG_CODE,
+        system_lang_code=config.TG_SYSTEM_LANG,
     )
 
 
@@ -700,7 +707,12 @@ def _load_session_states_map():
 
 
 def get_sessions():
-    """扫描 sessions 目录，返回已有的 session 列表"""
+    """扫描 sessions 目录，返回已有的 session 列表。
+
+    v3.0.0: 返回结构多带 id 字段给 index.html 「配置两段式」按钮调
+    `/api/accounts/<id>/notify-config`。Session 没对应 DB 账号时 id=None,模板条件
+    渲染会隐藏按钮。
+    """
     sessions = []
     _session_states = _load_session_states_map()
     for f in config.SESSION_DIR.glob("*.session"):
@@ -709,6 +721,7 @@ def get_sessions():
         account = db.get_account_by_phone(phone)
         if account and account["name"]:
             sessions.append({
+                "id": account["id"],  # v3.0.0
                 "phone": phone,
                 "name": account["name"],
                 "username": account["username"] or "",
@@ -728,9 +741,10 @@ def get_sessions():
                     me = run_async(_get_me(client))
                     name = ((me.first_name or "") + " " + (me.last_name or "")).strip()
                     username = me.username or ""
-                    # 写入 DB
-                    db.upsert_account(phone=phone, name=name, username=username, tg_id=me.id)
+                    # 写入 DB(返回新建/更新的 account row,方便取 id)
+                    new_acc = db.upsert_account(phone=phone, name=name, username=username, tg_id=me.id)
                     sessions.append({
+                        "id": new_acc["id"] if new_acc else None,  # v3.0.0
                         "phone": phone, "name": name, "username": username,
                         "tg_id": me.id, "company": "", "operator": "", "status": "active",
                         "session_status": (_session_states.get(phone) or {}).get("status", "healthy"),
@@ -738,6 +752,7 @@ def get_sessions():
                     run_async(_disconnect(client))
                 else:
                     sessions.append({
+                        "id": None,  # v3.0.0:无 DB 记录的 session,模板条件渲染不出按钮
                         "phone": phone, "name": "", "username": "",
                         "tg_id": "", "company": "", "operator": "", "status": "expired",
                         "session_status": "revoked",
@@ -745,6 +760,7 @@ def get_sessions():
                     run_async(_disconnect(client))
             except Exception as e:
                 sessions.append({
+                    "id": None,  # v3.0.0
                     "phone": phone, "name": "", "username": "",
                     "tg_id": "", "company": "", "operator": "", "status": "error",
                     "session_status": "error",
@@ -810,6 +826,12 @@ def setup_page():
         # v2.10.25(ADR-0014):媒体存储模式 + TG 档案群 ID
         "media_storage_mode": (env.get("MEDIA_STORAGE_MODE", "drive") or "drive").lower(),
         "media_archive_group_id": env.get("MEDIA_ARCHIVE_GROUP_ID", ""),
+        # v3.0.0(ADR-0015/0016):两段式未回复预警
+        "unreplied_alert_group_id": env.get("UNREPLIED_ALERT_GROUP_ID", ""),
+        "two_stage_no_reply_enabled": env.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true",
+        "no_reply_stage2_after_min": env.get("NO_REPLY_STAGE2_AFTER_MIN", "10"),
+        "remind_30min_text": env.get("REMIND_30MIN_TEXT", ""),
+        "remind_40min_text": env.get("REMIND_40MIN_TEXT", ""),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -844,6 +866,12 @@ def settings_page():
         # v2.10.25(ADR-0014):媒体存储模式 + TG 档案群 ID
         "media_storage_mode": (env.get("MEDIA_STORAGE_MODE", "drive") or "drive").lower(),
         "media_archive_group_id": env.get("MEDIA_ARCHIVE_GROUP_ID", ""),
+        # v3.0.0(ADR-0015/0016):两段式未回复预警
+        "unreplied_alert_group_id": env.get("UNREPLIED_ALERT_GROUP_ID", ""),
+        "two_stage_no_reply_enabled": env.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true",
+        "no_reply_stage2_after_min": env.get("NO_REPLY_STAGE2_AFTER_MIN", "10"),
+        "remind_30min_text": env.get("REMIND_30MIN_TEXT", ""),
+        "remind_40min_text": env.get("REMIND_40MIN_TEXT", ""),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -1414,6 +1442,20 @@ def _save_settings(is_first):
     }
     if is_first:
         updates["WEB_PORT"] = read_env().get("WEB_PORT", "5001")
+
+    # v3.0.0(ADR-0015/0016):两段式未回复预警 — 专用群 + 全域提醒文案
+    # Codex P1 修:用严格 regex 不然 '---123' 会被 .lstrip('-').isdigit() 判合法
+    # 但 int('---123') 炸 → 启动时 config.py 爆
+    if "unreplied_alert_group_id" in form:
+        _urg = (form.get("unreplied_alert_group_id") or "").strip()
+        if _urg and not re.fullmatch(r'-?\d+', _urg):
+            return jsonify({"ok": False, "msg": f"未回复预警群 ID 必须是整数(可以是负数,只允许一个 - 号),当前填的是: {_urg}"}), 400
+        updates["UNREPLIED_ALERT_GROUP_ID"] = _urg
+    if "remind_30min_text" in form:
+        updates["REMIND_30MIN_TEXT"] = (form.get("remind_30min_text") or "").strip()
+    if "remind_40min_text" in form:
+        updates["REMIND_40MIN_TEXT"] = (form.get("remind_40min_text") or "").strip()
+
     write_env(updates)
 
     # 重新加载 config 模块，让 web 这一进程立即看到新的 API_ID / API_HASH / BOT_TOKEN / SHEET_ID
@@ -1442,6 +1484,61 @@ def _save_settings(is_first):
         "kw_removed": kw_removed,
         "redirect": url_for("login_page"),
     })
+
+
+# ============ v3.0.0 两段式未回复预警 — 账号级配置 API (ADR-0015) ============
+@app.route("/api/accounts/<int:account_id>/notify-config", methods=["GET", "PATCH"])
+@login_required
+def api_account_notify_config(account_id):
+    """账号级两段式预警配置 — business_tg_id / owner_tg_id / (保留)remind_*_text。
+
+    GET  → 返回 {business_tg_id, owner_tg_id, remind_30min_text, remind_40min_text}
+    PATCH → body 含上述任一字段,只更新传入的字段(db.update_account_two_stage)
+
+    需要 TWO_STAGE_NO_REPLY_ENABLED=true 才启用;关闭时 API 仍可读写(方便预配置),
+    UI 由模板自己的 `{% if two_stage_no_reply_enabled %}` 控制可见性。
+
+    v2.10.26 客户反馈后文案改全域 REMIND_30/40MIN_TEXT → remind_30min_text / remind_40min_text
+    字段保留(API 接受,DB 存),但 bot 推送代码实际读 config.REMIND_*_TEXT,不读账号列。
+    留着是为了 demo 错位 DB 兼容 + 万一未来要做账号级覆盖。
+    """
+    acc = db.get_account_by_id(account_id)
+    if not acc:
+        return jsonify({"ok": False, "error": "账号不存在"}), 404
+
+    if request.method == "GET":
+        return jsonify({
+            "ok": True,
+            "business_tg_id":    acc["business_tg_id"] or "" if "business_tg_id" in acc.keys() else "",
+            "owner_tg_id":       acc["owner_tg_id"]    or "" if "owner_tg_id"    in acc.keys() else "",
+            "remind_30min_text": acc["remind_30min_text"] or "" if "remind_30min_text" in acc.keys() else "",
+            "remind_40min_text": acc["remind_40min_text"] or "" if "remind_40min_text" in acc.keys() else "",
+        })
+
+    # PATCH
+    data = request.get_json(silent=True) or {}
+
+    # v3.0.0 Codex P1:business_tg_id / owner_tg_id 必须是 纯数字 或 合法 username
+    # 防止带 `<`、`&`、空格的非法值通过 → 下游 _format_tg_mention 裸拼 HTML → TG parser 爆
+    # TG username 规则:5-32 字符,允许 a-zA-Z0-9_,非 _ 开头
+    TG_MENTION_RE = re.compile(r'^(\d+|@?[A-Za-z][A-Za-z0-9_]{4,31})$')
+    for key in ("business_tg_id", "owner_tg_id"):
+        if key in data:
+            val = (data.get(key) or "").strip()
+            if val and not TG_MENTION_RE.fullmatch(val):
+                return jsonify({
+                    "ok": False,
+                    "error": f"{key} 必须是 TG 数字 ID(纯数字)或合法 username(5-32 字符字母/数字/下划线,可带 @ 前缀)。当前:{val!r}",
+                }), 400
+
+    db.update_account_two_stage(
+        account_id,
+        business_tg_id=data.get("business_tg_id"),
+        owner_tg_id=data.get("owner_tg_id"),
+        remind_30min_text=data.get("remind_30min_text"),
+        remind_40min_text=data.get("remind_40min_text"),
+    )
+    return jsonify({"ok": True})
 
 
 # ============ 用户账号管理 API ============
@@ -1730,6 +1827,13 @@ def logout():
 @login_required
 def index():
     db.init_db()
+    # v3.0.0: 手工改 .env 打开 TWO_STAGE_NO_REPLY_ENABLED 后,首页应立刻能看到「配置两段式」
+    # 按钮。调 reload_if_env_changed() 拉一次最新 flag 到本进程 config 模块
+    # (无变化时开销极低,就一次 os.stat)。
+    try:
+        config.reload_if_env_changed()
+    except Exception:
+        pass
     sessions = get_sessions()
     return render_template(
         "index.html",
@@ -1741,6 +1845,8 @@ def index():
         alert_no_reply_enabled=config.ALERT_NO_REPLY_ENABLED,
         alert_delete_enabled=config.ALERT_DELETE_ENABLED,
         operator_label=config.OPERATOR_LABEL,
+        # v3.0.0(ADR-0015):两段式预警总开关(模板条件渲染「配置两段式」按钮 + modal)
+        two_stage_no_reply_enabled=getattr(config, "TWO_STAGE_NO_REPLY_ENABLED", False),
     )
 
 

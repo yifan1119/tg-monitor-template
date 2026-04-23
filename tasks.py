@@ -28,6 +28,7 @@ class TaskScheduler:
             self._sheets_flush_loop(),
             self._patrol_loop(),
             self._no_reply_loop(),
+            self._no_reply_stage2_loop(),     # v3.0.0 批次 C: stage1 → stage2 自动升级
             self._daily_report_loop(),
             self._peer_name_consistency_loop(),
             self._media_cleanup_loop(),
@@ -279,6 +280,56 @@ class TaskScheduler:
                                         account['name'], peer['name'], elapsed)
             except Exception as e:
                 logger.error("未回复检查失败: %s", e)
+            await asyncio.sleep(60)
+
+    async def _no_reply_stage2_loop(self):
+        """v3.0.0 批次 C: stage1 → stage2 自动升级 loop。
+
+        行为:
+        - 每 60 秒扫 get_pending_stage1_alerts(after_minutes=NO_REPLY_STAGE2_AFTER_MIN)
+        - 对每条符合条件的 stage1 alert 调 bot.send_no_reply_alert_stage2(alert_id)
+          (内部会原子 upgrade_to_stage2,抢到才推,避免并发重复升级)
+
+        开关语义:
+        - TWO_STAGE_NO_REPLY_ENABLED=false(默认)→ 这个 loop 什么都不做,完全兼容老版本
+        - 非工作时段 → 跳过(避免半夜 @ 负责人)
+        - 兜底保护:扫到的 stage1 若期间有 outbound(listener 钩子没捕获到 / flush 延迟等),
+          先 mark_stage1_handled_by_reply 吞掉这条不升级
+        """
+        await asyncio.sleep(30)  # startup delay,等 listener / sheets 都 ready
+        while self._running:
+            try:
+                config.reload_if_env_changed()
+                if not config.TWO_STAGE_NO_REPLY_ENABLED:
+                    await asyncio.sleep(60)
+                    continue
+                now = datetime.now(TZ_BJ)
+                if not config.is_work_time(now):
+                    await asyncio.sleep(60)
+                    continue
+                if not self.bot:
+                    await asyncio.sleep(60)
+                    continue
+
+                rows = db.get_pending_stage1_alerts(
+                    after_minutes=config.NO_REPLY_STAGE2_AFTER_MIN
+                )
+                for row in rows:
+                    try:
+                        # 兜底:事件驱动钩子没捕获到的 outbound,这里 poll 补一次
+                        if db.has_outbound_since(row["peer_id"], row["created_at"]):
+                            n = db.mark_stage1_handled_by_reply(row["peer_id"], row["created_at"])
+                            if n > 0:
+                                logger.info("stage2 loop 兜底:peer_id=%s 已回复,抑制 %d 条 stage1",
+                                            row["peer_id"], n)
+                            continue
+                        await self.bot.send_no_reply_alert_stage2(row["id"])
+                        logger.info("stage2 自动升级: alert_id=%s peer_id=%s",
+                                    row["id"], row["peer_id"])
+                    except Exception as e:
+                        logger.warning("stage2 升级失败 alert_id=%s: %s", row["id"], e)
+            except Exception as e:
+                logger.error("stage2 自动升级 loop 异常: %s", e)
             await asyncio.sleep(60)
 
     async def _peer_name_consistency_loop(self):

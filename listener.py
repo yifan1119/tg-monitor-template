@@ -22,11 +22,15 @@ class Listener:
 
     async def add_account(self, phone):
         session_path = str(config.SESSION_DIR / phone.replace("+", ""))
+        # v3.0.0: device/system/app 改用 TG_* env 伪装,默认 shencha / tglistener 1.0,
+        # 避免被监听号在 TG「其他会话」看到显眼「openclaw 1.0 / Desktop 1.0」类标识
         client = TelegramClient(
             session_path, config.API_ID, config.API_HASH,
-            device_model=config.DEVICE_NAME,
-            system_version="1.0",
-            app_version="1.0",
+            device_model=config.TG_DEVICE_MODEL,
+            system_version=config.TG_SYSTEM_VERSION,
+            app_version=config.TG_APP_VERSION,
+            lang_code=config.TG_LANG_CODE,
+            system_lang_code=config.TG_SYSTEM_LANG,
         )
         await client.connect()
         if not await client.is_user_authorized():
@@ -238,6 +242,17 @@ class Listener:
             if inserted:
                 arrow = "📥" if direction == "B" else "📤"
                 print(f"  {arrow} [{phone}] {direction}: {peer_name} -> {text[:40]}")
+
+                # v3.0.0 批次 C: 监听号 outbound(自己回复) → 抑制该 peer 的 stage1 pending,
+                # 避免 _no_reply_stage2_loop 把已解决的对话升级到 stage2 @ 负责人。
+                # 事件驱动 + tasks.py 有 poll 兜底,双保险。
+                if direction == "A":
+                    try:
+                        n = db.mark_stage1_handled_by_reply(peer["id"], timestamp)
+                        if n > 0:
+                            print(f"  ✓ 商务已回复,抑制 {n} 条 stage1 升级")
+                    except Exception as e:
+                        print(f"  ⚠ mark_stage1_handled_by_reply 失败: {e}")
 
                 # 回调: 新消息
                 if self.on_new_message:

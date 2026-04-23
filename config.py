@@ -28,6 +28,10 @@ def reload_if_env_changed():
     global ALERT_KEYWORD_ENABLED, ALERT_NO_REPLY_ENABLED, ALERT_DELETE_ENABLED
     global KEYWORDS, NO_REPLY_MINUTES, PEER_ROLE_LABEL, OPERATOR_LABEL, COMPANY_DISPLAY
     global CALLBACK_AUTH_USER_IDS
+    # v3.0.0:两段式预警 + TG 设备身份 都支持热 reload
+    global TWO_STAGE_NO_REPLY_ENABLED, NO_REPLY_STAGE2_AFTER_MIN, UNREPLIED_ALERT_GROUP_ID
+    global REMIND_30MIN_TEXT, REMIND_40MIN_TEXT
+    global TG_DEVICE_MODEL, TG_SYSTEM_VERSION, TG_APP_VERSION, TG_LANG_CODE, TG_SYSTEM_LANG
     try:
         m = _ENV_PATH.stat().st_mtime
     except OSError:
@@ -66,6 +70,31 @@ def reload_if_env_changed():
             if _x.isdigit():
                 _new_set.add(int(_x))
     CALLBACK_AUTH_USER_IDS = _new_set
+    # v3.0.0:两段式预警 flag 热 reload
+    TWO_STAGE_NO_REPLY_ENABLED = os.environ.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true"
+    try:
+        NO_REPLY_STAGE2_AFTER_MIN = int(os.environ.get("NO_REPLY_STAGE2_AFTER_MIN", "10"))
+    except ValueError:
+        pass
+    _unreplied_new = os.environ.get("UNREPLIED_ALERT_GROUP_ID", "0").strip()
+    # v3.0.0 Codex P1:reload 时也用严格 regex
+    try:
+        import re as _re_cfg
+        UNREPLIED_ALERT_GROUP_ID = (
+            int(_unreplied_new)
+            if _unreplied_new and _unreplied_new != "0" and _re_cfg.fullmatch(r'-?\d+', _unreplied_new)
+            else 0
+        )
+    except (ValueError, Exception):
+        UNREPLIED_ALERT_GROUP_ID = 0
+    REMIND_30MIN_TEXT = os.environ.get("REMIND_30MIN_TEXT", "").strip()
+    REMIND_40MIN_TEXT = os.environ.get("REMIND_40MIN_TEXT", "").strip()
+    # v3.0.0:TG 设备身份也支持热 reload(虽然 TG server 缓存会有延迟,但至少本进程能立刻读新值)
+    TG_DEVICE_MODEL   = os.environ.get("TG_DEVICE_MODEL",   "shencha")
+    TG_SYSTEM_VERSION = os.environ.get("TG_SYSTEM_VERSION", "1.0")
+    TG_APP_VERSION    = os.environ.get("TG_APP_VERSION",    "tglistener 1.0")
+    TG_LANG_CODE      = os.environ.get("TG_LANG_CODE",      "zh-CN")
+    TG_SYSTEM_LANG    = os.environ.get("TG_SYSTEM_LANG",    "zh-CN")
     return True
 
 
@@ -257,6 +286,55 @@ try:
     MEDIA_ARCHIVE_GROUP_ID = int(_media_archive_id) if _media_archive_id else 0
 except ValueError:
     MEDIA_ARCHIVE_GROUP_ID = 0
+
+# ============================================================
+# v3.0.0:两段式未回复预警(ADR-0015 / 0016)
+# ============================================================
+# 客户反馈:原单段 30 分钟 @ 商务人员已够。新增第二段 40 分钟 @ 负责人做升级兜底,
+# 两段都不回才算真·未回复违规。feature flag 默认关 — 老客户升级行为 100% 等价 v2.10.25。
+#
+# 开启后:
+#   30 分钟未回 → stage1(无按钮,@ account.business_tg_id)
+#   再 NO_REPLY_STAGE2_AFTER_MIN 分钟仍未回 → stage2(带「登记违规/取消」按钮,@ account.owner_tg_id)
+#   期间监听号任何 outbound 回复 → listener 事件驱动 mark_stage1_handled_by_reply → 不升级
+TWO_STAGE_NO_REPLY_ENABLED = os.environ.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true"
+
+# stage1 推送后等多少分钟仍无 outbound 则升级 stage2(默认 10 分钟,合计 30+10=40 分钟 @ 负责人)
+try:
+    NO_REPLY_STAGE2_AFTER_MIN = int(os.environ.get("NO_REPLY_STAGE2_AFTER_MIN", "10"))
+except ValueError:
+    NO_REPLY_STAGE2_AFTER_MIN = 10
+
+# 未回复预警专用群(空则 fallback 到 ALERT_GROUP_ID,老部署无感)
+# 配了 = stage1/stage2 推这个群,删除/关键词仍推 ALERT_GROUP_ID
+# v3.0.0 Codex P1 修:严格 regex 校验不让「---123」这种 lstrip('-').isdigit() 判合法却 int() 炸
+_unreplied_group = os.environ.get("UNREPLIED_ALERT_GROUP_ID", "0").strip()
+try:
+    import re as _re_cfg  # 避免污染模块级 import re 命名
+    UNREPLIED_ALERT_GROUP_ID = (
+        int(_unreplied_group)
+        if _unreplied_group and _unreplied_group != "0" and _re_cfg.fullmatch(r'-?\d+', _unreplied_group)
+        else 0
+    )
+except (ValueError, Exception):
+    UNREPLIED_ALERT_GROUP_ID = 0
+
+# 两段式提醒文案(全域配置,所有账号共用。v2.10.26 客户反馈:不要每个号填一遍)
+# 留空即用模板内置默认文案(「请尽快回复」/「已超过 40 分钟未回复,请处理」)。
+REMIND_30MIN_TEXT = os.environ.get("REMIND_30MIN_TEXT", "").strip()
+REMIND_40MIN_TEXT = os.environ.get("REMIND_40MIN_TEXT", "").strip()
+
+# ============================================================
+# v3.0.0:TG 设备身份伪装(给被监听号看到的 session 显示)
+# ============================================================
+# 写死「openclaw 1.0」这种显眼名字会被监听号在 TG「其他会话」里看出端倪。
+# 默认伪装成「shencha / tglistener 1.0」客户偏好的识别串,可在 .env 自定义。
+# 注意:TG 服务端在下一次 initConnection 同步显示值,分钟级更新,老 session 可能短暂缓存旧值。
+TG_DEVICE_MODEL   = os.environ.get("TG_DEVICE_MODEL",   "shencha")
+TG_SYSTEM_VERSION = os.environ.get("TG_SYSTEM_VERSION", "1.0")
+TG_APP_VERSION    = os.environ.get("TG_APP_VERSION",    "tglistener 1.0")
+TG_LANG_CODE      = os.environ.get("TG_LANG_CODE",      "zh-CN")
+TG_SYSTEM_LANG    = os.environ.get("TG_SYSTEM_LANG",    "zh-CN")
 
 # Sheets 刷写间隔（秒）
 SHEETS_FLUSH_INTERVAL = int(os.environ.get("SHEETS_FLUSH_INTERVAL", "5"))

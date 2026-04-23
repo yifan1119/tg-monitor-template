@@ -91,8 +91,24 @@ def init_db():
 
 def _run_migrations(conn):
     """v2.10.23: 显式 migration — 基于 PRAGMA user_version 幂等升级。
-    每个增量迁移只跑一次,跑完把 user_version 顶上去。回滚不删列(nullable 保留)。"""
+    每个增量迁移只跑一次,跑完把 user_version 顶上去。回滚不删列(nullable 保留)。
+
+    v3.0.0: 增加 compat repair 路径处理 demo 错位 DB —— 如果 user_version=2 但
+    DB 特征是「我们早期 v3.0.0 开发分支的 V2(两段式字段)」而不是「main V2(ADR-0010
+    alerts writeback)」,先补齐 main V2/V3/V4 的列/索引/表再进 V5。详见
+    `_compat_repair_feature_v2_to_main_v4`。
+    """
     version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+    # v3.0.0: demo 错位 DB 兼容修复(Codex C 方案推荐的做法)
+    # 之所以不直接 `PRAGMA user_version=1` 重跑全部 migration — main V2 有
+    # `UPDATE alerts SET sheet_written=1 WHERE sheet_written=0` 这种数据副作用,
+    # 不能保证重复跑无害。改成「识别 + 补齐 + 跳进 V5」最稳。
+    if version == 2 and _is_feature_v2_stage_db(conn):
+        _compat_repair_feature_v2_to_main_v4(conn)
+        version = 4
+        conn.execute("PRAGMA user_version=4")
+        conn.commit()
 
     if version < 1:
         _migrate_to_1(conn)
@@ -112,6 +128,11 @@ def _run_migrations(conn):
     if version < 4:
         _migrate_to_4(conn)
         conn.execute("PRAGMA user_version=4")
+        conn.commit()
+
+    if version < 5:
+        _migrate_to_5(conn)
+        conn.execute("PRAGMA user_version=5")
         conn.commit()
 
 
@@ -164,6 +185,84 @@ def _migrate_to_4(conn):
        对同账号可能交错,旧 MAX+1 在 await forward 期间会读到同一最大值 → 重复编号)
     """
     _safe_add_column(conn, "messages", "media_seq", "INTEGER DEFAULT 0")
+    _safe_add_column(conn, "messages", "archive_msg_id", "INTEGER DEFAULT 0")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS account_seq (
+            account_id INTEGER PRIMARY KEY,
+            media_seq INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
+
+def _migrate_to_5(conn):
+    """v3.0.0 → user_version=5(两段式未回复预警 schema):
+    - accounts 加 4 个业务字段:
+      - business_tg_id     : 商务人员 TG ID(stage1 @ 的对象)
+      - owner_tg_id        : 负责人 TG ID(stage2 @ 的对象)
+      - remind_30min_text  : 30 分钟提醒自定义文案(v2.10.26 后已改全域 config,保留列供
+                             旧 demo 数据兼容,新功能不读此列)
+      - remind_40min_text  : 40 分钟升级自定义文案(同上)
+    - alerts 加 stage 字段(显式区分两段式阶段):
+      - 0 = 非两段式 / 老数据
+      - 1 = 已推送 stage1,等 NO_REPLY_STAGE2_AFTER_MIN 后决定是否升级
+      - 2 = 已升级到 stage2
+      - stage 扫描必须显式 WHERE stage=1 避免误触老 pending 记录
+    - 全部 _safe_add_column,对已有列 no-op(demo 错位 DB 走 compat repair 时这些列已存)
+    """
+    _safe_add_column(conn, "accounts", "business_tg_id",    "TEXT DEFAULT ''")
+    _safe_add_column(conn, "accounts", "owner_tg_id",       "TEXT DEFAULT ''")
+    _safe_add_column(conn, "accounts", "remind_30min_text", "TEXT DEFAULT ''")
+    _safe_add_column(conn, "accounts", "remind_40min_text", "TEXT DEFAULT ''")
+    _safe_add_column(conn, "alerts",   "stage",             "INTEGER DEFAULT 0")
+
+
+def _is_feature_v2_stage_db(conn):
+    """检测是否是「早期 v3.0.0 开发分支的 V2 错位 DB」。
+
+    真·main V2 特征: alerts 有 sheet_written/claimed_at/keyword/last_write_error
+    错位 feature V2 特征: alerts 有 stage + accounts 有 business_tg_id,但没有 main V2 的列
+
+    只要 accounts.business_tg_id 和 alerts.stage 都存在 + alerts.sheet_written 不存在,
+    就是错位 DB。这种情况只会出现在 2026-04-23 之前手动部署过 feature/v3.0.0 到的 VPS
+    (目前只有 tg-monitor-demo),不会出现在正式客户 VPS 上。
+    """
+    def _has_column(table, col):
+        cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        return col in cols
+    return (
+        _has_column("accounts", "business_tg_id")
+        and _has_column("alerts", "stage")
+        and not _has_column("alerts", "sheet_written")
+    )
+
+
+def _compat_repair_feature_v2_to_main_v4(conn):
+    """v3.0.0:错位 DB 兼容修复 — 把「feature V2(两段式字段)但 user_version=2」的 DB 补齐到等价 main V4。
+
+    步骤:
+    1. 补 main V2 的列(sheet_written/keyword/last_write_error)+ 把历史 alerts 标 sheet_written=1
+       (跟 _migrate_to_2 的 data backfill 一致,仅在这里跑一次,不会重复)
+    2. 补 main V3 的列 claimed_at + 索引
+    3. 补 main V4 的列 media_seq/archive_msg_id + 建 account_seq 表
+    跑完后 user_version 提到 4,后续 V5 正常跑。
+
+    全部幂等,_safe_add_column 对已存在列 no-op,CREATE INDEX IF NOT EXISTS / CREATE TABLE
+    IF NOT EXISTS 对已存对象 no-op。
+    """
+    # === 等价 main V2 (ADR-0010 alerts writeback) ===
+    _safe_add_column(conn, "alerts", "sheet_written",    "INTEGER DEFAULT 0")
+    _safe_add_column(conn, "alerts", "keyword",          "TEXT DEFAULT ''")
+    _safe_add_column(conn, "alerts", "last_write_error", "TEXT DEFAULT ''")
+    # 历史 alerts 全标 sheet_written=1 避免 writeback loop 去重复写(跟 main V2 语义一致)
+    conn.execute("UPDATE alerts SET sheet_written=1 WHERE sheet_written=0")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_sheet_written ON alerts(sheet_written)")
+
+    # === 等价 main V3 (ADR-0010 Codex P0 claimed_at) ===
+    _safe_add_column(conn, "alerts", "claimed_at", "TEXT DEFAULT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_claimed_at ON alerts(claimed_at)")
+
+    # === 等价 main V4 (ADR-0014 media_seq) ===
+    _safe_add_column(conn, "messages", "media_seq",      "INTEGER DEFAULT 0")
     _safe_add_column(conn, "messages", "archive_msg_id", "INTEGER DEFAULT 0")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS account_seq (
@@ -664,14 +763,16 @@ def get_unwritten_alerts(limit=100):
     - sheet_written=0(从未 claim)+ stale claim(sheet_written=1 且 claimed_at 超期,
       即进程 crash 后 claim 没清也没完成)—— 两者都捡
     - keyword 类型:status!='silenced' 就撈(命中即应写分页)
-    - no_reply / deleted 类型:只撈 status='approved'
+    - no_reply / deleted 类型:只撈 status IN ('approved', 'violation_logged')
+      (v3.0.0 Codex P1 修:violation_logged 是 stage2「登记违规」终态,跟 approved
+      语义等价写到同一张 no_reply 分表。不纳入的话 claim-first 回滚时这条永不补写)
     - JOIN accounts + peers 一次撈齐 company/operator/account_name/peer_name
     - LIMIT 控制一轮量(默认 100),避免一次掏光撞配额
     """
     where_clause, stale_str = _writeback_candidate_where_clause()
     sql = f"""
         SELECT
-            a.id, a.type, a.keyword, a.message_text, a.created_at, a.status,
+            a.id, a.type, a.keyword, a.message_text, a.created_at, a.status, a.stage,
             acc.company AS account_company,
             acc.operator AS account_operator,
             acc.name AS account_name,
@@ -683,7 +784,8 @@ def get_unwritten_alerts(limit=100):
           AND a.status != 'silenced'
           AND (
               a.type = 'keyword'
-              OR (a.type IN ('no_reply', 'deleted') AND a.status = 'approved')
+              OR (a.type IN ('no_reply', 'deleted')
+                  AND a.status IN ('approved', 'violation_logged'))
           )
         ORDER BY a.id
         LIMIT ?
@@ -692,13 +794,16 @@ def get_unwritten_alerts(limit=100):
 
 
 def count_unwritten_alerts():
-    """v2.10.24.3:统计待 writeback 积压量(含 stale claim)供日志/监控用。"""
+    """v2.10.24.3:统计待 writeback 积压量(含 stale claim)供日志/监控用。
+    v3.0.0 Codex P1:violation_logged 纳入可补写状态,保持跟 get_unwritten_alerts 一致。"""
     where_clause, stale_str = _writeback_candidate_where_clause()
     sql = f"""
         SELECT COUNT(*) FROM alerts a
         WHERE {where_clause}
           AND a.status != 'silenced'
-          AND (a.type = 'keyword' OR (a.type IN ('no_reply','deleted') AND a.status = 'approved'))
+          AND (a.type = 'keyword'
+               OR (a.type IN ('no_reply','deleted')
+                   AND a.status IN ('approved', 'violation_logged')))
     """
     return get_conn().execute(sql, (stale_str,)).fetchone()[0]
 
@@ -738,6 +843,121 @@ def update_alert_bot_msg(alert_id, bot_message_id):
 
 def get_alert(alert_id):
     return get_conn().execute("SELECT * FROM alerts WHERE id=?", (alert_id,)).fetchone()
+
+
+# ===== v3.0.0 两段式未回复预警 helpers =====
+
+def get_account_by_id(account_id):
+    return get_conn().execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+
+
+def update_account_two_stage(account_id, business_tg_id=None, owner_tg_id=None,
+                             remind_30min_text=None, remind_40min_text=None):
+    """v3.0.0:Web 后台「配置两段式」modal 用。只更新显式传入的字段。
+
+    v2.10.26 客户反馈后文案改全域 REMIND_30/40MIN_TEXT,这个函数的 remind_*
+    参数保留(API 仍接受),但实际代码不再读 account.remind_* 列 — 传了也没效果,
+    不传就是默认不改。"""
+    sets, vals = [], []
+    for col, val in (
+        ("business_tg_id", business_tg_id),
+        ("owner_tg_id", owner_tg_id),
+        ("remind_30min_text", remind_30min_text),
+        ("remind_40min_text", remind_40min_text),
+    ):
+        if val is not None:
+            sets.append(f"{col}=?")
+            vals.append(val)
+    if not sets:
+        return
+    vals.append(account_id)
+    conn = get_conn()
+    conn.execute(f"UPDATE accounts SET {', '.join(sets)} WHERE id=?", vals)
+    conn.commit()
+
+
+def insert_stage1_alert(account_id, peer_id, msg_id, message_text=""):
+    """v3.0.0:显式 stage=1 插入。老 v2.x 的单段 alerts stage 默认 0,
+    stage2 扫描 loop 只拾 stage=1 的不会误触。"""
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO alerts (type, account_id, peer_id, msg_id, message_text, stage, created_at)
+        VALUES ('no_reply', ?, ?, ?, ?, 1, ?)
+    """, (account_id, peer_id, msg_id, message_text, now_bj()))
+    conn.commit()
+    return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def get_pending_stage1_alerts(after_minutes=10):
+    """v3.0.0:找所有 stage=1 且推送超过 N 分钟还没 handled 的预警 — stage2 loop 用。
+    显式 stage=1 过滤,老 v2.x stage=0 记录不会被误扫到。
+    bot_message_id IS NOT NULL 才算真送达,未送达的等下次重推 stage1。"""
+    cutoff = (datetime.now(TZ_BJ) - timedelta(minutes=after_minutes)).strftime("%Y-%m-%d %H:%M:%S")
+    return get_conn().execute("""
+        SELECT * FROM alerts
+        WHERE type='no_reply' AND stage=1 AND status='pending'
+          AND bot_message_id IS NOT NULL
+          AND created_at <= ?
+        ORDER BY id
+    """, (cutoff,)).fetchall()
+
+
+def has_outbound_since(peer_id, since_ts):
+    """v3.0.0:查 peer 在 since_ts 之后有没有商务 outbound(A 方向)消息。
+    事件驱动:listener 收到 outbound 直接 mark_stage1_handled,这个函数只做 stage2 loop 的 poll 兜底。"""
+    row = get_conn().execute(
+        "SELECT 1 FROM messages WHERE peer_id=? AND direction='A' AND timestamp > ? LIMIT 1",
+        (peer_id, since_ts)
+    ).fetchone()
+    return row is not None
+
+
+def mark_stage1_handled_by_reply(peer_id, since_ts):
+    """v3.0.0:listener 收到 outbound 时原子更新对应 stage1 → status='handled_by_reply'。
+    只动这个 peer 的 stage=1 pending 记录(创建时间在 since_ts 之前),避免覆盖其他对话。
+    返回被更新的条数(>0 说明命中了某条等待中的 stage1)。"""
+    conn = get_conn()
+    cur = conn.execute("""
+        UPDATE alerts SET status='handled_by_reply', reviewed_at=?
+        WHERE peer_id=? AND type='no_reply' AND stage=1 AND status='pending'
+          AND created_at <= ?
+    """, (now_bj(), peer_id, since_ts))
+    conn.commit()
+    return cur.rowcount
+
+
+def upgrade_to_stage2(alert_id, new_bot_msg_id=None):
+    """v3.0.0:stage1 → stage2 原子升级 — UPDATE WHERE stage=1 AND status='pending' 避免并发重复升级。
+    new_bot_msg_id 可选,先升级抢位再 push;rowcount=1 代表抢到升级权。"""
+    conn = get_conn()
+    if new_bot_msg_id is not None:
+        cur = conn.execute("""
+            UPDATE alerts SET stage=2, bot_message_id=?
+            WHERE id=? AND stage=1 AND status='pending'
+        """, (new_bot_msg_id, alert_id))
+    else:
+        cur = conn.execute("""
+            UPDATE alerts SET stage=2
+            WHERE id=? AND stage=1 AND status='pending'
+        """, (alert_id,))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def rollback_stage2_to_stage1(alert_id):
+    """v3.0.0 Codex P1:stage2 send_message 失败时把 stage=2 回退到 stage=1。
+    严格条件 WHERE stage=2 AND status='pending' AND bot_message_id IS NULL
+    (只回滚「已原子升级 stage=2 但 send 失败还没写 bot_message_id」的场景,
+     成功送达的 stage2 不动)。
+    返回 rowcount=1 代表回滚成功,下一轮 stage2 loop 会重新扫到并重试升级。
+    """
+    conn = get_conn()
+    cur = conn.execute("""
+        UPDATE alerts SET stage=1
+        WHERE id=? AND stage=2 AND status='pending' AND bot_message_id IS NULL
+    """, (alert_id,))
+    conn.commit()
+    return cur.rowcount == 1
 
 
 def has_alert_today(alert_type, peer_id):

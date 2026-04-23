@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 class AlertBot:
     def __init__(self, sheets_writer=None):
         self.sheets = sheets_writer
+        # v3.0.0:main.py 在 listener 初始化后注入,供 _resolve_tg_entity 用 Telethon
+        # 解析 @ 对象的真实 TG 显示名(username → numeric ID + 显示名 → inline mention)
+        self.listener = None
         if not config.BOT_TOKEN:
             logger.warning("BOT_TOKEN 未设置，Bot 功能暂时关闭")
             self.bot = None
@@ -168,6 +171,57 @@ class AlertBot:
                 except Exception:
                     pass
 
+        # v3.0.0 批次 B: stage2 「登记违规 / 取消」callback
+        @self.dp.callback_query(F.data.startswith("violation:") | F.data.startswith("cancel:"))
+        async def on_stage2_action(callback: CallbackQuery):
+            data = callback.data
+            action, alert_id_str = data.split(":", 1)
+            alert_id = int(alert_id_str)
+
+            # 权限校验沿用 CALLBACK_AUTH_USER_IDS 白名单(老审查员直接能点,免培训)
+            config.reload_if_env_changed()
+            if config.CALLBACK_AUTH_USER_IDS:
+                uid = callback.from_user.id if callback.from_user else 0
+                if uid not in config.CALLBACK_AUTH_USER_IDS:
+                    await callback.answer("⛔ 你没有权限处理这个预警", show_alert=True)
+                    logger.warning(
+                        "[stage2_callback_deny] 未授权: tg_id=%s alert_id=%s",
+                        uid, alert_id,
+                    )
+                    return
+
+            alert = db.get_alert(alert_id)
+            if not alert:
+                await callback.answer("预警不存在")
+                return
+
+            # 原子抢占:两人同时点按钮只有一人能抢到 pending→{violation_logged|cancelled}
+            new_status = "violation_logged" if action == "violation" else "cancelled"
+            claimed = db.claim_alert_for_review(alert_id, new_status)
+            if not claimed:
+                await callback.answer("已处理过了")
+                return
+
+            try:
+                if action == "violation":
+                    # 写入未回复预警分表(跟老 6 列一致,客户反馈不要末列加标记)
+                    self._write_alert_to_sheet(alert)
+                    await callback.message.edit_text(
+                        callback.message.text + "\n\n✅ 已登记违规 — " + (callback.from_user.full_name or ""),
+                    )
+                    await callback.answer("已登记违规")
+                else:
+                    await callback.message.edit_text(
+                        callback.message.text + "\n\n❌ 已取消 — " + (callback.from_user.full_name or ""),
+                    )
+                    await callback.answer("已取消")
+            except Exception as e:
+                logger.error("stage2 callback 异常 alert_id=%s: %s", alert_id, e)
+                try:
+                    await callback.answer("处理时出错了,请再试一次或看日志")
+                except Exception:
+                    pass
+
     def _make_keyboard(self, alert_id):
         return InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -313,7 +367,15 @@ class AlertBot:
         - 静默(开关关)→ 插入 alert 并标 status='silenced',has_alert_today 当「已处理」
         - 推送失败 → 保留 bot_message_id=null,has_alert_today 不认作已推,下次扫描重试
           (修之前「第一次推送失败后一整天不再重试」的 bug)
+        v3.0.0:
+        - TWO_STAGE_NO_REPLY_ENABLED=true → 分流到 send_no_reply_alert_stage1,走两段式新路径
+        - flag=false(默认)→ 走以下原 v2.10.25 老单段路径,100% 向后兼容
         """
+        # v3.0.0 feature flag 分流 — 入口单点,保证 flag 关时老行为零差异
+        config.reload_if_env_changed()
+        if config.TWO_STAGE_NO_REPLY_ENABLED:
+            return await self.send_no_reply_alert_stage1(account_id, peer, message_text, msg_id)
+
         if not self.bot or not config.ALERT_GROUP_ID:
             return
         if db.has_alert_today("no_reply", peer["id"]):
@@ -365,6 +427,229 @@ class AlertBot:
             # v2.10.23: 推送失败 → bot_message_id 保持 null,has_alert_today 不认作已推
             # 下次 _no_reply_loop 扫到会重试;这里额外写个日志带 alert_id 方便排查
             logger.error("发送未回复预警失败 alert_id=%s: %s (下次扫描会重试)", alert_id, e)
+
+    # ===================== v3.0.0 两段式未回复预警 =====================
+
+    @staticmethod
+    def _format_tg_mention(tg_id_or_username, display_name=""):
+        """把账号配的 business_tg_id / owner_tg_id 字段渲染成 TG @mention HTML 片段。
+
+        - 纯数字 → inline mention `<a href="tg://user?id=N">name</a>`
+          (最可靠:对方没设 username 也能触发群 @ 通知)
+        - 其他(字母/下划线/混合) → 当作 TG username,渲染成 `@xxx`
+          (兼容用户名场景,但需要对方设了 username;TG 不支持 username 形式自定义显示名)
+        - 空值 / 空白 → 返回空串,由调用方/模板决定要不要省略尾行
+
+        display_name 仅对 numeric 分支有效,会 html.escape 后作为 inline mention 的可见文字。
+        实际推送前会经过 _build_tg_mention 先尝试 Telethon 解析拿真实 name,这函数是兜底。
+        """
+        if not tg_id_or_username:
+            return ""
+        val = str(tg_id_or_username).strip().lstrip("@")
+        if not val:
+            return ""
+        if val.isdigit():
+            safe_name = html.escape(display_name) if display_name else "请处理"
+            return f'<a href="tg://user?id={val}">{safe_name}</a>'
+        # username 形式 — v3.0.0 Codex P1:也 escape 防御 TG username 规范外的非法字符
+        # (API 层有 ^(\d+|@?[A-Za-z][A-Za-z0-9_]{4,31})$ 校验,理论上不会进到这;
+        #  但 DB 里可能残留旧数据 / 非 API 路径写入,防御式 escape 不坏)
+        return f"@{html.escape(val)}"
+
+    async def _resolve_tg_entity(self, tg_id_or_username: str):
+        """用监听号 Telethon client 解析 TG 用户,返回 (numeric_user_id, display_name)。
+
+        - 成功 → (12345, "伊凡") 即使输入是 username 也拿到 numeric ID,
+                 这样无论 username 还是 numeric 都能走 inline mention 格式显示真名
+        - 失败(网络/未找到/listener 未注入) → (None, "")
+        - 不抛异常,对推送流程透明
+        """
+        if not tg_id_or_username or not self.listener:
+            return None, ""
+        client = next(iter(self.listener.clients.values()), None)
+        if not client:
+            return None, ""
+        try:
+            val = str(tg_id_or_username).strip().lstrip("@")
+            entity_id = int(val) if val.isdigit() else val
+            entity = await client.get_entity(entity_id)
+            uid = getattr(entity, "id", None)
+            first = getattr(entity, "first_name", "") or ""
+            last  = getattr(entity, "last_name",  "") or ""
+            return uid, (first + " " + last).strip()
+        except Exception as e:
+            logger.debug("_resolve_tg_entity(%s) 失败: %s", tg_id_or_username, e)
+            return None, ""
+
+    async def _build_tg_mention(self, tg_id_or_username: str, fallback_name: str = "") -> str:
+        """构造 TG @ mention 字符串(parse_mode=HTML 发送)。
+
+        优先走 Telethon 解析: 拿到 numeric ID + 真实显示名 →
+          `<a href="tg://user?id=N">伊凡</a>` (最可靠,对方没 username 也能 @)
+
+        退化路径(Telethon 查不到 / listener 未注入):
+          - 数字输入 → `<a href="tg://user?id=N">{fallback_name}</a>`
+          - username → `@username` (TG 不支持 username 形式的自定义显示名)
+          - 空 → ""
+        """
+        if not tg_id_or_username:
+            return ""
+        uid, resolved = await self._resolve_tg_entity(tg_id_or_username)
+        if uid:
+            name = resolved or fallback_name or "请处理"
+            return f'<a href="tg://user?id={uid}">{html.escape(name)}</a>'
+        return self._format_tg_mention(tg_id_or_username, display_name=fallback_name)
+
+    def _make_keyboard_stage2(self, alert_id):
+        """stage2 带「登记违规 / 取消」两按钮。"""
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="登记违规", callback_data=f"violation:{alert_id}"),
+                InlineKeyboardButton(text="取消",     callback_data=f"cancel:{alert_id}"),
+            ]
+        ])
+
+    async def send_no_reply_alert_stage1(self, account_id, peer, message_text, msg_id):
+        """v3.0.0 批次 B: stage1(30 分钟)未回复预警 — @ 商务人员,无按钮。
+
+        入口:`send_no_reply_alert` 在 `TWO_STAGE_NO_REPLY_ENABLED=true` 时分流到这里。
+
+        推送群路由:
+          UNREPLIED_ALERT_GROUP_ID(若设置)> ALERT_GROUP_ID(fallback)
+          两段式群单独配,便于把 no_reply 类跟关键词/删除类分流到不同审查员。
+
+        行为语义:
+          - 沿用 has_alert_today("no_reply") 天级去重(跟老单段版一致)
+          - 沿用 ALERT_NO_REPLY_ENABLED 子开关,关时插静默 stage1 占去重名额
+          - 成功推送 → update_alert_bot_msg 写 bot_message_id 才算「真送达」
+          - 推送失败 → bot_message_id 保持 null,has_alert_today 不认作已推,下轮重试
+            (跟 v2.10.23 为 no_reply / delete 立下的失败重试语义一致)
+
+        parse_mode="HTML" 是关键:渲染 numeric tg_id 的 inline mention 必须 HTML。
+        """
+        target_group = config.UNREPLIED_ALERT_GROUP_ID or config.ALERT_GROUP_ID
+        if not self.bot or not target_group:
+            return
+        if db.has_alert_today("no_reply", peer["id"]):
+            return
+
+        account = db.get_account_by_id(account_id)
+        if not account:
+            return
+
+        config.reload_if_env_changed()
+
+        if not config.ALERT_NO_REPLY_ENABLED:
+            # 静默:插入 stage1 alert 但标 silenced,当天不再重复扫
+            alert_id = db.insert_stage1_alert(
+                account_id=account_id,
+                peer_id=peer["id"],
+                msg_id=msg_id,
+                message_text=message_text,
+            )
+            db.update_alert_status(alert_id, "silenced")
+            logger.info("[ALERT_NO_REPLY_DISABLED] stage1 静默记录 peer=%s", peer["id"])
+            return
+
+        # 正常路径:创建 pending stage1 alert(bot_message_id=null),推送,成功后 update_alert_bot_msg
+        alert_id = db.insert_stage1_alert(
+            account_id=account_id,
+            peer_id=peer["id"],
+            msg_id=msg_id,
+            message_text=message_text,
+        )
+
+        business_tg = account["business_tg_id"] if "business_tg_id" in account.keys() else ""
+        business_mention = await self._build_tg_mention(business_tg, fallback_name="商务人员")
+        # v2.10.26 客户反馈: 文案改全域统一,不再每个号单独配
+        custom_text = getattr(config, "REMIND_30MIN_TEXT", "") or ""
+
+        msg = templates.no_reply_alert_stage1(
+            company=account["company"],
+            operator=account["operator"],
+            account_name=account["name"],
+            peer_name=peer["name"],
+            message_text=message_text,
+            business_mention=business_mention,
+            custom_text=custom_text,
+        )
+        try:
+            sent = await self.bot.send_message(
+                target_group, msg,
+                parse_mode="HTML",  # 渲染 inline mention 必须
+            )
+            db.update_alert_bot_msg(alert_id, sent.message_id)
+        except Exception as e:
+            # 失败不 update bot_message_id,has_alert_today 不认作已推 → 下次扫描重试
+            logger.error("发送 stage1 预警失败 alert_id=%s: %s", alert_id, e)
+
+    async def send_no_reply_alert_stage2(self, alert_id):
+        """v3.0.0 批次 B: stage2 升级推送 — @ 负责人,带「登记违规/取消」按钮。
+
+        入口:tasks.py::_no_reply_stage2_loop 扫到 stage=1 pending 且超 NO_REPLY_STAGE2_AFTER_MIN
+        分钟的记录,逐条调本函数。
+
+        并发保护:db.upgrade_to_stage2(alert_id) 原子 UPDATE WHERE stage=1 AND status='pending',
+        rowcount=1 才继续推。抢不到(被另一个进程升级了 / status 变了)直接 return。
+
+        失败 trade-off:upgrade_to_stage2 成功但 send_message 失败 → stage=2 无法回退(极少数
+        场景群里少一条消息,但不会打错 / 漏登记,可接受)。
+        """
+        alert = db.get_alert(alert_id)
+        if not alert or alert["type"] != "no_reply" or alert["stage"] != 1:
+            return
+        if alert["status"] != "pending":
+            return  # 可能已被 listener outbound 钩子标记 handled_by_reply
+        target_group = config.UNREPLIED_ALERT_GROUP_ID or config.ALERT_GROUP_ID
+        if not self.bot or not target_group:
+            return
+
+        account = db.get_account_by_id(alert["account_id"])
+        peer = db.get_conn().execute(
+            "SELECT * FROM peers WHERE id=?", (alert["peer_id"],)
+        ).fetchone()
+        if not account or not peer:
+            return
+
+        # 先原子升级,抢到才推;抢不到直接跳(别人已经升级了 / 状态变了)
+        if not db.upgrade_to_stage2(alert_id, new_bot_msg_id=None):
+            return
+
+        owner_tg = account["owner_tg_id"] if "owner_tg_id" in account.keys() else ""
+        owner_mention = await self._build_tg_mention(owner_tg, fallback_name="负责人")
+        # v2.10.26 客户反馈: 文案改全域统一
+        custom_text = getattr(config, "REMIND_40MIN_TEXT", "") or ""
+
+        msg = templates.no_reply_alert_stage2(
+            company=account["company"],
+            operator=account["operator"],
+            account_name=account["name"],
+            peer_name=peer["name"],
+            message_text=alert["message_text"],
+            owner_mention=owner_mention,
+            custom_text=custom_text,
+        )
+        try:
+            sent = await self.bot.send_message(
+                target_group, msg,
+                parse_mode="HTML",
+                reply_markup=self._make_keyboard_stage2(alert_id),
+            )
+            db.update_alert_bot_msg(alert_id, sent.message_id)
+        except Exception as e:
+            # v3.0.0 Codex P1:stage2 send 失败 → 回滚 stage=2 → stage=1,
+            # 让 _no_reply_stage2_loop 下轮重新扫到重试。不回滚会永久丢升级
+            # (stage2 loop 只扫 stage=1,writeback loop 也只补 sheet 不管 push)。
+            logger.error("发送 stage2 预警失败 alert_id=%s: %s (回滚到 stage=1)", alert_id, e)
+            try:
+                if db.rollback_stage2_to_stage1(alert_id):
+                    logger.info("stage2 回滚成功: alert_id=%s,下轮 loop 重试", alert_id)
+                else:
+                    logger.warning("stage2 回滚未命中(可能状态已变): alert_id=%s", alert_id)
+            except Exception as re:
+                logger.error("stage2 回滚异常 alert_id=%s: %s", alert_id, re)
+
+    # ===================== v3.0.0 两段式结束 =====================
 
     async def send_delete_alert(self, account_id, peer, message_text, msg_id):
         """发送删除预警（每个广告主每天只推一次)
@@ -444,21 +729,35 @@ class AlertBot:
         ).fetchone()[0]
 
         def _status_breakdown(type_name):
+            """v3.0.0 Codex P2:把两段式预警新状态(violation_logged / cancelled / handled_by_reply)
+            并入现有三桶,不要漏算让 no_reply 总数失真。
+            - violation_logged(stage2 登记违规)= 业务视角「已通过审核」,并入 approved
+            - cancelled(stage2 取消)           = 业务视角「已拒绝」,并入 rejected
+            - handled_by_reply(商务已回复)      = 业务视角「已处理」,并入 approved
+            - silenced(开关关时静默)           = 独立桶,不进日报 bucket 但计入总数"""
             rows = conn.execute(
                 "SELECT status, COUNT(*) FROM alerts WHERE type=? AND created_at LIKE ? GROUP BY status",
                 (type_name, f"{yesterday}%")
             ).fetchall()
             bucket = {"approved": 0, "pending": 0, "rejected": 0}
+            total = 0
             for status, cnt in rows:
-                if status in bucket:
-                    bucket[status] = cnt
+                total += cnt
+                if status in ("approved", "violation_logged", "handled_by_reply"):
+                    bucket["approved"] += cnt
+                elif status in ("rejected", "cancelled"):
+                    bucket["rejected"] += cnt
+                elif status == "pending":
+                    bucket["pending"] += cnt
+                # silenced 不进 bucket,但进 total
+            bucket["_total"] = total
             return bucket
 
         no_reply_detail = _status_breakdown("no_reply")
-        no_reply = sum(no_reply_detail.values())
+        no_reply = no_reply_detail.pop("_total")
 
         delete_detail = _status_breakdown("deleted")
-        deleted = sum(delete_detail.values())
+        deleted = delete_detail.pop("_total")
 
         keyword_count = conn.execute(
             "SELECT COUNT(*) FROM alerts WHERE type='keyword' AND created_at LIKE ?",

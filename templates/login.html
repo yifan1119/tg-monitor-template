@@ -277,7 +277,7 @@
 </head>
 <body>
 <div class="scanline"></div>
-<form class="login-box" method="POST">
+<form class="login-box" method="POST" id="login-form">
   <div class="login-icon">TG</div>
   <h1>TG MONITOR</h1>
   {% if company %}<div class="company">{{ company }}</div>{% endif %}
@@ -290,7 +290,9 @@
     <input class="login-input" type="password" name="password"
            placeholder="密码" autocomplete="current-password">
   </div>
-  <button class="login-btn" type="submit">▸ 登入系统</button>
+  {# v3.0.0 (v2.10.25 對面會話建議):按鈕提交後立刻 disable + 改文案,防客戶反复点击
+     触发 BRUTE_THRESHOLD=5 被 IP 锁 15 分钟。密码错跳回 login.html 时 DOM 重渲染自动 reset。#}
+  <button class="login-btn" type="submit" id="login-submit">▸ 登入系统</button>
   {% if error %}
   <div class="error">{{ error }}</div>
   {% endif %}
@@ -359,6 +361,20 @@
                                  min-height:18px;letter-spacing:1px;"></div>
   </div>
 </div>
+
+<script>
+// v3.0.0: Login 按钮防呆 — 提交后立刻 disable 避免客户反复点触发 BRUTE_THRESHOLD=5 IP 锁
+(function(){
+  const form = document.getElementById('login-form');
+  const btn = document.getElementById('login-submit');
+  if (form && btn) {
+    form.addEventListener('submit', () => {
+      btn.disabled = true;
+      btn.innerText = '登入中...';
+    });
+  }
+})();
+</script>
 
 <script>
 (function(){

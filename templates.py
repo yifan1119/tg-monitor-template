@@ -1,4 +1,5 @@
 """推送消息模板 — 按商务提供的格式"""
+import html as _html
 import config
 
 
@@ -11,6 +12,54 @@ def no_reply_alert(company, operator, account_name, peer_name, message_text):
         f"{config.PEER_ROLE_LABEL}：{peer_name}\n"
         f"未回复信息：{message_text}"
     )
+
+
+def no_reply_alert_stage1(company, operator, account_name, peer_name,
+                          message_text, business_mention="", custom_text=""):
+    """v3.0.0 批次 B: stage1 未回复预警(30 分钟触发,@ 商务人员,无按钮)。
+
+    business_mention: `_build_tg_mention` 生成的 HTML mention 片段;空串代表账号没配
+                      business_tg_id,模板自动省略尾行 @ 退化成纯提醒(仍发预警不报错)。
+    custom_text:      REMIND_30MIN_TEXT 全域文案;空则用内置默认「请尽快回复」。
+
+    HTML parse_mode 必须:纯文字字段统一 html.escape 防止 `& < >` 让 TG HTML parser 炸。
+    business_mention 已由 `_build_tg_mention` 内部处理过 escape,这里不再二次动。
+    """
+    e = _html.escape
+    base = (
+        f"【信息未回复预警{config.COMPANY_DISPLAY}】\n\n"
+        f"中心/部门：{e(company)}\n"
+        f"{config.OPERATOR_LABEL}：{e(operator)}\n"
+        f"外事号：{e(account_name)}\n"
+        f"{config.PEER_ROLE_LABEL}：{e(peer_name)}\n"
+        f"未回复信息：{e(message_text)}"
+    )
+    tail_text = e(custom_text.strip()) if custom_text else "请尽快回复"
+    if business_mention:
+        return f"{base}\n\n{business_mention} {tail_text}"
+    # 账号没填 business_tg_id → 只写提醒文案,不带 @
+    return f"{base}\n\n{tail_text}"
+
+
+def no_reply_alert_stage2(company, operator, account_name, peer_name,
+                          message_text, owner_mention="", custom_text=""):
+    """v3.0.0 批次 B: stage2 未回复升级(stage1 后 NO_REPLY_STAGE2_AFTER_MIN 分钟仍未回,
+    @ 负责人,带「登记违规/取消」按钮)。
+    owner_mention 空则退化不带 @。纯文字字段统一 html.escape。
+    """
+    e = _html.escape
+    base = (
+        f"【信息未回复升级{config.COMPANY_DISPLAY}】\n\n"
+        f"中心/部门：{e(company)}\n"
+        f"{config.OPERATOR_LABEL}：{e(operator)}\n"
+        f"外事号：{e(account_name)}\n"
+        f"{config.PEER_ROLE_LABEL}：{e(peer_name)}\n"
+        f"未回复信息：{e(message_text)}"
+    )
+    tail_text = e(custom_text.strip()) if custom_text else "已超过 40 分钟未回复,请处理"
+    if owner_mention:
+        return f"{base}\n\n{owner_mention} {tail_text}"
+    return f"{base}\n\n{tail_text}"
 
 
 def delete_alert(company, operator, account_name, peer_name, message_text=""):
