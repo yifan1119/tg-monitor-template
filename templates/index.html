@@ -965,9 +965,10 @@
             {% else %}
               <span class="tag tag-active">● Online</span>
             {% endif %}
-            {# v3.0.0(ADR-0015):两段式预警账号级配置按钮,条件渲染(flag 关时不出)。
+            {# v3.0.1:按钮无条件渲染,有 s.id 就出。数据驱动——只有 account.business_tg_id
+               非空才真正启用两段式推送,没配的账号行为跟 v2.10.25 一样(单段推送)。
                data-* 属性 + addEventListener 而非 onclick,避免嵌 JSON 双引号冲突 #}
-            {% if two_stage_no_reply_enabled and s.id %}
+            {% if s.id %}
             <button class="btn-remove two-stage-config-btn"
                     data-account-id="{{ s.id }}"
                     data-account-name="{{ s.name or s.phone }}"
@@ -987,8 +988,7 @@
   </div>
 </div>
 
-{% if two_stage_no_reply_enabled %}
-<!-- v3.0.0(ADR-0015):两段式预警账号级配置 modal -->
+<!-- v3.0.0(ADR-0015) / v3.0.1 移除 flag:两段式预警账号级配置 modal(无条件渲染) -->
 <div id="notifyConfigModal" style="display:none;position:fixed;z-index:9999;left:0;top:0;width:100%;height:100%;background:rgba(4,13,22,0.85);">
   <div style="position:relative;background:#0d1922;border:1px solid rgba(126,201,255,0.3);border-radius:12px;width:560px;max-width:92%;margin:6% auto;padding:28px;box-shadow:0 0 40px rgba(126,201,255,0.2);">
     <h3 style="color:#7ec9ff;margin:0 0 6px 0;font-size:15px;letter-spacing:1px;">两段式未回复预警配置</h3>
@@ -1022,13 +1022,11 @@
     </div>
   </div>
 </div>
-{% endif %}
 
 <script>
 let currentPhone = '';
 
-{% if two_stage_no_reply_enabled %}
-// v3.0.0(ADR-0015):两段式预警账号级配置 modal 交互
+// v3.0.0(ADR-0015) / v3.0.1 移除 flag:两段式预警账号级配置 modal 交互(无条件)
 let ncAccountId = null;
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1101,7 +1099,6 @@ async function saveNotifyConfig() {
     document.getElementById('ncMsg').style.color = '#f56666';
   }
 }
-{% endif %}
 
 function showStep(step) {
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));

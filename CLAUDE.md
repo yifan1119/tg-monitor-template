@@ -76,6 +76,34 @@ commit message 里明确标出「影响文档」:
 - `~/Desktop/claude/tg-monitor-template/` = main(稳定版)
 - `~/Desktop/claude/tg-monitor-v3/` = feature/v3.0.0(开发中)
 
+### 8. 🔴 Docker 容器启动 cp 列表(踩过多次的坑,硬性规定)
+
+**问题**:`docker-compose.yml` 容器 command 写的是 `cp -rf /app/repo/*.py /app/` — **只 copy `.py` 文件**,不覆盖:
+- `README.md`(Flask `_app_version_string()` 读这个显示登入页版本号)
+- `release_notes.json`(升级通知用)
+- `templates/*.html`(前端 UI)
+- `docs/**`(ADR + testing 文档)
+
+导致升级后:
+- 登入页版本号**显示老版**(Flask 读 `/app/README.md` 还是镜像原始版)
+- 前端按钮/modal 改动**没生效**(Flask 读 `/app/templates/*.html` 还是镜像原始版)
+
+**硬性规定**:每次 scp 部署改动到 VPS 后,一律走这个命令同步所有文件到容器:
+
+```bash
+docker exec <container> sh -c '
+  cp -rf /app/repo/*.py /app/
+  cp -rf /app/repo/templates/*.html /app/templates/ 2>/dev/null
+  cp -rf /app/repo/README.md /app/README.md 2>/dev/null
+  cp -rf /app/repo/release_notes.json /app/release_notes.json 2>/dev/null
+'
+docker restart <container>
+```
+
+**长期修法**(还没做):改 `docker-compose.yml` 的 command 覆盖所有非 state 文件,`docker restart` 就自动同步。但要 recreate 容器,留给下个版本(v3.0.2+)一起做。
+
+目前每次部署必须人工保证这 4 类文件都 cp 到 /app/,否则客户看到的跟代码不一致。
+
 ## 关键决策历史
 
 全部 ADR 见 [`docs/adr/`](docs/adr/README.md)。

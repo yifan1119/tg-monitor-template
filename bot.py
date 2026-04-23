@@ -367,13 +367,17 @@ class AlertBot:
         - 静默(开关关)→ 插入 alert 并标 status='silenced',has_alert_today 当「已处理」
         - 推送失败 → 保留 bot_message_id=null,has_alert_today 不认作已推,下次扫描重试
           (修之前「第一次推送失败后一整天不再重试」的 bug)
-        v3.0.0:
-        - TWO_STAGE_NO_REPLY_ENABLED=true → 分流到 send_no_reply_alert_stage1,走两段式新路径
-        - flag=false(默认)→ 走以下原 v2.10.25 老单段路径,100% 向后兼容
+        v3.0.1:
+        - 移除 TWO_STAGE_NO_REPLY_ENABLED flag,改数据驱动:
+          · account.business_tg_id 非空 → 走 stage1(两段式)
+          · account.business_tg_id 空 → 走老单段路径(= v2.10.25 行为,零感知)
+        - 客户升级后,没配 TG ID 的账号行为跟 v2.10.25 完全一样,
+          配了的账号自动启用两段式,不需要改 .env
         """
-        # v3.0.0 feature flag 分流 — 入口单点,保证 flag 关时老行为零差异
         config.reload_if_env_changed()
-        if config.TWO_STAGE_NO_REPLY_ENABLED:
+        # v3.0.1 数据驱动: 有配 business_tg_id 走两段式,没配走老单段
+        account = db.get_account_by_id(account_id)
+        if account and (account["business_tg_id"] if "business_tg_id" in account.keys() else ""):
             return await self.send_no_reply_alert_stage1(account_id, peer, message_text, msg_id)
 
         if not self.bot or not config.ALERT_GROUP_ID:
