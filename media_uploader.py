@@ -326,6 +326,8 @@ def _build_archive_caption(media_type, account_row, peer_name, media_seq, file_n
     elif media_type == "file":
         # 文件有名字 → 附在后面,没名字 → 只写「文件」
         content_desc = f"文件:{file_name}" if file_name else "文件"
+    elif media_type == "voice":
+        content_desc = "语音"
     else:
         content_desc = media_type or "媒体"
 
@@ -345,19 +347,23 @@ async def forward_to_tg_archive(message, media_type, account_row, peer_name, med
     """v2.10.25(ADR-0014):把 Telethon 收到的媒体下载到内存,用 aiogram Bot 转发到
     MEDIA_ARCHIVE_GROUP_ID 指定的 TG 群,caption 带业务上下文。
 
-    仅处理 photo + file 两类(语音/视频/贴纸由调用方过滤,不走这个函数)。
+    v2.10.25 首版只转 photo + file。v2.10.25 测试期用户补充要求加上 voice —
+    所以当前支持:photo + file + voice(video / sticker 仍由调用方过滤)。
 
     返回 (display_text, archive_msg_id):
-      - 成功:display = '=HYPERLINK("t.me/c/.../N", "图片 #42")' / '=HYPERLINK(..., "文件 #42")'
+      - 成功:display = '=HYPERLINK("t.me/c/.../N", "图片 #42")' /
+                        '=HYPERLINK(..., "文件 #42")' / '=HYPERLINK(..., "语音 #42")'
              archive_msg_id = TG 档案群里的 msg_id
-      - 失败:("", 0) → 调用方 fallback 到文字占位「[图片]」「[文件]」
+      - 失败:("", 0) → 调用方 fallback 到文字占位「[图片]」「[文件]」「[语音]」
 
-    Bot API 限制:photo 10MB / document 50MB。photo 超出 → 降级用 send_document 转发
-    (仍能保留,只是档案群里显示为文件不是图片缩图)。document 超限 → 放弃返回 ("", 0)。
+    Bot API 限制:photo 10MB / document 50MB / voice 50MB。photo 超出 → 降级用
+    send_document 转发(仍能保留,只是档案群里显示为文件不是图片缩图)。
+    voice 发送失败 → 降级 send_document(仍然保留 .ogg 文件供下载播放)。
+    document 超限 → 放弃返回 ("", 0)。
     """
     if not is_tg_archive_enabled():
         return "", 0
-    if media_type not in ("photo", "file"):
+    if media_type not in ("photo", "file", "voice"):
         return "", 0
 
     try:
@@ -396,7 +402,7 @@ async def forward_to_tg_archive(message, media_type, account_row, peer_name, med
             original_name = getattr(message.file, "name", "") or ""
         except Exception:
             pass
-        ext_map = {"photo": ".jpg", "file": ".bin"}
+        ext_map = {"photo": ".jpg", "file": ".bin", "voice": ".ogg"}
         if original_name:
             filename = f"{ts}_{original_name}"
         else:
@@ -421,6 +427,15 @@ async def forward_to_tg_archive(message, media_type, account_row, peer_name, med
                 # 降级前要重建 BufferedInputFile(原 input_file 可能已被消费)
                 input_file = BufferedInputFile(data, filename=filename)
                 sent = await _archive_bot.send_document(chat_id, input_file, caption=caption)
+        elif media_type == "voice":
+            # 语音:走 send_voice 保留档案群里的波形播放体验;
+            # 非 opus/ogg 格式可能触发 send_voice 报错 → 降级 send_document 仍能保留文件
+            try:
+                sent = await _archive_bot.send_voice(chat_id, input_file, caption=caption)
+            except Exception as e:
+                logger.warning("send_voice 失败,降级用 send_document: %s", e)
+                input_file = BufferedInputFile(data, filename=filename)
+                sent = await _archive_bot.send_document(chat_id, input_file, caption=caption)
         else:
             # file 类或 photo 超 10MB → send_document
             sent = await _archive_bot.send_document(chat_id, input_file, caption=caption)
@@ -431,7 +446,8 @@ async def forward_to_tg_archive(message, media_type, account_row, peer_name, med
 
         archive_msg_id = int(sent.message_id)
         link = _archive_deep_link(archive_msg_id)
-        label_prefix = "图片" if media_type == "photo" else "文件"
+        label_map = {"photo": "图片", "file": "文件", "voice": "语音"}
+        label_prefix = label_map.get(media_type, "媒体")
         label = f"{label_prefix} #{media_seq}"
         safe_label = label.replace('"', '""')
         display = f'=HYPERLINK("{link}", "{safe_label}")'

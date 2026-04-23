@@ -90,8 +90,9 @@ class Listener:
             return text_fallback, 0, 0
 
         if mode == "tg_archive":
-            # 只转发 photo + file,语音/视频/贴纸保留文字占位(用户明确要求)
-            if media_type not in ("photo", "file"):
+            # 转发 photo + file + voice,视频/贴纸保留文字占位
+            # (v2.10.25 首版只转 photo+file;测试期用户追加 voice 需求,一起做进 v2.10.25)
+            if media_type not in ("photo", "file", "voice"):
                 return text_fallback, 0, 0
             if not media_uploader.is_tg_archive_enabled():
                 return text_fallback, 0, 0
