@@ -219,6 +219,7 @@ def write_env(updates):
         "API_ID", "API_HASH",
         "COMPANY_NAME", "COMPANY_DISPLAY", "PEER_ROLE_LABEL", "OPERATOR_LABEL",
         "SHEET_ID", "MEDIA_FOLDER_ID", "MEDIA_RETENTION_DAYS", "MEDIA_MAX_MB",
+        "MEDIA_STORAGE_MODE", "MEDIA_ARCHIVE_GROUP_ID",
         "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
         "BOT_TOKEN", "ALERT_GROUP_ID",
         "WEB_PORT", "WEB_PASSWORD",
@@ -806,6 +807,9 @@ def setup_page():
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
         "media_retention_days": env.get("MEDIA_RETENTION_DAYS", "0"),
+        # v2.10.25(ADR-0014):媒体存储模式 + TG 档案群 ID
+        "media_storage_mode": (env.get("MEDIA_STORAGE_MODE", "drive") or "drive").lower(),
+        "media_archive_group_id": env.get("MEDIA_ARCHIVE_GROUP_ID", ""),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -837,6 +841,9 @@ def settings_page():
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
         "media_retention_days": env.get("MEDIA_RETENTION_DAYS", "0"),
+        # v2.10.25(ADR-0014):媒体存储模式 + TG 档案群 ID
+        "media_storage_mode": (env.get("MEDIA_STORAGE_MODE", "drive") or "drive").lower(),
+        "media_archive_group_id": env.get("MEDIA_ARCHIVE_GROUP_ID", ""),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -1372,6 +1379,11 @@ def _save_settings(is_first):
         "MEDIA_FOLDER_ID": form.get("media_folder_id", "").strip(),
         "MEDIA_MAX_MB": form.get("media_max_mb", "20").strip() or "20",
         "MEDIA_RETENTION_DAYS": form.get("media_retention_days", "0").strip() or "0",
+        # v2.10.25(ADR-0014):媒体存储模式 + TG 档案群 ID(模式枚举只允许 drive/tg_archive/off,其他值回退 drive 保兼容)
+        "MEDIA_STORAGE_MODE": (form.get("media_storage_mode", "drive").strip().lower()
+                               if form.get("media_storage_mode", "drive").strip().lower() in ("drive", "tg_archive", "off")
+                               else "drive"),
+        "MEDIA_ARCHIVE_GROUP_ID": form.get("media_archive_group_id", "").strip(),
         "GOOGLE_OAUTH_CLIENT_ID": form.get("oauth_client_id", "").strip(),
         "GOOGLE_OAUTH_CLIENT_SECRET": form.get("oauth_client_secret", "").strip(),
         "KEYWORDS": new_keywords_str,

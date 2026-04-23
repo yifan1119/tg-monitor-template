@@ -848,7 +848,45 @@
         </div>
       </div>
 
+      {# ============ v2.10.25(ADR-0014):媒体存储模式 ============ #}
       <div class="field" style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
+        <label>媒体存储模式 <span style="color:#7c8a9a;font-weight:400;">(图片 / 文件怎么存)</span></label>
+        <select name="media_storage_mode" id="media_storage_mode"
+                style="padding:9px 12px;background:#0f1822;color:#cfe3f5;border:1px solid rgba(255,255,255,0.12);border-radius:6px;font-size:14px;width:100%;max-width:520px;">
+          <option value="drive" {{ 'selected' if (d.media_storage_mode or 'drive') == 'drive' else '' }}>Google Drive(默认,老客户无感 — 图片直显 Sheet)</option>
+          <option value="tg_archive" {{ 'selected' if d.media_storage_mode == 'tg_archive' else '' }}>TG 档案群(Bot 转发到独立群,规避 Google 账号冻结)</option>
+          <option value="off" {{ 'selected' if d.media_storage_mode == 'off' else '' }}>关闭(仅文字占位 [图片]/[文件])</option>
+        </select>
+        <div class="hint" style="margin-top:10px;">
+          <b style="color:#7ec9ff;">Drive</b>:图片/文件上传到客户的 Google Drive,Sheet 显示缩略图。<span style="color:#ff9b3d;">⚠ 违规内容可能触发 Google 账号冻结 → 连带 Sheets 一起挂</span><br>
+          <b style="color:#9ef0b8;">TG 档案群</b>:Bot 把图片/文件转到一个独立 TG 群存档,Sheet 显示「图片 #N」/「文件 #N」超链接点击可跳转。<b>风险隔离</b>,档案群出问题不影响 Sheets。<br>
+          <b style="color:#9eb4c7;">关闭</b>:完全不处理媒体,Sheet 只写 [图片]/[文件] 文字,最省成本
+        </div>
+      </div>
+
+      {# ============ TG 档案群模式:档案群 ID 输入 ============ #}
+      <div class="field" id="tg-archive-fields" style="display:{{ 'block' if d.media_storage_mode == 'tg_archive' else 'none' }};background:rgba(158,240,184,0.05);border-left:3px solid #9ef0b8;padding:14px 16px;border-radius:6px;margin-top:10px;">
+        <label>TG 档案群 Chat ID <span class="req">*</span></label>
+        <input type="text" name="media_archive_group_id" id="media_archive_group_id"
+               value="{{ d.media_archive_group_id or '' }}"
+               placeholder="-1001234567890(supergroup,负数且 abs 以 100 开头)">
+        <div class="hint" style="margin-top:8px;">
+          <b>做法</b>:
+          <ol style="margin:6px 0 0 16px;color:#bfd6e8;">
+            <li>TG 建新群(建议改成 supergroup:群里加个额外管理员就会自动升级)</li>
+            <li>把<b>上方填的同一个 Bot</b> 拉进群,给<b>管理员 + 发送消息</b>权限</li>
+            <li>群里拉 <a href="https://t.me/RawDataBot" target="_blank" style="color:#7ec9ff;">@RawDataBot</a> 或 <a href="https://t.me/userinfobot" target="_blank" style="color:#7ec9ff;">@userinfobot</a>,它会回一条 JSON/消息,里面的 <code>chat.id</code> 就是(格式 <code>-100xxxxxxxxxx</code>)</li>
+            <li>拿到 ID 后可以把 RawDataBot 踢掉</li>
+          </ol>
+          <div style="margin-top:8px;padding:8px 12px;background:rgba(255,155,61,0.08);border-left:3px solid #ff9b3d;border-radius:4px;color:#ffd28a;font-size:12.5px;">
+            ⚠ 格式必须是 <b>-100 开头的负数</b>。填用户 ID(正数)会被系统拒绝(防止把客户图片 DM 到某个人),填普通群 ID(负数但无 -100 前缀)也不支持(t.me/c 深链 404)
+          </div>
+        </div>
+      </div>
+
+      {# ============ Drive 模式:Drive 文件夹 ID + 旧媒体清理(tg_archive / off 下隐藏) ============ #}
+      <div id="drive-mode-fields" style="display:{{ 'none' if d.media_storage_mode in ('tg_archive', 'off') else 'block' }};">
+      <div class="field" style="margin-top:12px;">
         <label>媒体文件直显 — Drive 文件夹 ID <span style="color:#7c8a9a;font-weight:400;">(自动建,无需手填)</span></label>
         <input type="text" name="media_folder_id" id="media_folder_id"
                value="{{ d.media_folder_id or '' }}"
@@ -886,14 +924,19 @@
         <button type="button" class="test-btn" id="testMediaFolderBtn" style="margin-top:10px;">▸ 测试文件夹权限</button>
         <span class="test-result" id="testMediaFolderResult"></span>
       </div>
+      </div>{# /drive-mode-fields #}
 
-      <div class="field">
+      {# media_max_mb 在 drive 和 tg_archive 下都有效(tg_archive 叠加 Bot 10/50MB 限制),off 下隐藏 #}
+      <div class="field" id="media-max-mb-field" style="display:{{ 'none' if d.media_storage_mode == 'off' else 'block' }};">
         <label>单文件上传上限 (MB)</label>
         <input type="number" name="media_max_mb" value="{{ d.media_max_mb or 20 }}" min="1" max="200" style="max-width:120px;">
-        <div class="hint">超过此大小的文件不会上传(防止刷爆 Drive),只显示文字占位。预设 20 MB</div>
+        <div class="hint">
+          超过此大小跳过处理,只显示文字占位。预设 20 MB。
+          <b>TG 档案群模式下</b>叠加 Bot API 硬限:图片 &gt; 10MB 自动降级发送文件,文件 &gt; 50MB 跳过回落文字。
+        </div>
       </div>
 
-      <div class="field">
+      <div class="field" id="drive-retention-field" style="display:{{ 'none' if d.media_storage_mode in ('tg_archive', 'off') else 'block' }};">
         <label>Drive 旧媒体自动清理 (天) <span style="color:#7c8a9a;font-weight:400;">— 0 表示永不清理</span></label>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
           <input type="number" name="media_retention_days" id="media_retention_days"
@@ -907,7 +950,8 @@
         <div class="hint">
           每天凌晨 03:00 (北京时间) 自动删除 Drive 文件夹里超过 N 天的文件,防止长期堆积。
           删除后 Sheet 里的旧文件链接会失效,但文字记录(时间/发送人/内容)永久保留。
-          Drive 回收站还留 30 天,误删可以恢复。常用:30 / 60 / 90 天。
+          Drive 回收站还留 30 天,误删可以恢复。常用:30 / 60 / 90 天。<br>
+          <span style="color:#9eb4c7;">（TG 档案群 / 关闭 模式下该清理不跑,此项被隐藏）</span>
         </div>
       </div>
     </div>
@@ -1349,6 +1393,26 @@ if (autoCreateSheetBtn) {
 (function autoFillOauthHint() {
   const el = byId('oauth_redirect_hint');
   if (el) el.textContent = location.origin + '/api/oauth/callback';
+})();
+
+// v2.10.25(ADR-0014):媒体存储模式切换 — Drive / TG 档案群 / 关闭
+// 根据选择的模式切换相应字段的可见性
+(function toggleMediaStorageFields() {
+  const modeEl = byId('media_storage_mode');
+  if (!modeEl) return;
+  function update() {
+    const mode = modeEl.value;
+    const driveFields = byId('drive-mode-fields');
+    const archiveFields = byId('tg-archive-fields');
+    const retentionField = byId('drive-retention-field');
+    const maxMbField = byId('media-max-mb-field');
+    if (driveFields) driveFields.style.display = (mode === 'drive') ? 'block' : 'none';
+    if (archiveFields) archiveFields.style.display = (mode === 'tg_archive') ? 'block' : 'none';
+    if (retentionField) retentionField.style.display = (mode === 'drive') ? 'block' : 'none';
+    if (maxMbField) maxMbField.style.display = (mode === 'off') ? 'none' : 'block';
+  }
+  modeEl.addEventListener('change', update);
+  update();
 })();
 
 // ─── 表单快照 / 恢复 ────────────────────────────────────────────────────
