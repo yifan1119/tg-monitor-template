@@ -160,8 +160,6 @@ ${DOMAIN} {
     reverse_proxy ${UPSTREAM} {
         header_up Host {host}
         header_up X-Real-IP {remote}
-        header_up X-Forwarded-For {remote}
-        header_up X-Forwarded-Proto {scheme}
     }
     encode gzip
 }
@@ -169,44 +167,84 @@ ${DOMAIN} {
 EOF
 )
 
-    if [ -n "$EXT_CADDYFILE" ] && [ -f "$EXT_CADDYFILE" ]; then
-        # 去重:如果已经追加过本部门的 block 就跳过
-        if grep -q "TG Monitor (${COMPANY})" "$EXT_CADDYFILE"; then
-            echo "  ✓ $EXT_CADDYFILE 已包含本部门站点配置,跳过追加"
-        else
-            echo "  追加 site block 到 $EXT_CADDYFILE"
-            echo "$SITE_BLOCK" >> "$EXT_CADDYFILE"
-        fi
-
-        # 4e. reload Caddy
-        echo "  执行 Caddy reload..."
-        if docker exec "$EXTERNAL_CADDY" caddy reload --config /etc/caddy/Caddyfile 2>/dev/null; then
-            echo "  ✓ Caddy reload 成功"
-        elif docker exec "$EXTERNAL_CADDY" caddy reload --adapter caddyfile --config /etc/caddy/Caddyfile 2>/dev/null; then
-            echo "  ✓ Caddy reload 成功(caddyfile adapter)"
-        else
-            echo "  ⚠ reload 失败,改用 restart 兜底..."
-            docker restart "$EXTERNAL_CADDY" >/dev/null 2>&1 && echo "  ✓ Caddy 已重启" || \
-                echo "  ✗ Caddy 重启也失败,请手动处理"
-        fi
-
-        # 4f. 等证书拿到
-        echo "▸ 等 Let's Encrypt 给 $DOMAIN 签证书(最多 60 秒)..."
-        for i in $(seq 1 12); do
-            sleep 5
-            if docker logs "$EXTERNAL_CADDY" 2>&1 | tail -100 | grep -qE "certificate obtained|served key|certificate for \[${DOMAIN}\]"; then
-                echo "  ✓ 证书获取成功"
-                break
-            fi
-            echo "  ... 等待中 (${i}/12)"
-        done
-    else
+    # v3.0.2: 没找到 bind mount → 明确报错不静默
+    if [ -z "$EXT_CADDYFILE" ] || [ ! -f "$EXT_CADDYFILE" ]; then
         echo ""
-        echo "  ⚠ 没找到外部 Caddyfile 的 bind mount(可能用 JSON/API 配置,或镜像内置)"
+        echo "  ✗ 找不到外部 Caddy 的 Caddyfile bind mount(可能用 JSON/API 配置,或镜像内置)"
         echo "    请手动把下面这段加到你的 Caddy 配置里,然后 reload:"
         echo ""
         echo "$SITE_BLOCK"
         echo ""
+        exit 1
+    fi
+
+    # 4e. 去重 + 追加 site block(in-place append,同 inode)
+    if grep -q "TG Monitor (${COMPANY})" "$EXT_CADDYFILE"; then
+        echo "  ✓ $EXT_CADDYFILE 已包含本部门站点配置,跳过追加"
+    else
+        echo "  追加 site block 到 $EXT_CADDYFILE"
+        # 用 printf + >> 保证 append 不改 inode(避免 docker file bind mount 脱节)
+        printf '%s\n' "$SITE_BLOCK" >> "$EXT_CADDYFILE"
+
+        # 校验: 追加后 host 文件确实含新 block
+        if ! grep -q "TG Monitor (${COMPANY})" "$EXT_CADDYFILE"; then
+            echo "  ✗ 追加后校验失败,host 文件里没看到 ${COMPANY} 的 site block"
+            exit 1
+        fi
+    fi
+
+    # 4f. 🔴 v3.0.2 核心修复: 检查容器内 Caddyfile 是否跟 host 同步
+    # Docker file bind mount 按 inode 绑,host 上如果有人 sed -i / cp / vim 换过
+    # Caddyfile (原子替换),容器的 mount 仍指老 inode → 永远看不到新内容
+    # 诊断: 对比 host size vs 容器 size,不一致 → restart 容器重建 mount
+    HOST_SIZE=$(wc -c < "$EXT_CADDYFILE" 2>/dev/null | tr -d ' ')
+    CONTAINER_SIZE=$(docker exec "$EXTERNAL_CADDY" wc -c /etc/caddy/Caddyfile 2>/dev/null | awk '{print $1}')
+    if [ -n "$HOST_SIZE" ] && [ -n "$CONTAINER_SIZE" ] && [ "$HOST_SIZE" != "$CONTAINER_SIZE" ]; then
+        echo "  ⚠ host Caddyfile=${HOST_SIZE}B vs 容器 Caddyfile=${CONTAINER_SIZE}B 不一致"
+        echo "    这是 docker file bind mount 的 inode 断裂问题(历史上 sed -i/cp/vim 导致)"
+        echo "    重启 Caddy 容器重建 mount → 约 5-10 秒 HTTPS 短暂中断..."
+        docker restart "$EXTERNAL_CADDY" >/dev/null 2>&1
+        sleep 5
+        # 再校验
+        CONTAINER_SIZE=$(docker exec "$EXTERNAL_CADDY" wc -c /etc/caddy/Caddyfile 2>/dev/null | awk '{print $1}')
+        if [ "$HOST_SIZE" = "$CONTAINER_SIZE" ]; then
+            echo "  ✓ 重启后容器 Caddyfile 已同步 (${CONTAINER_SIZE}B)"
+        else
+            echo "  ✗ 重启后仍不一致 (host=${HOST_SIZE} container=${CONTAINER_SIZE}),请手动处理"
+            exit 1
+        fi
+    else
+        # 4g. 容器已同步 → 正常 reload (不中断服务)
+        echo "  执行 Caddy reload..."
+        if docker exec "$EXTERNAL_CADDY" caddy reload --config /etc/caddy/Caddyfile 2>&1 | grep -qE "error|fail"; then
+            echo "  ⚠ reload 报错,改用 restart 兜底..."
+            docker restart "$EXTERNAL_CADDY" >/dev/null 2>&1 && echo "  ✓ Caddy 已重启" || \
+                { echo "  ✗ Caddy 重启也失败,请手动处理"; exit 1; }
+        else
+            echo "  ✓ Caddy reload 成功"
+        fi
+    fi
+
+    # 4h. 等证书拿到 (失败不静默,明确告知)
+    echo "▸ 等 Let's Encrypt 给 $DOMAIN 签证书(最多 90 秒)..."
+    CERT_OK=0
+    for i in $(seq 1 18); do
+        sleep 5
+        if docker exec "$EXTERNAL_CADDY" ls "/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${DOMAIN}" >/dev/null 2>&1; then
+            echo "  ✓ 证书签发成功 (${i}×5s)"
+            CERT_OK=1
+            break
+        fi
+        echo "  ... 等待中 (${i}/18)"
+    done
+    if [ "$CERT_OK" = "0" ]; then
+        echo ""
+        echo "  ⚠ 90 秒内证书没签下来,可能原因:"
+        echo "     1. 80/443 被云厂商防火墙挡(Hostinger/AWS 等云端安全组)"
+        echo "     2. Let's Encrypt 限流 — 看 docker logs $EXTERNAL_CADDY | grep -i 'rate\\|too many'"
+        echo "     3. Caddyfile 有其他死站把 ACME 队列堵住 — 用 ./scripts/caddy-doctor.sh 自查"
+        echo ""
+        echo "  后台仍可用 (证书装好前浏览器会报 SSL 错误)"
     fi
 
 elif [ -n "$NON_CADDY_OCCUPIER" ]; then
