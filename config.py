@@ -235,6 +235,29 @@ MEDIA_RETENTION_DAYS = int(os.environ.get("MEDIA_RETENTION_DAYS", "0") or "0")
 # 单文件上传大小上限（MB），防止大文件刷爆 Drive 配额
 MEDIA_MAX_MB = int(os.environ.get("MEDIA_MAX_MB", "20") or "20")
 
+# v2.10.25: 媒体存储方式切换(ADR-0014)
+# 背景:少数客户外事号收到违规图片/文件,上传到客户 Google 云端硬盘导致 Google 账号冻结。
+# 新方案:Bot 转发到独立 TG 档案群,Sheet 只显示编号超链接,Drive 不再存档。
+#
+# 取值:
+#   drive       — (默认,向后兼容老部署) 上传到 Google Drive,Sheet 显示 =HYPERLINK 带文件名
+#   tg_archive  — Bot 转发到 MEDIA_ARCHIVE_GROUP_ID 指定的 TG 群,Sheet 显示「图片 #N / 文件 #N」带跳转链接
+#   off         — 不处理媒体,Sheet 只显示文字占位(「[图片]」「[文件]」)
+#
+# 旧部署升级后默认仍走 drive,不改行为。切到 tg_archive 的客户需要额外配 MEDIA_ARCHIVE_GROUP_ID。
+MEDIA_STORAGE_MODE = os.environ.get("MEDIA_STORAGE_MODE", "drive").strip().lower()
+if MEDIA_STORAGE_MODE not in ("drive", "tg_archive", "off"):
+    MEDIA_STORAGE_MODE = "drive"
+
+# TG 档案群 ID(MEDIA_STORAGE_MODE=tg_archive 时必填)
+# - 需要把 BOT_TOKEN 对应的 bot 加入该群并给「发送消息」权限
+# - 格式通常为 -100xxxxxxxxxx(supergroup)
+_media_archive_id = os.environ.get("MEDIA_ARCHIVE_GROUP_ID", "0").strip()
+try:
+    MEDIA_ARCHIVE_GROUP_ID = int(_media_archive_id) if _media_archive_id else 0
+except ValueError:
+    MEDIA_ARCHIVE_GROUP_ID = 0
+
 # Sheets 刷写间隔（秒）
 SHEETS_FLUSH_INTERVAL = int(os.environ.get("SHEETS_FLUSH_INTERVAL", "5"))
 

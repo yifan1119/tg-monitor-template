@@ -10,6 +10,7 @@ import sys
 
 import config
 import database as db
+import media_uploader
 from listener import Listener
 from sheets import SheetsWriter
 from bot import AlertBot
@@ -49,6 +50,11 @@ async def main():
     # 3. 初始化 Bot
     logger.info("初始化 Bot...")
     bot = AlertBot(sheets_writer=sheets)
+
+    # v2.10.25(ADR-0014):注入 aiogram Bot 到 media_uploader,供 tg_archive 模式转发用。
+    # drive / off 模式下这个引用不会被用到,注入无副作用。
+    if bot.bot is not None:
+        media_uploader.set_archive_bot(bot.bot)
 
     # 4. 初始化监听器
     logger.info("初始化监听器...")

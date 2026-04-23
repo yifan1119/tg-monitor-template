@@ -30,6 +30,79 @@ DANGER_EXTS = {
 _lock = threading.Lock()
 _drive_service = None  # lazy 初始化 googleapiclient.discovery.Resource
 
+# v2.10.25(ADR-0014):tg_archive 模式用 aiogram Bot 转发到 TG 档案群
+# main.py 启动时调 set_archive_bot(alert_bot.bot) 注入
+_archive_bot = None
+
+
+def set_archive_bot(bot):
+    """v2.10.25:main.py 启动 AlertBot 后调用,把 aiogram Bot 实例注入供转发用。
+    tg_archive 模式依赖这个引用;drive / off 模式不调也不影响。
+    """
+    global _archive_bot
+    _archive_bot = bot
+
+
+_TG_ARCHIVE_WARNED_BAD_GID = False
+
+
+def is_tg_archive_enabled():
+    """v2.10.25(Codex P1 round1 修复):检查 tg_archive 模式四要素齐备。
+
+    必须同时满足:
+      1. MEDIA_STORAGE_MODE == "tg_archive"
+      2. aiogram Bot 实例已由 main.py 注入
+      3. MEDIA_ARCHIVE_GROUP_ID 是负数 且 abs(gid) 以 "100" 开头(supergroup/channel 格式)
+         — 只有 supergroup 才能拼 t.me/c 深链;正数(user / private chat)或非 -100 前缀
+         (普通 small group)都不支持,否则:
+           - 深链打开 404
+           - 更糟:正 chat_id 如果恰好是某个 bot 能触达的用户,会把媒体发到错聊天
+                  (敏感数据泄漏 — Codex P1 指出的真实风险)
+
+    首次检测到配置错误会在日志里 warn 一次(不 spam),之后静默返回 False,
+    调用方 fallback 到文字占位「[图片]」「[文件]」。
+    """
+    global _TG_ARCHIVE_WARNED_BAD_GID
+    if getattr(config, "MEDIA_STORAGE_MODE", "drive") != "tg_archive":
+        return False
+    if _archive_bot is None:
+        return False
+    gid = int(getattr(config, "MEDIA_ARCHIVE_GROUP_ID", 0) or 0)
+    if gid == 0:
+        return False
+    # 必须是 supergroup/channel:chat_id 负数且 abs 以 100 开头(对应 -100xxxxxxxxxx)
+    if gid >= 0 or not str(abs(gid)).startswith("100"):
+        if not _TG_ARCHIVE_WARNED_BAD_GID:
+            logger.warning(
+                "MEDIA_ARCHIVE_GROUP_ID=%s 不是合法的 supergroup ID (必须 -100 开头)"
+                "— tg_archive 模式已禁用,媒体 fallback 文字占位。请确认把档案群"
+                "设为 supergroup 并填写 -100xxxxxxxxxx 格式 ID",
+                gid,
+            )
+            _TG_ARCHIVE_WARNED_BAD_GID = True
+        return False
+    return True
+
+
+def _archive_deep_link(archive_msg_id):
+    """v2.10.25:把 MEDIA_ARCHIVE_GROUP_ID + 消息 ID 转成 t.me/c 深链。
+
+    - supergroup ID 通常是 -100xxxxxxxx,链接要去掉 -100 前缀 → t.me/c/xxxxxxxx/{msg_id}
+    - 正常群(不含 -100 前缀)直接用绝对值
+    """
+    gid = int(getattr(config, "MEDIA_ARCHIVE_GROUP_ID", 0) or 0)
+    if gid == 0:
+        return ""
+    s = str(abs(gid))
+    if s.startswith("100"):
+        s = s[3:]
+    return f"https://t.me/c/{s}/{archive_msg_id}"
+
+
+# v2.10.25:Bot API 强限制 — photo 10MB / document 50MB(超出直接被 TG 拒)
+_BOT_PHOTO_LIMIT_BYTES = 10 * 1024 * 1024
+_BOT_DOCUMENT_LIMIT_BYTES = 50 * 1024 * 1024
+
 
 def _get_drive():
     """lazy 创建 Drive v3 client。
@@ -216,6 +289,158 @@ def list_old_files(retention_days):
         if not page_token:
             break
     return old
+
+
+def _build_archive_caption(media_type, account_row, peer_name, media_seq, file_name=""):
+    """v2.10.25(ADR-0014):档案群消息 caption 统一格式。
+
+    示例(photo,无文件名):
+      【文件提醒】
+      中心/部门：恒睿公司-渠道
+      商务人员：江羽
+      外事号：大兵
+      广告主：杨幂
+      文件编号：#42
+      文件内容：图片
+
+    account_row:sqlite3.Row,有 name / operator 字段(company 字段可能空 → fallback COMPANY_DISPLAY)
+    """
+    company = ""
+    operator = ""
+    account_name = ""
+    try:
+        if account_row is not None:
+            company = (account_row["company"] or "").strip() if "company" in account_row.keys() else ""
+            operator = (account_row["operator"] or "").strip() if "operator" in account_row.keys() else ""
+            account_name = (account_row["name"] or "").strip() if "name" in account_row.keys() else ""
+    except Exception:
+        pass
+    if not company:
+        company = (getattr(config, "COMPANY_DISPLAY", "") or
+                   getattr(config, "COMPANY_NAME", "") or "").strip()
+    operator_label = getattr(config, "OPERATOR_LABEL", "商务人员") or "商务人员"
+    peer_role_label = getattr(config, "PEER_ROLE_LABEL", "广告主") or "广告主"
+
+    if media_type == "photo":
+        content_desc = "图片"
+    elif media_type == "file":
+        # 文件有名字 → 附在后面,没名字 → 只写「文件」
+        content_desc = f"文件:{file_name}" if file_name else "文件"
+    else:
+        content_desc = media_type or "媒体"
+
+    lines = [
+        "【文件提醒】",
+        f"中心/部门:{company}",
+        f"{operator_label}:{operator}",
+        f"外事号:{account_name}",
+        f"{peer_role_label}:{peer_name}",
+        f"文件编号:#{media_seq}",
+        f"文件内容:{content_desc}",
+    ]
+    return "\n".join(lines)
+
+
+async def forward_to_tg_archive(message, media_type, account_row, peer_name, media_seq):
+    """v2.10.25(ADR-0014):把 Telethon 收到的媒体下载到内存,用 aiogram Bot 转发到
+    MEDIA_ARCHIVE_GROUP_ID 指定的 TG 群,caption 带业务上下文。
+
+    仅处理 photo + file 两类(语音/视频/贴纸由调用方过滤,不走这个函数)。
+
+    返回 (display_text, archive_msg_id):
+      - 成功:display = '=HYPERLINK("t.me/c/.../N", "图片 #42")' / '=HYPERLINK(..., "文件 #42")'
+             archive_msg_id = TG 档案群里的 msg_id
+      - 失败:("", 0) → 调用方 fallback 到文字占位「[图片]」「[文件]」
+
+    Bot API 限制:photo 10MB / document 50MB。photo 超出 → 降级用 send_document 转发
+    (仍能保留,只是档案群里显示为文件不是图片缩图)。document 超限 → 放弃返回 ("", 0)。
+    """
+    if not is_tg_archive_enabled():
+        return "", 0
+    if media_type not in ("photo", "file"):
+        return "", 0
+
+    try:
+        from aiogram.types import BufferedInputFile
+    except Exception as e:
+        logger.warning("aiogram 未安装或导入失败,无法转发到档案群: %s", e)
+        return "", 0
+
+    try:
+        size = 0
+        try:
+            size = int(getattr(message.file, "size", 0) or 0)
+        except Exception:
+            size = 0
+        # 用户可配置的总体大小上限(复用 MEDIA_MAX_MB,默认 20MB)
+        max_bytes = config.MEDIA_MAX_MB * 1024 * 1024
+        if size and size > max_bytes:
+            logger.info("跳过大媒体转发 (%.1f MB > %d MB)", size / 1024 / 1024, config.MEDIA_MAX_MB)
+            return "", 0
+        # Document 上限保护(Bot API 硬限制 50MB)— 即便客户配更大也挡住
+        if size and size > _BOT_DOCUMENT_LIMIT_BYTES:
+            logger.info("跳过大媒体转发 (%.1f MB > Bot API 50MB 硬限制)", size / 1024 / 1024)
+            return "", 0
+
+        # 下载到内存
+        buf = io.BytesIO()
+        await message.download_media(file=buf)
+        data = buf.getvalue()
+        if not data:
+            return "", 0
+
+        # 文件名:优先 Telethon 给的;photo 没名 → 自己命名
+        ts = datetime.now(TZ_BJ).strftime("%Y%m%d_%H%M%S")
+        original_name = ""
+        try:
+            original_name = getattr(message.file, "name", "") or ""
+        except Exception:
+            pass
+        ext_map = {"photo": ".jpg", "file": ".bin"}
+        if original_name:
+            filename = f"{ts}_{original_name}"
+        else:
+            filename = f"{ts}_{media_type}{ext_map.get(media_type, '.bin')}"
+        filename = "".join(c for c in filename if c.isprintable()).strip() or f"{ts}_{media_type}"
+
+        caption = _build_archive_caption(
+            media_type, account_row, peer_name, media_seq,
+            file_name=original_name,
+        )
+
+        # 转发到档案群
+        input_file = BufferedInputFile(data, filename=filename)
+        chat_id = config.MEDIA_ARCHIVE_GROUP_ID
+        sent = None
+        if media_type == "photo" and (size == 0 or size <= _BOT_PHOTO_LIMIT_BYTES):
+            # 走 send_photo — TG 会生成缩图,档案群里直接预览
+            try:
+                sent = await _archive_bot.send_photo(chat_id, input_file, caption=caption)
+            except Exception as e:
+                logger.warning("send_photo 失败,降级用 send_document: %s", e)
+                # 降级前要重建 BufferedInputFile(原 input_file 可能已被消费)
+                input_file = BufferedInputFile(data, filename=filename)
+                sent = await _archive_bot.send_document(chat_id, input_file, caption=caption)
+        else:
+            # file 类或 photo 超 10MB → send_document
+            sent = await _archive_bot.send_document(chat_id, input_file, caption=caption)
+
+        if sent is None or not getattr(sent, "message_id", 0):
+            logger.warning("转发到档案群返回空结果")
+            return "", 0
+
+        archive_msg_id = int(sent.message_id)
+        link = _archive_deep_link(archive_msg_id)
+        label_prefix = "图片" if media_type == "photo" else "文件"
+        label = f"{label_prefix} #{media_seq}"
+        safe_label = label.replace('"', '""')
+        display = f'=HYPERLINK("{link}", "{safe_label}")'
+        logger.info("媒体转发档案群成功 [%s #%d] msg_id=%d", media_type, media_seq, archive_msg_id)
+        return display, archive_msg_id
+
+    except Exception as e:
+        logger.warning("媒体转发档案群失败 [%s]: %s", media_type, e)
+        return "", 0
 
 
 def cleanup_old_media(retention_days=None):

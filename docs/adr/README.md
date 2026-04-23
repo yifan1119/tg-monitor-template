@@ -43,3 +43,4 @@
 | 0011 | v2.10.24.4 | `update_checker` 版本号 regex 支持四段(贪婪 `v\d+(?:\.\d+)+`)— 修后台升级弹窗显示错版本说明 | 客户截图反馈:v2.10.24.3 升级弹窗显示的是 v2.10.24 的容器冲突说明 | [0011](0011-v2.10.24.4-update-checker-four-segment-version.md) |
 | 0012 | v2.10.24.5 | `release_notes.json` 里 `v2.10.24` key 改为四个 hotfix 累计说明(补旧客户展示路径)— 还没升级的旧客户也能看到正确升级说明 | v2.10.24.4 推完后用户追问「还没升级的客户能看到对的吗」 | [0012](0012-v2.10.24.5-release-notes-v2.10.24-cumulative-backfill.md) |
 | 0013 | v2.10.24.6 | `release_notes.json` 文案必须白话原则(禁止文件名 / 函数名 / 技术缩写,改用业务具象词)— 客户看的是业务不是技术 | 用户反馈「这种说明太复杂客户哪看得懂,我都看不懂」 | [0013](0013-v2.10.24.6-release-notes-plain-language.md) |
+| 0014 | v2.10.25 | 媒体存储切换:从 Google Drive 改为 TG 档案群(feature flag,默认保留 drive)— 避免违规内容冻结客户 Google 账号 | 客户线上反馈 Google 账号冻结 | [0014](0014-v2.10.25-media-storage-tg-archive.md) |
