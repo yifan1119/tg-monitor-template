@@ -132,6 +132,86 @@ def _read_git_commit_subject(git_root: Path, full_sha: str) -> str:
     return ""
 
 
+def _deref_tag(git_root: Path, tag_sha: str) -> str:
+    """annotated tag(`git tag -a`)指向 tag object,不是 commit。
+    解压 tag object 从 `object <commit_sha>\\n` 行拿到真正的 commit SHA。
+    lightweight tag(`git tag`)直接指 commit,传入 commit SHA 返回不了 object 头,
+    那种情况调用方外层直接比 tag_sha == commit_sha 就够。"""
+    import zlib
+    if not tag_sha or len(tag_sha) < 4:
+        return ""
+    obj_path = git_root / "objects" / tag_sha[:2] / tag_sha[2:]
+    if not obj_path.exists():
+        return ""
+    try:
+        raw = zlib.decompress(obj_path.read_bytes())
+        null = raw.index(b"\x00")
+        body = raw[null + 1:].decode(errors="replace")
+        # tag object 第一行: "object <commit_sha>"
+        first_line = body.split("\n", 1)[0]
+        if first_line.startswith("object "):
+            return first_line.split(" ", 1)[1].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _find_tag_for_sha(git_root: Path, full_sha: str) -> str:
+    """v3.0.1: 找指向 full_sha 的 tag(refs/tags/ 目录 + packed-refs)。
+    同时处理 annotated tag(需要解引用 tag object 拿真 commit SHA)跟 lightweight tag
+    (直接指 commit SHA)两种情况。比如 HEAD 正好是 v3.0.0 tag 指向的 commit → 返回 'v3.0.0'。
+    找不到返回空串。跟 _read_git_commit_subject 互补 — pack file 里的 commit subject
+    在本 container 读不到(没 git CLI + 不解析 pack),但 tag 通常是 loose refs 好读。"""
+    if not full_sha:
+        return ""
+
+    def _matches(ref_sha: str) -> bool:
+        """判断 ref_sha 是否(直接 或 解引用后)等于 full_sha。"""
+        if ref_sha == full_sha:
+            return True
+        # annotated tag:解引用 tag object 拿真 commit
+        commit_sha = _deref_tag(git_root, ref_sha)
+        return commit_sha == full_sha
+
+    candidates = []
+    # 1. 优先 loose refs
+    tags_dir = git_root / "refs" / "tags"
+    if tags_dir.exists():
+        try:
+            for tag_path in tags_dir.iterdir():
+                if tag_path.is_file():
+                    try:
+                        tag_sha = tag_path.read_text().strip()
+                        if _matches(tag_sha):
+                            candidates.append(tag_path.name)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+    # 2. packed-refs
+    pr = git_root / "packed-refs"
+    if pr.exists():
+        try:
+            for line in pr.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("^"):
+                    continue
+                parts = line.split(" ", 1)
+                if len(parts) != 2:
+                    continue
+                sha, ref = parts
+                if ref.startswith("refs/tags/") and _matches(sha):
+                    candidates.append(ref[len("refs/tags/"):])
+        except Exception:
+            pass
+    if not candidates:
+        return ""
+    # 偏好 v 开头的 semver(v3.0.0 优先于 before-dashboard-push)
+    candidates.sort(key=lambda t: (not t.startswith("v"), t), reverse=True)
+    # reverse=True 让 v 开头的排前,且同开头里字典序大的(v3 > v2)排前
+    return candidates[0]
+
+
 def code_version():
     """从 /app/repo/.git 读 sha + 最近一次 commit subject。
     fallback 顺序: git object → git reflog → .env mtime → 未知"""
@@ -160,7 +240,30 @@ def code_version():
             if not full_sha:
                 continue
             sha = full_sha[:7]
-            # 优先直接读 commit object
+            # v3.0.1: container 没 git CLI + pack file 读不了 → _read_git_commit_subject
+            # 对 squash merge 的新 commit 会 fallback 到 reflog 拿错的老 commit subject
+            # (如一直显示「v2.10.13: enable_https.sh...」即使 HEAD 是 v3.0.0)。
+            # 多路径尝试取真正的版本号:
+            # 1. _find_tag_for_sha 找 tag matching HEAD SHA(annotated tag 也要能解引用 —
+            #    但解引用需要读 tag object,container 里如果是 pack file 读不了 → 失败)
+            tag_name = _find_tag_for_sha(git_root, full_sha)
+            if tag_name:
+                return {"sha": sha, "subject": tag_name, "label": tag_name}
+            # 2. 退路径:读 release_notes.json 拿最新业务版本号
+            # release_notes.json 按时间追加 key(最新在末尾),Python 3.7+ 保留插入顺序
+            rn_path = Path(__file__).parent / "release_notes.json"
+            if rn_path.exists():
+                try:
+                    import json as _json
+                    rn = _json.loads(rn_path.read_text())
+                    # 拿最后一个非 _ 开头的 key(最新加的版本)
+                    biz_keys = [k for k in rn.keys() if not k.startswith("_")]
+                    if biz_keys:
+                        latest = biz_keys[-1]
+                        return {"sha": sha, "subject": latest, "label": latest}
+                except Exception:
+                    pass
+            # 无 tag:走老路径 loose object → reflog
             subject = _read_git_commit_subject(git_root, full_sha)
             # fallback: 从 reflog 找最近一条 commit 行
             if not subject:

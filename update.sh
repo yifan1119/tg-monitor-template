@@ -58,7 +58,9 @@ echo ""
 
 # ===== 1. 先 fetch 比对远端,已是最新直接退出(不动本地) =====
 echo "📥 检查远端版本..."
-git fetch origin
+# v3.0.1: --tags 一起 fetch,让驾驶舱能显示「v3.0.0」这种 tag 名字而不是 raw SHA
+# (dashboard_api.code_version 读 .git/refs/tags/ 找 tag matching HEAD SHA)
+git fetch origin --tags
 OLD_SHA=$(git rev-parse HEAD)
 OLD_SHORT=$(git rev-parse --short HEAD)
 REMOTE_SHA=$(git rev-parse origin/main)
