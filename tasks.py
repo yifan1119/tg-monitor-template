@@ -284,14 +284,14 @@ class TaskScheduler:
 
     async def _no_reply_stage2_loop(self):
         """v3.0.0 批次 C: stage1 → stage2 自动升级 loop。
+        v3.0.1: 移除 TWO_STAGE_NO_REPLY_ENABLED flag,改数据驱动。
+        loop 自然自 gate — 只会扫到 stage=1 pending alert,这种 alert 只由
+        send_no_reply_alert_stage1() 插入,而该函数只在 account.business_tg_id
+        非空时才被调用。所以没配的账号不会产生 stage=1 alert,loop 空转不产生升级。
 
         行为:
         - 每 60 秒扫 get_pending_stage1_alerts(after_minutes=NO_REPLY_STAGE2_AFTER_MIN)
         - 对每条符合条件的 stage1 alert 调 bot.send_no_reply_alert_stage2(alert_id)
-          (内部会原子 upgrade_to_stage2,抢到才推,避免并发重复升级)
-
-        开关语义:
-        - TWO_STAGE_NO_REPLY_ENABLED=false(默认)→ 这个 loop 什么都不做,完全兼容老版本
         - 非工作时段 → 跳过(避免半夜 @ 负责人)
         - 兜底保护:扫到的 stage1 若期间有 outbound(listener 钩子没捕获到 / flush 延迟等),
           先 mark_stage1_handled_by_reply 吞掉这条不升级
@@ -300,9 +300,6 @@ class TaskScheduler:
         while self._running:
             try:
                 config.reload_if_env_changed()
-                if not config.TWO_STAGE_NO_REPLY_ENABLED:
-                    await asyncio.sleep(60)
-                    continue
                 now = datetime.now(TZ_BJ)
                 if not config.is_work_time(now):
                     await asyncio.sleep(60)

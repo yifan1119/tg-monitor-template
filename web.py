@@ -826,9 +826,8 @@ def setup_page():
         # v2.10.25(ADR-0014):媒体存储模式 + TG 档案群 ID
         "media_storage_mode": (env.get("MEDIA_STORAGE_MODE", "drive") or "drive").lower(),
         "media_archive_group_id": env.get("MEDIA_ARCHIVE_GROUP_ID", ""),
-        # v3.0.0(ADR-0015/0016):两段式未回复预警
+        # v3.0.0(ADR-0015/0016):两段式未回复预警 (v3.0.1 移除 flag → 数据驱动)
         "unreplied_alert_group_id": env.get("UNREPLIED_ALERT_GROUP_ID", ""),
-        "two_stage_no_reply_enabled": env.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true",
         "no_reply_stage2_after_min": env.get("NO_REPLY_STAGE2_AFTER_MIN", "10"),
         "remind_30min_text": env.get("REMIND_30MIN_TEXT", ""),
         "remind_40min_text": env.get("REMIND_40MIN_TEXT", ""),
@@ -866,9 +865,8 @@ def settings_page():
         # v2.10.25(ADR-0014):媒体存储模式 + TG 档案群 ID
         "media_storage_mode": (env.get("MEDIA_STORAGE_MODE", "drive") or "drive").lower(),
         "media_archive_group_id": env.get("MEDIA_ARCHIVE_GROUP_ID", ""),
-        # v3.0.0(ADR-0015/0016):两段式未回复预警
+        # v3.0.0(ADR-0015/0016):两段式未回复预警 (v3.0.1 移除 flag → 数据驱动)
         "unreplied_alert_group_id": env.get("UNREPLIED_ALERT_GROUP_ID", ""),
-        "two_stage_no_reply_enabled": env.get("TWO_STAGE_NO_REPLY_ENABLED", "false").lower() == "true",
         "no_reply_stage2_after_min": env.get("NO_REPLY_STAGE2_AFTER_MIN", "10"),
         "remind_30min_text": env.get("REMIND_30MIN_TEXT", ""),
         "remind_40min_text": env.get("REMIND_40MIN_TEXT", ""),
@@ -1827,13 +1825,7 @@ def logout():
 @login_required
 def index():
     db.init_db()
-    # v3.0.0: 手工改 .env 打开 TWO_STAGE_NO_REPLY_ENABLED 后,首页应立刻能看到「配置两段式」
-    # 按钮。调 reload_if_env_changed() 拉一次最新 flag 到本进程 config 模块
-    # (无变化时开销极低,就一次 os.stat)。
-    try:
-        config.reload_if_env_changed()
-    except Exception:
-        pass
+    # v3.0.1: 模板不再条件渲染按钮,这里就不用传 flag 了(模板改成数据驱动)
     sessions = get_sessions()
     return render_template(
         "index.html",
@@ -1845,8 +1837,6 @@ def index():
         alert_no_reply_enabled=config.ALERT_NO_REPLY_ENABLED,
         alert_delete_enabled=config.ALERT_DELETE_ENABLED,
         operator_label=config.OPERATOR_LABEL,
-        # v3.0.0(ADR-0015):两段式预警总开关(模板条件渲染「配置两段式」按钮 + modal)
-        two_stage_no_reply_enabled=getattr(config, "TWO_STAGE_NO_REPLY_ENABLED", False),
     )
 
 
