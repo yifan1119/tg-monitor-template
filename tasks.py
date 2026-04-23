@@ -362,6 +362,13 @@ class TaskScheduler:
                 # → 每次跑都从 .env 重新读一次
                 import importlib
                 importlib.reload(config)
+                # v2.10.25(ADR-0014):只在 drive 模式才清理 Drive 文件。
+                # tg_archive / off 模式下 Drive 根本没存东西,清理会空跑;而且 reload 后
+                # MEDIA_FOLDER_ID 可能还残留(客户切模式时不会主动清),跑清理等于白调 Drive API
+                mode = (getattr(config, "MEDIA_STORAGE_MODE", "drive") or "drive").lower()
+                if mode != "drive":
+                    logger.info("MEDIA_STORAGE_MODE=%s, 跳过 Drive 自动清理", mode)
+                    continue
                 days = int(getattr(config, "MEDIA_RETENTION_DAYS", 0) or 0)
                 if days <= 0:
                     logger.info("MEDIA_RETENTION_DAYS=0, 跳过自动清理")

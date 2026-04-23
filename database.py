@@ -109,6 +109,11 @@ def _run_migrations(conn):
         conn.execute("PRAGMA user_version=3")
         conn.commit()
 
+    if version < 4:
+        _migrate_to_4(conn)
+        conn.execute("PRAGMA user_version=4")
+        conn.commit()
+
 
 def _migrate_to_1(conn):
     """v2.10.23 → user_version=1:
@@ -144,6 +149,28 @@ def _migrate_to_3(conn):
     """
     _safe_add_column(conn, "alerts", "claimed_at", "TEXT DEFAULT NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_claimed_at ON alerts(claimed_at)")
+
+
+def _migrate_to_4(conn):
+    """v2.10.25 → user_version=4(ADR-0014):
+    - messages 加 media_seq (每账号内单调递增的媒体编号)
+      + archive_msg_id (TG 档案群里对应的消息 ID)
+      → 支持 MEDIA_STORAGE_MODE=tg_archive 模式:Bot 转发到档案群,
+        Sheet 显示「图片 #N / 文件 #N」超链接点到档案群对应消息。
+    - 历史行 media_seq=0 / archive_msg_id=0,不回填(仍保留 Drive 链接或占位文字)
+    - drive / off 模式不写这两列(默认 0)
+    - 新建 account_seq 计数表:原子分配 media_seq,避免 MAX+1 在并发下派出重复编号
+      (Codex P1 round1:_handle_message / _backfill_peer / pull_history 三路 coroutine
+       对同账号可能交错,旧 MAX+1 在 await forward 期间会读到同一最大值 → 重复编号)
+    """
+    _safe_add_column(conn, "messages", "media_seq", "INTEGER DEFAULT 0")
+    _safe_add_column(conn, "messages", "archive_msg_id", "INTEGER DEFAULT 0")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS account_seq (
+            account_id INTEGER PRIMARY KEY,
+            media_seq INTEGER NOT NULL DEFAULT 0
+        )
+    """)
 
 
 def _safe_add_column(conn, table, column, definition):
@@ -252,18 +279,60 @@ def get_next_col_group(account_id):
 
 # ===== 消息 =====
 
-def insert_message(msg_id, account_id, peer_id, direction, text, media_type="", timestamp=None):
+def insert_message(msg_id, account_id, peer_id, direction, text, media_type="", timestamp=None,
+                   media_seq=0, archive_msg_id=0):
+    """v2.10.25: media_seq / archive_msg_id 只在 MEDIA_STORAGE_MODE=tg_archive 时由调用方填,
+    其他模式保持默认 0(向后兼容)。"""
     conn = get_conn()
     ts = timestamp or now_bj()
     try:
         conn.execute("""
-            INSERT INTO messages (msg_id, account_id, peer_id, direction, text, media_type, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (msg_id, account_id, peer_id, direction, text, media_type, ts))
+            INSERT INTO messages (msg_id, account_id, peer_id, direction, text, media_type, timestamp,
+                                  media_seq, archive_msg_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (msg_id, account_id, peer_id, direction, text, media_type, ts,
+              media_seq, archive_msg_id))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
         return False  # 已存在
+
+
+def next_media_seq(account_id):
+    """v2.10.25(ADR-0014)+ Codex P1 round1 修复:原子分配下一个媒体编号。
+
+    用 account_seq 计数表替代 MAX+1,避免并发 coroutine(`_handle_message` /
+    `_backfill_peer` / `pull_history` 三路对同账号可能交错 await)读到同一最大值
+    → 派出重复编号。
+
+    原子性保证:
+      - asyncio 默认单线程执行,INSERT/UPDATE/SELECT/commit 四步同步调用期间
+        不会被其他 coroutine 打断(没有 await)
+      - 调用返回前必 commit → 后续 coroutine 看得到递增后的值
+      - Python sqlite3 默认 "deferred" transaction,自动 BEGIN;这里 commit 关
+        transaction,不影响同一 conn 上其他实现路径的 implicit transaction
+
+    语义:
+      - 同账号:严格单调递增(5, 6, 7, ...),编号不重复
+      - 跨账号:独立(account_id=1 和 account_id=2 的 seq 互不影响)
+      - 转发失败不回收:允许跳号(客户看 #41 之后可能是 #43),ADR-0014 已接受
+    """
+    conn = get_conn()
+    # INSERT OR IGNORE 幂等确保有 row;UPDATE 原子 +1;SELECT 拿回新值;commit 关 tx
+    conn.execute(
+        "INSERT OR IGNORE INTO account_seq (account_id, media_seq) VALUES (?, 0)",
+        (account_id,)
+    )
+    conn.execute(
+        "UPDATE account_seq SET media_seq = media_seq + 1 WHERE account_id=?",
+        (account_id,)
+    )
+    row = conn.execute(
+        "SELECT media_seq FROM account_seq WHERE account_id=?",
+        (account_id,)
+    ).fetchone()
+    conn.commit()
+    return int(row["media_seq"])
 
 
 def get_message(msg_id, account_id):

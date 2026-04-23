@@ -219,6 +219,7 @@ def write_env(updates):
         "API_ID", "API_HASH",
         "COMPANY_NAME", "COMPANY_DISPLAY", "PEER_ROLE_LABEL", "OPERATOR_LABEL",
         "SHEET_ID", "MEDIA_FOLDER_ID", "MEDIA_RETENTION_DAYS", "MEDIA_MAX_MB",
+        "MEDIA_STORAGE_MODE", "MEDIA_ARCHIVE_GROUP_ID",
         "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
         "BOT_TOKEN", "ALERT_GROUP_ID",
         "WEB_PORT", "WEB_PASSWORD",
@@ -806,6 +807,9 @@ def setup_page():
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
         "media_retention_days": env.get("MEDIA_RETENTION_DAYS", "0"),
+        # v2.10.25(ADR-0014):媒体存储模式 + TG 档案群 ID
+        "media_storage_mode": (env.get("MEDIA_STORAGE_MODE", "drive") or "drive").lower(),
+        "media_archive_group_id": env.get("MEDIA_ARCHIVE_GROUP_ID", ""),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -837,6 +841,9 @@ def settings_page():
         "media_folder_id": env.get("MEDIA_FOLDER_ID", ""),
         "media_max_mb": env.get("MEDIA_MAX_MB", "20"),
         "media_retention_days": env.get("MEDIA_RETENTION_DAYS", "0"),
+        # v2.10.25(ADR-0014):媒体存储模式 + TG 档案群 ID
+        "media_storage_mode": (env.get("MEDIA_STORAGE_MODE", "drive") or "drive").lower(),
+        "media_archive_group_id": env.get("MEDIA_ARCHIVE_GROUP_ID", ""),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -1359,6 +1366,29 @@ def _save_settings(is_first):
         if x.strip() and x.strip().isdigit()
     )
 
+    # v2.10.25(ADR-0014 / Codex round2 P1):媒体存储模式 + 档案群 ID 前置校验
+    # 模式枚举只允许 drive/tg_archive/off,其他值回退 drive 保兼容
+    _media_mode_raw = form.get("media_storage_mode", "drive").strip().lower()
+    media_storage_mode = _media_mode_raw if _media_mode_raw in ("drive", "tg_archive", "off") else "drive"
+    media_archive_group_raw = form.get("media_archive_group_id", "").strip()
+    # tg_archive 模式必须填合法 supergroup ID(-100 开头负数),否则保存后媒体会
+    # 静默回落到文字占位,客户以为已存档实际丢失 — 保存前挡住让用户立刻看到错误
+    if media_storage_mode == "tg_archive":
+        _err = None
+        if not media_archive_group_raw:
+            _err = "已选「TG 档案群」模式,但档案群 Chat ID 未填。请在档案群里发 /chatid 给 bot 拿 ID 后填入。"
+        else:
+            try:
+                _gid = int(media_archive_group_raw)
+                if _gid >= 0 or not str(abs(_gid)).startswith("100"):
+                    _err = (f"档案群 Chat ID 格式不合法(必须 -100 开头的负数,你填的是 {media_archive_group_raw})。"
+                            "普通群需要先升级成 supergroup,在群里打开「新成员可见历史消息」开关即可。"
+                            "升级后在群里发 /chatid 拿新的 ID 重填。")
+            except ValueError:
+                _err = f"档案群 Chat ID 必须是整数,你填的是「{media_archive_group_raw}」。"
+        if _err:
+            return jsonify({"ok": False, "msg": _err}), 400
+
     # 写 .env
     updates = {
         "COMPANY_NAME": company_name,
@@ -1372,6 +1402,8 @@ def _save_settings(is_first):
         "MEDIA_FOLDER_ID": form.get("media_folder_id", "").strip(),
         "MEDIA_MAX_MB": form.get("media_max_mb", "20").strip() or "20",
         "MEDIA_RETENTION_DAYS": form.get("media_retention_days", "0").strip() or "0",
+        "MEDIA_STORAGE_MODE": media_storage_mode,
+        "MEDIA_ARCHIVE_GROUP_ID": media_archive_group_raw,
         "GOOGLE_OAUTH_CLIENT_ID": form.get("oauth_client_id", "").strip(),
         "GOOGLE_OAUTH_CLIENT_SECRET": form.get("oauth_client_secret", "").strip(),
         "KEYWORDS": new_keywords_str,

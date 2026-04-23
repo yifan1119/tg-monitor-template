@@ -95,6 +95,7 @@ commit message 里明确标出「影响文档」:
 | v2.10.24.4 | `update_checker` 版本号 regex 支持四段(贪婪 `v\d+(?:\.\d+)+`)— 修后台升级弹窗一直显示旧版本说明 | [0011](docs/adr/0011-v2.10.24.4-update-checker-four-segment-version.md) |
 | v2.10.24.5 | `release_notes.json` `v2.10.24` key 改累计说明 — 补旧客户(还没升 v2.10.24.4)也能看到正确内容 | [0012](docs/adr/0012-v2.10.24.5-release-notes-v2.10.24-cumulative-backfill.md) |
 | v2.10.24.6 | `release_notes.json` 文案白话化原则(禁用文件名 / 函数名 / 技术缩写,改业务具象词)| [0013](docs/adr/0013-v2.10.24.6-release-notes-plain-language.md) |
+| v2.10.25 | 媒体存储切换:`MEDIA_STORAGE_MODE=drive/tg_archive/off`(默认 drive,tg_archive 用 Bot 转发到独立 TG 群规避 Google 账号冻结)| [0014](docs/adr/0014-v2.10.25-media-storage-tg-archive.md) |
 
 ## 发布流程
 
@@ -114,6 +115,7 @@ commit message 里明确标出「影响文档」:
 ## 当前状态(2026-04-22)
 
 - main:`v2.10.24.6`(release_notes 文案白话化:v2.10.24 累计说明 + v2.10.24.5 / .6 key 都改白话 — 客户看的是业务不是技术)
+- **v2.10.25 WIP(未推送)**:媒体存储切换 — backend + feature flag(`MEDIA_STORAGE_MODE=drive|tg_archive|off`,默认 drive 老客户无感);tg_archive 模式用 Bot 转发到独立 TG 群,Sheet 写「图片 #N / 文件 #N」超链接。等 Codex 审阅 + 用户审阅后再推
 - feature/v3.0.0:Day 1 完 + Day 2 WIP(两段式预警开发中)— **需 rebase 到 v2.10.24.2 main 拿 hotfix**
 - 某客户(150+ 账号)2026-04-22 15:07 线上遇到 429 配额爆,sed 止血成功(16:25),已发 v2.10.24.1 + v2.10.24.2,待客户 `./update.sh` 升级
 

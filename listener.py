@@ -69,6 +69,47 @@ class Listener:
         self.clients[phone] = client
         return account
 
+    async def _resolve_media_display(self, msg, account_id, media_type, peer_name, text_fallback):
+        """v2.10.25(ADR-0014):按 MEDIA_STORAGE_MODE 分派媒体处理。
+
+        返回 (display_text, media_seq, archive_msg_id):
+          - drive 模式    : 上传 Drive → display='=HYPERLINK(drive_url, "📎 xxx")' / seq=0 / arch=0
+          - tg_archive 模式: 转发 TG 档案群 → display='=HYPERLINK(tme, "图片 #N")' / seq>0 / arch>0
+                             (非 photo/file 类保持文字占位;转发失败也 fallback 占位)
+          - off / 未识别  : (text_fallback, 0, 0)
+
+        调用方已经把 media_type 识别好,这里只负责分发 + 返回写入 Sheet 的 text。
+        """
+        mode = (getattr(config, "MEDIA_STORAGE_MODE", "drive") or "drive").lower()
+
+        if mode == "drive":
+            if media_uploader.is_enabled():
+                display, _url = await media_uploader.upload_media(msg, media_type, peer_name)
+                if display:
+                    return display, 0, 0
+            return text_fallback, 0, 0
+
+        if mode == "tg_archive":
+            # 转发 photo + file + voice,视频/贴纸保留文字占位
+            # (v2.10.25 首版只转 photo+file;测试期用户追加 voice 需求,一起做进 v2.10.25)
+            if media_type not in ("photo", "file", "voice"):
+                return text_fallback, 0, 0
+            if not media_uploader.is_tg_archive_enabled():
+                return text_fallback, 0, 0
+            seq = db.next_media_seq(account_id)
+            account_row = db.get_conn().execute(
+                "SELECT * FROM accounts WHERE id=?", (account_id,)
+            ).fetchone()
+            display, archive_msg_id = await media_uploader.forward_to_tg_archive(
+                msg, media_type, account_row, peer_name, seq
+            )
+            if display and archive_msg_id:
+                return display, seq, archive_msg_id
+            return text_fallback, 0, 0
+
+        # off / 未识别 → 不处理媒体,Sheet 只留文字占位
+        return text_fallback, 0, 0
+
     async def _handle_deleted(self, event, account_id, phone):
         """v2.6.7: 处理实时删除事件
         - 私聊场景:event.deleted_ids 是 [msg_id, ...],无 peer_id
@@ -152,6 +193,8 @@ class Listener:
             # 消息内容
             text = event.message.text or ""
             media_type = ""
+            media_seq = 0
+            archive_msg_id = 0
             if not text:
                 if event.message.photo:
                     media_type = "photo"
@@ -171,11 +214,11 @@ class Listener:
                 else:
                     text = "[其他消息]"
 
-                # 启用 MEDIA_FOLDER_ID 时，把媒体上传到 Drive，文本换成 =IMAGE/=HYPERLINK 公式
-                if media_type and media_uploader.is_enabled():
-                    display, _url = await media_uploader.upload_media(event.message, media_type, peer_name)
-                    if display:
-                        text = display
+                # v2.10.25:按 MEDIA_STORAGE_MODE 分派(drive / tg_archive / off)
+                if media_type:
+                    text, media_seq, archive_msg_id = await self._resolve_media_display(
+                        event.message, account_id, media_type, peer_name, text
+                    )
 
             timestamp = event.message.date.astimezone(TZ_BJ).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -188,6 +231,8 @@ class Listener:
                 text=text,
                 media_type=media_type,
                 timestamp=timestamp,
+                media_seq=media_seq,
+                archive_msg_id=archive_msg_id,
             )
 
             if inserted:
@@ -239,6 +284,8 @@ class Listener:
                 direction = "A" if msg.out else "B"
                 text = msg.text or ""
                 media_type = ""
+                media_seq = 0
+                archive_msg_id = 0
                 if not text:
                     if msg.photo:
                         media_type, text = "photo", "[图片]"
@@ -253,15 +300,17 @@ class Listener:
                     else:
                         text = "[其他消息]"
 
-                    if media_type and media_uploader.is_enabled():
-                        display, _url = await media_uploader.upload_media(msg, media_type, peer["name"])
-                        if display:
-                            text = display
+                    # v2.10.25:按 MEDIA_STORAGE_MODE 分派(drive / tg_archive / off)
+                    if media_type:
+                        text, media_seq, archive_msg_id = await self._resolve_media_display(
+                            msg, account_id, media_type, peer["name"], text
+                        )
 
                 timestamp = msg.date.astimezone(TZ_BJ).strftime("%Y-%m-%d %H:%M:%S")
                 inserted = db.insert_message(
                     msg_id=msg.id, account_id=account_id, peer_id=peer_id,
                     direction=direction, text=text, media_type=media_type, timestamp=timestamp,
+                    media_seq=media_seq, archive_msg_id=archive_msg_id,
                 )
                 if inserted:
                     count += 1
@@ -321,6 +370,8 @@ class Listener:
                 direction = "A" if msg.out else "B"
                 text = msg.text or ""
                 media_type = ""
+                media_seq = 0
+                archive_msg_id = 0
                 if not text:
                     if msg.photo:
                         media_type, text = "photo", "[图片]"
@@ -335,15 +386,17 @@ class Listener:
                     else:
                         text = "[其他消息]"
 
-                    if media_type and media_uploader.is_enabled():
-                        display, _url = await media_uploader.upload_media(msg, media_type, peer_name)
-                        if display:
-                            text = display
+                    # v2.10.25:按 MEDIA_STORAGE_MODE 分派(drive / tg_archive / off)
+                    if media_type:
+                        text, media_seq, archive_msg_id = await self._resolve_media_display(
+                            msg, account_id, media_type, peer_name, text
+                        )
 
                 timestamp = msg_dt.strftime("%Y-%m-%d %H:%M:%S")
                 inserted = db.insert_message(
                     msg_id=msg.id, account_id=account_id, peer_id=peer["id"],
                     direction=direction, text=text, media_type=media_type, timestamp=timestamp,
+                    media_seq=media_seq, archive_msg_id=archive_msg_id,
                 )
                 if inserted:
                     count += 1
