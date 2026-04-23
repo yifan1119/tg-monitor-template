@@ -22,11 +22,15 @@ class Listener:
 
     async def add_account(self, phone):
         session_path = str(config.SESSION_DIR / phone.replace("+", ""))
+        # v2.10.26: device/system/app 改成模拟 TG Desktop,避免被监听号在 TG「其他会话」
+        # 里看到「openclaw 1.0」这种显眼软件名
         client = TelegramClient(
             session_path, config.API_ID, config.API_HASH,
-            device_model=config.DEVICE_NAME,
-            system_version="1.0",
-            app_version="1.0",
+            device_model=config.TG_DEVICE_MODEL,
+            system_version=config.TG_SYSTEM_VERSION,
+            app_version=config.TG_APP_VERSION,
+            lang_code=config.TG_LANG_CODE,
+            system_lang_code=config.TG_SYSTEM_LANG,
         )
         await client.connect()
         if not await client.is_user_authorized():

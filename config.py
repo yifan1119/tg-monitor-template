@@ -258,7 +258,16 @@ if _phones:
 # 部门/公司名称
 COMPANY_NAME = os.environ.get("COMPANY_NAME", "")  # 用于容器名（英文）
 COMPANY_DISPLAY = os.environ.get("COMPANY_DISPLAY", COMPANY_NAME)  # 用于页面显示（中文）
-DEVICE_NAME = os.environ.get("DEVICE_NAME", "shencha")  # TG 设备名称
+DEVICE_NAME = os.environ.get("DEVICE_NAME", "shencha")  # TG 设备名称(device_model)
+
+# v2.10.26:TG session 列表显示项 — 默认模拟 Telegram Desktop,避免被监听号看到「openclaw 1.0」
+# 类显眼软件名导致起疑。客户可在 .env 按需改 DEVICE_MODEL / SYSTEM_VERSION / APP_VERSION。
+# 注意:仅新 session(重新登录)生效,老 session TG 可能仍缓存旧值一段时间。
+TG_DEVICE_MODEL    = os.environ.get("TG_DEVICE_MODEL",    "shencha")
+TG_SYSTEM_VERSION  = os.environ.get("TG_SYSTEM_VERSION",  "1.0")
+TG_APP_VERSION     = os.environ.get("TG_APP_VERSION",     "tglistener 1.0")
+TG_LANG_CODE       = os.environ.get("TG_LANG_CODE",       "zh-CN")
+TG_SYSTEM_LANG     = os.environ.get("TG_SYSTEM_LANG",     "zh-CN")
 
 # 对话方角色称谓（不同部门可能叫「广告主」「客户」「合作方」等）
 PEER_ROLE_LABEL = os.environ.get("PEER_ROLE_LABEL", "广告主")

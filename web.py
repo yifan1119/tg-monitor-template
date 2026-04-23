@@ -641,10 +641,14 @@ def run_async(coro):
 
 async def _make_client(session_path):
     """在 _loop 线程内创建 TelegramClient（避免 no event loop 错误）"""
+    # v2.10.26: 登录期也用伪装的 device/system/app,避免首次登入就在 TG 历史里留下「openclaw」痕迹
     return TelegramClient(
         session_path, config.API_ID, config.API_HASH,
-        device_model=config.DEVICE_NAME,
-        system_version="1.0", app_version="1.0",
+        device_model=config.TG_DEVICE_MODEL,
+        system_version=config.TG_SYSTEM_VERSION,
+        app_version=config.TG_APP_VERSION,
+        lang_code=config.TG_LANG_CODE,
+        system_lang_code=config.TG_SYSTEM_LANG,
     )
 
 
