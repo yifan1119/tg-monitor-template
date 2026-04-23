@@ -2,7 +2,8 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v3.0.0(2026-04-23) — 🆕 **两段式未回复预警 + TG 装置伪装** — 30 分钟 @ 商务 / 40 分钟 @ 负责人 + 违规/取消按钮 + 员工回复事件驱动自动结案 + Telethon 真名解析。全部 feature flag 默认关(`TWO_STAGE_NO_REPLY_ENABLED=false`),老客户升级零感知;session 改用中性装置签名(`TG_DEVICE_MODEL` / `TG_SYSTEM_VERSION` / `TG_APP_VERSION`)降低 TG 风控识别概率
+> 📌 **最新版**:v3.0.2(2026-04-23) — 🛠 **Caddy inode 自愈 + `scripts/caddy-doctor.sh` 自查工具** — 修 shared caddy 模式一台 VPS 部多部门 HTTPS 失败(docker file bind mount inode 断裂),enable_https.sh 加 host/容器 Caddyfile 同步校验,不一致自动 `docker restart` 兜底;silent fail 全改 fail-loud;新增 `caddy-doctor.sh` 6 项检查(inode 同步 / 语法 / 死站 / 证书 / ACME 错误)
+> 之前:v3.0.0(2026-04-23) — 🆕 **两段式未回复预警 + TG 装置伪装** — 30 分钟 @ 商务 / 40 分钟 @ 负责人 + 违规/取消按钮 + 员工回复事件驱动自动结案 + Telethon 真名解析。全部 feature flag 默认关(`TWO_STAGE_NO_REPLY_ENABLED=false`),老客户升级零感知
 
 ---
 
@@ -390,7 +391,23 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v3.0.0** (2026-04-23) — 当前稳定版 🆕 **(两段式未回复预警 + TG 装置伪装)**
+- **v3.0.2** (2026-04-23) — 当前稳定版 🛠 **(Caddy inode 自愈 + caddy-doctor.sh)**
+  - [FIX] **shared caddy 模式一台 VPS 部多部门 HTTPS 终于稳定**(ADR-0017)— 根因是 docker file bind mount 按 inode 绑定,
+    `sed -i` / `cp` / vim 等原子替换会破坏 inode 链接 → 容器永远看老 Caddyfile → 新部门 site block 永不生效
+  - [FIX] **`enable_https.sh` 追加后加 host/容器 Caddyfile size 对比**,不一致自动 `docker restart` 兜底重建 mount
+  - [FIX] 所有 silent fail 改成 `exit 1`(找不到 Caddyfile bind mount / 追加后 grep 验证失败 / 证书 90 秒没签下来 → 明确告知 3 种原因)
+  - [NEW] `scripts/caddy-doctor.sh` — 6 项检查:容器状态 / Caddyfile inode 同步 / 语法校验 / site block vs 运行容器(死站检测)/ 证书目录 / 最近 ACME 错误摘要
+  - [SMALL] 生成的 site block 清除冗余 `header_up X-Forwarded-For` / `X-Forwarded-Proto`(Caddy 2 默认自动加,保留 `Host` 和 `X-Real-IP`)
+  - [CLAUDE] CLAUDE.md 加硬规定 #9:Caddyfile 绝不用 sed -i / cp / vim,只能 `>>`
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v3.0.1** (2026-04-23) 🛠 **(两段式按钮无条件渲染 + 驾驶舱版本号修正)**
+  - [FIX] 账号管理页「配置两段式」按钮从 feature flag 条件渲染改成**数据驱动**(有 `s.id` 就显示,有配 `business_tg_id` 就走新路径)
+  - [FIX] 驾驶舱版本号显示错版本(pack file 读不到 commit subject 导致 fallback 到老 reflog)— 多路径 fallback:tag → release_notes → loose object → reflog
+  - [FIX] `update.sh` 加 `git fetch --tags` 避免本地 tag 落后触发错版本推送
+  - [CLAUDE] 加硬规定 #8:每次部署 `docker exec` 同步 `.py` + `templates/` + `README.md` + `release_notes.json` 到容器,否则登入页/modal 显示老版本
+
+- **v3.0.0** (2026-04-23) 🆕 **(两段式未回复预警 + TG 装置伪装)**
   - [NEW] **两段式未回复预警**(ADR-0015 + ADR-0016)— 30 分钟 @ 商务人员 + 40 分钟 @ 部门负责人 + 违规/取消按钮。
     员工在外事号 App 回复客户 → 事件驱动自动结案(outbound 钩子 + poll 兜底双路径)
   - [DB] **Migration V5**(ADR-0015)— `accounts` 加 `business_tg_id` / `owner_tg_id` / `remind_30min_text` / `remind_40min_text` 4 列;

@@ -104,6 +104,46 @@ docker restart <container>
 
 目前每次部署必须人工保证这 4 类文件都 cp 到 /app/,否则客户看到的跟代码不一致。
 
+### 9. 🔴 Caddyfile 绝不用 sed -i / cp / vim,只能 `>>`(硬性规定)
+
+**问题**:Caddy 容器里 Caddyfile 是 **file bind mount**(不是目录挂载):
+
+```yaml
+# docker-compose.yml
+- ./Caddyfile:/etc/caddy/Caddyfile:ro
+```
+
+Docker file bind mount 按 **inode** 绑定。任何**原子替换**(`sed -i` / `cp` / `mv` / `vim :wq`)都会产生新 inode,容器的 mount 仍指旧 inode(已 unlink 但句柄还在)→ **容器里永远看到旧内容**。
+
+症状:
+- `docker exec caddy reload` 说 `config is unchanged`(读的是容器内老文件)
+- 新追加的 site block 永远不生效
+- 新部门 HTTPS 永远签不下来
+
+**硬性规定**:改 Caddyfile 只能用 **in-place append**:
+
+```bash
+# ✅ 对:不改 inode
+echo "新内容" >> /root/tg-monitor-demo/Caddyfile
+
+# ❌ 错:sed -i 原子替换,立刻断 inode
+sed -i '/old/d' /root/tg-monitor-demo/Caddyfile
+
+# ❌ 错:cp 整体覆盖
+cp /tmp/new /root/tg-monitor-demo/Caddyfile
+
+# ❌ 错:vim 保存
+vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
+```
+
+**如果必须改删/整体重写**(不能只追加),两种补救:
+1. `docker restart <caddy容器>` 让容器重新 attach 新 inode
+2. 用 `cat /tmp/new > /root/.../Caddyfile`(重定向而非 cp,保持同 inode)
+
+**自查工具**:`scripts/caddy-doctor.sh` 会对比 host 和容器内 Caddyfile 的 size/hash。不一致就是断了,跑一次就知道。
+
+**背景**:2026-04-23 线上某 VPS 一台机部署多部门 HTTPS 失败,排查 40 分钟才发现是这个 inode 断裂问题。详见 [ADR-0017](docs/adr/0017-v3.0.2-caddyfile-inode-bind-mount.md)。
+
 ## 关键决策历史
 
 全部 ADR 见 [`docs/adr/`](docs/adr/README.md)。
@@ -126,6 +166,7 @@ docker restart <container>
 | v2.10.25 | 媒体存储切换:`MEDIA_STORAGE_MODE=drive/tg_archive/off`(默认 drive,tg_archive 用 Bot 转发到独立 TG 群规避 Google 账号冻结)| [0014](docs/adr/0014-v2.10.25-media-storage-tg-archive.md) |
 | v3.0.0 | 两段式未回复预警 schema(migration V5 + accounts +4 字段 + `alerts.stage` + demo 错位 DB 兼容修复)| [0015](docs/adr/0015-v3.0.0-two-stage-alert-data-layer.md) |
 | v3.0.0 | 两段式预警推送 + callback + Telethon 真名解析 + 自动升级 loop(事件驱动 + poll 兜底) | [0016](docs/adr/0016-v3.0.0-two-stage-alert-push-callback.md) |
+| v3.0.2 | Caddyfile 热更新的 Docker file bind mount inode 断裂 — enable_https.sh 加 inode 自愈 + fail-loud + 新增 `scripts/caddy-doctor.sh` 自查工具(shared caddy 模式一台 VPS 部多部门 HTTPS 终于稳定)| [0017](docs/adr/0017-v3.0.2-caddyfile-inode-bind-mount.md) |
 
 ## 发布流程
 
@@ -144,7 +185,9 @@ docker restart <container>
 
 ## 当前状态(2026-04-23)
 
-- main:`v2.10.25`(已发布 — 媒体存储切换 `MEDIA_STORAGE_MODE=drive|tg_archive|off`,默认 drive)
+- main:`v3.0.2`(已发布 — Caddy inode 自愈 + caddy-doctor.sh 自查工具,shared caddy 多部门 HTTPS 稳定)
+- 之前:`v3.0.1`(两段式预警数据驱动 + 驾驶舱版本号修正 + 硬规定 #8 Docker cp 列表)
+- 之前:`v2.10.25`(已发布 — 媒体存储切换 `MEDIA_STORAGE_MODE=drive|tg_archive|off`,默认 drive)
 - **feature/v3.0.0 → `integration/v3.0.0-on-main` 分支集成完成**:两段式未回复预警(30min @ 商务 + 40min @ 负责人 + 违规/取消按钮 + Telethon 真名解析 + 自动升级 loop + TG 装置伪装)。从 `origin/main@32e5029` 起,已完成 7 个核心代码 commit(database / config / templates / bot / listener / tasks / main)+ 文档整合 ADR-0015 / ADR-0016
 - **待做**:测试 + Codex round2 审阅 + merge main + `git tag v3.0.0` + push
 - 某客户(150+ 账号)2026-04-22 15:07 线上遇到 429 配额爆,sed 止血成功(16:25),已发 v2.10.24.1 + v2.10.24.2,待客户 `./update.sh` 升级
