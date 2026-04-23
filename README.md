@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.24.6(2026-04-22) — 📝 **后台升级说明改白话** — `release_notes.json` 文案白话化原则:禁文件名 / 函数名 / 技术缩写,改业务具象词 — 客户一眼看懂「优化什么、解决什么」
+> 📌 **最新版**:v2.10.25(2026-04-23) — 🔒 **媒体存储可切「TG 档案群」** — 新增 `MEDIA_STORAGE_MODE` feature flag(drive / tg_archive / off,默认 drive 老客户无感)+ 设置页模式选择器 + bot `/chatid` 指令。违规内容不再落客户 Google Drive,规避账号冻结风险
 
 ---
 
@@ -390,7 +390,25 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.24.6** (2026-04-22) — 当前稳定版 📝 **(文案白话化原则 — 客户看的是业务不是技术)**
+- **v2.10.25** (2026-04-23) — 当前稳定版 🔒 **(媒体存储可切 TG 档案群 — 规避 Google 账号冻结风险)**
+  - [NEW] **`MEDIA_STORAGE_MODE` feature flag**(ADR-0014)— 三选一:
+    - `drive`(**默认**,老客户无感)— 保留 v2.10.24 原逻辑,图片/文件上 Google Drive
+    - `tg_archive` — Bot 把图片/文件/语音转发到独立 TG 群,Sheet 写 `=HYPERLINK(t.me/c/..., "图片 #N")` 超链接
+    - `off` — 完全不处理媒体,Sheet 只显示 `[图片]` / `[文件]` 文字占位
+  - [NEW] **设置页模式选择器** — 下拉切换三种模式,字段条件显示(选 tg_archive 隐藏 Drive 字段 + 显示档案群输入)
+  - [NEW] **Bot `/chatid` 指令** — 在任何群 / 私聊发 `/chatid`,bot 按 chat 类型回复:supergroup ✅ 可作档案群 / 普通群附升级教程 / private 提示作审核白名单。替代第三方 `@RawDataBot` / `@userinfobot` 依赖
+  - [NEW] **语音转发** — tg_archive 模式下 voice 也走 Bot `send_voice`(发送失败降级 `send_document` 保文件不丢)
+  - [SAFE] **原子 `media_seq` 计数器** — 新 `account_seq` 表 + `INSERT OR IGNORE` + `UPDATE +1` + commit 原子分配,防三路协程并发重号(Codex P1 round1)
+  - [SAFE] **档案群 ID supergroup 校验**(双层:web 保存前 + 运行时)— 必须 `-100xxx` 负数,否则保存挡住 + 运行时回落文字占位不会把客户图片 DM 到用户(Codex P1 round1)
+  - [SAFE] **HTML escape bot 回复** — `/chatid` 回复用 `html.escape(title)` 防群名特殊字符让 HTML parser 崩(Codex P1 round2)
+  - [FIX] **`main()` 预存 UnboundLocalError** — 函数内重复 `import os` 触发 SETUP_COMPLETE=false 分支崩,修掉冗余 import
+  - [DB] **Migration 4** — messages 加 `media_seq` / `archive_msg_id` 列 + 新表 `account_seq`(幂等 `_safe_add_column` + `CREATE TABLE IF NOT EXISTS`)
+  - [COMPAT] 默认 drive 模式 → 老客户 `./update.sh` 后行为 0 变化;切 tg_archive 完全自愿,回滚 `./rollback.sh` 安全(新列保留无害)
+  - [TEST] 测试部署 9 项矩阵覆盖:图片/文件/语音转发成功 + 原子 seq 无跳号 + 错误 group ID 格式被挡 + HYPERLINK 深链可点
+  - [REVIEW] Codex round1 + round2 双审,0 P0,4 个 P1 全修完
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.24.6** (2026-04-22) 📝 **(文案白话化原则 — 客户看的是业务不是技术)**
   - [POLICY] **`release_notes.json` 文案必须白话**(ADR-0013)— 用户反馈「太复杂客户哪看得懂,我都看不懂」
   - 禁止出现:文件名 / 函数名 / 技术缩写(regex、config、SQL、DB、API)/ 代码细节 / 配额数字
   - 必须用:具象业务名词(表格 / 预警群 / 账号 / 弹窗)+ 白话问题描述(卡住 / 丢了 / 看不到)+ 效果描述(自动补 / 不再卡 / 零丢失)
