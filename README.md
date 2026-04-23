@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v2.10.25(2026-04-23) — 🔒 **媒体存储可切「TG 档案群」** — 新增 `MEDIA_STORAGE_MODE` feature flag(drive / tg_archive / off,默认 drive 老客户无感)+ 设置页模式选择器 + bot `/chatid` 指令。违规内容不再落客户 Google Drive,规避账号冻结风险
+> 📌 **最新版**:v3.0.0(2026-04-23) — 🆕 **两段式未回复预警 + TG 装置伪装** — 30 分钟 @ 商务 / 40 分钟 @ 负责人 + 违规/取消按钮 + 员工回复事件驱动自动结案 + Telethon 真名解析。全部 feature flag 默认关(`TWO_STAGE_NO_REPLY_ENABLED=false`),老客户升级零感知;session 改用中性装置签名(`TG_DEVICE_MODEL` / `TG_SYSTEM_VERSION` / `TG_APP_VERSION`)降低 TG 风控识别概率
 
 ---
 
@@ -390,7 +390,30 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v2.10.25** (2026-04-23) — 当前稳定版 🔒 **(媒体存储可切 TG 档案群 — 规避 Google 账号冻结风险)**
+- **v3.0.0** (2026-04-23) — 当前稳定版 🆕 **(两段式未回复预警 + TG 装置伪装)**
+  - [NEW] **两段式未回复预警**(ADR-0015 + ADR-0016)— 30 分钟 @ 商务人员 + 40 分钟 @ 部门负责人 + 违规/取消按钮。
+    员工在外事号 App 回复客户 → 事件驱动自动结案(outbound 钩子 + poll 兜底双路径)
+  - [DB] **Migration V5**(ADR-0015)— `accounts` 加 `business_tg_id` / `owner_tg_id` / `remind_30min_text` / `remind_40min_text` 4 列;
+    `alerts` 加 `stage` 列(0=老路径 / 1=stage1 / 2=stage2)。沿用 ADR-0005 决策:**保留 `type='no_reply'` 不变**,只加 stage 列 → 回滚兼容
+  - [SAFE] **demo 错位 DB 兼容修复**(Codex C 方案)— `_run_migrations` 对 V5 关键列做存在性检查,
+    防 demo 开发期 `user_version` 错位导致 migration 半崩(实际 schema 缺列仍能自愈补上)
+  - [NEW] **Telethon 真名解析**(ADR-0016)— `_build_tg_mention` 调 `client.get_entity` 拿 numeric id + first_name + last_name,
+    拼 HTML inline mention 显示「王小明」而不是蓝字 `@username`。解析失败降级到 `@xxx` 字符串兜底不崩
+  - [NEW] **全域统一文案**(v2.10.26 测试期反馈)— `REMIND_30MIN_TEXT` / `REMIND_40MIN_TEXT` 一次改 `.env` 全部账号生效。
+    账号级 `remind_30min_text` / `remind_40min_text` 仍可独立覆盖(给 VIP 特殊需求用)
+  - [NEW] **独立预警群**(可选)— `UNREPLIED_ALERT_GROUP_ID` 填了就走独立群,否则 fallback 到 `ALERT_GROUP_ID` 老群
+  - [NEW] **TG 装置伪装**(ADR-0016)— Telethon `TelegramClient` 显式传
+    `device_model` / `system_version` / `app_version` 三字段,默认 `shencha` / `1.0` / `tglistener 1.0` 中性签名。
+    客户可在 `.env` 改成 `TG Desktop` / `Windows 10` / `5.1.1` 模拟 TG Desktop(降低风控识别,不做 0 风险保证)
+  - [NEW] **on_stage2_action callback** — `violation:{id}` / `cancel:{id}` 两按钮,权限沿用 `CALLBACK_AUTH_USER_IDS` 老白名单。
+    `violation` → 写预警分表(6 列结构不变,`violation_logged` 写进「处理状态」列,不加末列);
+    `cancel` → 仅 edit_text 删按钮
+  - [COMPAT] `TWO_STAGE_NO_REPLY_ENABLED=false`(**默认**)→ `send_no_reply_alert` / `_write_alert_to_sheet` / 预警分表结构
+    跟 v2.10.25 一字不差,老客户升级零感知
+  - [COMPAT] 回滚安全:`bash rollback.sh` 回 v2.10.25 老代码仍能读 DB(新列保留无害),Sheet 结构不变
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v2.10.25** (2026-04-23) 🔒 **(媒体存储可切 TG 档案群 — 规避 Google 账号冻结风险)**
   - [NEW] **`MEDIA_STORAGE_MODE` feature flag**(ADR-0014)— 三选一:
     - `drive`(**默认**,老客户无感)— 保留 v2.10.24 原逻辑,图片/文件上 Google Drive
     - `tg_archive` — Bot 把图片/文件/语音转发到独立 TG 群,Sheet 写 `=HYPERLINK(t.me/c/..., "图片 #N")` 超链接
