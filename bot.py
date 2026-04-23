@@ -91,10 +91,8 @@ class AlertBot:
                     f"<b>用途</b>:\n"
                     f"• ✅ 可作<b>告警群</b> → 复制到「设置 → 预警群 Chat ID」\n"
                     f"• ❌ <b>不能作档案群</b>:档案群必须是 Supergroup,否则 t.me/c 深链 404\n\n"
-                    f"<b>想当档案群 → 先升级成 Supergroup</b>(三选一):\n"
-                    f"• 群设置 → 管理群组 → 群组类型 → 改成<b>公开</b> → 保存(最快)\n"
-                    f"• 或打开「新成员可见历史消息」开关\n"
-                    f"• 或打开「慢速模式」任意时长\n\n"
+                    f"<b>想当档案群 → 先升级成 Supergroup</b>:\n"
+                    f"群信息 → 管理群组 → 打开「新成员可见历史消息」开关 → 确认 → 立刻升级\n\n"
                     f"升级后 chat.id <b>会变</b>成 <code>-100xxxxxxxxxx</code>,再发 /chatid 拿新 ID。"
                 )
             elif chat_type == "channel":

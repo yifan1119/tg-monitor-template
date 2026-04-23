@@ -887,32 +887,15 @@
           </div>
 
           <details style="margin-top:10px;background:rgba(126,201,255,0.06);border-left:3px solid #7ec9ff;padding:10px 14px;border-radius:4px;">
-            <summary style="cursor:pointer;color:#7ec9ff;font-weight:600;">▸ 怎么把群升级成 supergroup(三种方法,挑最方便的)</summary>
+            <summary style="cursor:pointer;color:#7ec9ff;font-weight:600;">▸ 怎么把群升级成 supergroup</summary>
             <div style="margin-top:10px;color:#cfe3f5;font-size:12.5px;line-height:1.85;">
 
-              <div style="margin-bottom:10px;"><b style="color:#9ef0b8;">方法 A(最快):改成公开群触发</b>
+              <div style="margin-bottom:10px;"><b style="color:#9ef0b8;">开启「新成员可见历史消息」即触发升级</b>
                 <ol style="margin:6px 0 0 18px;color:#bfd6e8;">
                   <li>群信息页 → 点「管理群组 / Manage group」</li>
-                  <li>找「群组类型 / Group Type」→ 选「<b>公开 / Public</b>」</li>
-                  <li>取个随便的 username(比如 <code>archive_xxx_202604</code>,不冲突就行)</li>
-                  <li>保存 → 群<b>立刻升级成 supergroup</b>,chat.id 变 <code>-100xxxxxxxxxx</code></li>
-                  <li>(可选)再回去改回「私有」清空 username — 升级<b>不会</b>回退</li>
-                </ol>
-              </div>
-
-              <div style="margin-bottom:10px;"><b style="color:#9ef0b8;">方法 B:开启「新成员可见历史消息」</b>
-                <ol style="margin:6px 0 0 18px;color:#bfd6e8;">
-                  <li>管理群组 → 打开「新成员可见历史消息 / New members see earlier messages」</li>
+                  <li>打开「新成员可见历史消息 / New members see earlier messages」开关</li>
                   <li>TG 弹窗提示「此操作会把群升级为超级群组,不可逆」→ 确认</li>
-                  <li>立刻升级</li>
-                </ol>
-              </div>
-
-              <div style="margin-bottom:10px;"><b style="color:#9ef0b8;">方法 C:打开慢速模式</b>
-                <ol style="margin:6px 0 0 18px;color:#bfd6e8;">
-                  <li>管理群组 → 「慢速模式 / Slow mode」→ 选任意非 Off 的值(比如 10 秒)</li>
-                  <li>立刻升级</li>
-                  <li>升完可以再关掉慢速模式</li>
+                  <li>群<b>立刻升级成 supergroup</b>,chat.id 变 <code>-100xxxxxxxxxx</code></li>
                 </ol>
               </div>
 
