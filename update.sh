@@ -236,6 +236,61 @@ if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${CADDY_NAME}$"; t
     fi
 fi
 
+# ===== 5.6 Caddy inode 自愈 (v3.0.2) =====
+# 背景: docker file bind mount (./Caddyfile:/etc/caddy/Caddyfile:ro) 按 inode 绑定。
+#       历史上有人用 sed -i / cp / vim 原子替换过 Caddyfile → 新 inode →
+#       容器 mount 仍指旧 inode → 容器里永远看老 Caddyfile → 新追加的 site block
+#       永不生效 → 新部门 HTTPS 打不开。
+# 安全策略: 只碰"跟当前部门直接相关"的 Caddy,不动 VPS 上其他项目的容器。
+#   1. 本部门有自己的 Caddy (tg-caddy-${COMPANY_NAME}) → 检查它
+#   2. 本部门用 shared Caddy (own 没有但 .env 里有 PUBLIC_DOMAIN) → 找 Caddyfile
+#      里包含本部门 PUBLIC_DOMAIN 的 tg-caddy-* 容器 → 只检查这个
+#   其他 Caddy 容器一概不动,保证不搞坏客户 VPS 上的其他服务。
+MY_CADDY=""
+
+# 情况 1: 本部门有自己的 Caddy
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "tg-caddy-${COMPANY_NAME}"; then
+    MY_CADDY="tg-caddy-${COMPANY_NAME}"
+else
+    # 情况 2: shared mode — 本部门的 PUBLIC_DOMAIN 被其他 Caddy 反代
+    MY_DOMAIN=$(grep "^PUBLIC_DOMAIN=" .env 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+    if [ -n "$MY_DOMAIN" ]; then
+        # 扫所有 tg-caddy-* 容器,看哪个 Caddyfile 里有我们的 domain
+        for caddy in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^tg-caddy-' || true); do
+            if docker exec "$caddy" grep -qF "$MY_DOMAIN" /etc/caddy/Caddyfile 2>/dev/null; then
+                MY_CADDY="$caddy"
+                break
+            fi
+        done
+    fi
+fi
+
+# 只对本部门相关的那一个 Caddy 做 inode 检查 + 自愈
+if [ -n "$MY_CADDY" ]; then
+    host_file=$(docker inspect "$MY_CADDY" \
+        --format '{{range .Mounts}}{{if eq .Destination "/etc/caddy/Caddyfile"}}{{.Source}}{{end}}{{end}}' \
+        2>/dev/null)
+    if [ -n "$host_file" ] && [ -f "$host_file" ]; then
+        host_size=$(wc -c < "$host_file" 2>/dev/null | tr -d ' ')
+        cont_size=$(docker exec "$MY_CADDY" wc -c /etc/caddy/Caddyfile 2>/dev/null | awk '{print $1}')
+        if [ -n "$host_size" ] && [ -n "$cont_size" ] && [ "$host_size" != "$cont_size" ]; then
+            echo ""
+            echo "🔧 检测到本部门使用的 Caddy (${MY_CADDY}) Caddyfile 跟 host 不一致"
+            echo "   (host=${host_size}B vs 容器=${cont_size}B,docker bind mount inode 断裂)"
+            echo "   自动重启 ${MY_CADDY} 修复 (约 5-10 秒 HTTPS 短暂中断)..."
+            docker restart "$MY_CADDY" >/dev/null 2>&1 || true
+            sleep 3
+            cont_size2=$(docker exec "$MY_CADDY" wc -c /etc/caddy/Caddyfile 2>/dev/null | awk '{print $1}')
+            if [ "$host_size" = "$cont_size2" ]; then
+                echo "   ✅ ${MY_CADDY} 已修复"
+            else
+                echo "   ⚠ 重启后仍不一致,请手动排查:"
+                echo "     bash ${INSTALL_DIR}/scripts/caddy-doctor.sh"
+            fi
+        fi
+    fi
+fi
+
 # ===== 6. 升级成功 =====
 echo ""
 echo "╔══════════════════════════════════════════════╗"
