@@ -699,10 +699,13 @@
             </ol>
             <b>三、获取群 Chat ID</b>
             <ol>
-              <li><span class="step-label">01</span> 把 <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a> 拉进预警群</li>
-              <li><span class="step-label">02</span> 它会自动发一条消息,里面的 <code>Id:</code> 那串负数就是 Chat ID(通常以 <code>-100</code> 开头)</li>
-              <li><span class="step-label">03</span> 拿到 ID 后可以把 @userinfobot 从群里踢掉</li>
+              <li><span class="step-label">01</span> 把<b>自己的 Bot</b>(上面填完 token 的那个)拉进预警群,给发送消息权限</li>
+              <li><span class="step-label">02</span> 在预警群里发一条 <code>/chatid</code> → bot 会自动回 Chat ID(负数,通常 <code>-100</code> 开头)</li>
+              <li><span class="step-label">03</span> 复制回来填到下方输入框,保存</li>
             </ol>
+            <div style="margin-top:6px;color:#9eb4c7;font-size:12px;">
+              💡 也可以用第三方 <a href="https://t.me/userinfobot" target="_blank" style="color:#7ec9ff;">@userinfobot</a> 拿 ID,但用自己 bot 少一个外部依赖。
+            </div>
           </div>
         </details>
       </div>
@@ -721,7 +724,7 @@
         <div class="hint">
           只有这里列的 TG 用户能点预警群里的「通过/拒绝」按钮,其他人点会弹提示没权限。
           <b>留空 = 不校验,跟以前一样任何人都能点(默认行为)。</b><br>
-          找数字 ID 最简单的方法:TG 搜 <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a> 私聊发一条消息,它会回你的 ID。
+          找数字 ID 最简单的方法:私聊<b>自己的 Bot</b> 发 <code>/chatid</code>,bot 会回你的个人 ID(私聊时 chat.id = 你的 user.id)。也可以用第三方 <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a>。
           多个人用英文逗号分隔,例如:<code>123456789,987654321</code>
         </div>
       </div>
@@ -876,10 +879,12 @@
             <li>TG 建新群(名字随便,例如「档案群 - 部门名」)</li>
             <li><b style="color:#ffd28a;">把群升级成 supergroup(超级群)</b> — 见下方 ▼ 升级方法</li>
             <li>把<b>上方填的同一个 Bot</b> 拉进群,给<b>管理员 + 发送消息</b>权限</li>
-            <li>群里拉 <a href="https://t.me/RawDataBot" target="_blank" style="color:#7ec9ff;">@RawDataBot</a>,它会回一条 JSON,找里面 <code>chat.id</code> 字段,格式 <code>-100xxxxxxxxxx</code>(-100 开头后面 10 位数字)</li>
+            <li>在<b>档案群里</b>发一条 <code>/chatid</code> → 我们的 bot 会自动回一条消息,里面的 <b>Chat ID</b>(格式 <code>-100xxxxxxxxxx</code>)就是你要的</li>
             <li>把 chat.id 填到上面输入框 → 保存</li>
-            <li>拿到 ID 后可以把 RawDataBot 踢掉</li>
           </ol>
+          <div style="margin-top:6px;padding:6px 10px;background:rgba(126,201,255,0.06);border-radius:4px;color:#9eb4c7;font-size:12px;">
+            💡 bot 的 <code>/chatid</code> 自动判断:是 supergroup 就标绿✓;是普通群就提示要升级;是私聊就提示建群。
+          </div>
 
           <details style="margin-top:10px;background:rgba(126,201,255,0.06);border-left:3px solid #7ec9ff;padding:10px 14px;border-radius:4px;">
             <summary style="cursor:pointer;color:#7ec9ff;font-weight:600;">▸ 怎么把群升级成 supergroup(三种方法,挑最方便的)</summary>
@@ -912,7 +917,7 @@
               </div>
 
               <div style="margin-top:10px;padding:8px 12px;background:rgba(255,155,61,0.1);border-left:3px solid #ff9b3d;border-radius:4px;color:#ffd28a;">
-                ⚠ <b>升级后注意</b>:chat.id <b>会变</b>(从老格式 <code>-4987xxxxxx</code> 变成 <code>-100xxxxxxxxxx</code>)。如果 bot 被自动踢出群,重新拉进来给管理员权限。用 @RawDataBot 拿<b>新的</b> chat.id 填上面。
+                ⚠ <b>升级后注意</b>:chat.id <b>会变</b>(从老格式 <code>-4987xxxxxx</code> 变成 <code>-100xxxxxxxxxx</code>)。如果 bot 被自动踢出群,重新拉进来给管理员权限。在群里发 <code>/chatid</code> 拿<b>新的</b> chat.id 填上面。
               </div>
             </div>
           </details>

@@ -3,6 +3,7 @@ import json
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 
 import config
@@ -57,6 +58,64 @@ class AlertBot:
                 )
             else:
                 await message.reply("❌ 绑定码无效或已过期。请回网页刷新获取新绑定码。")
+
+        @self.dp.message(Command(commands=["chatid", "id"]))
+        async def on_chatid(message):
+            """v2.10.25:客户在群 / 私聊发 /chatid 让 bot 自动回 chat_id 并按上下文给用途提示。
+            替代第三方 @RawDataBot / @userinfobot,少一个外部依赖。
+
+            判别逻辑:
+              supergroup → 可作档案群 / 告警群
+              group      → 可作告警群,不能作档案群(需升 supergroup)
+              channel    → 不建议,两者都用 supergroup / 普通群替代
+              private    → 这是个人 user_id,可作审核白名单
+            """
+            chat = message.chat
+            chat_id = chat.id
+            chat_type = chat.type
+            title = chat.title or (message.from_user.full_name if message.from_user else "") or "?"
+            if chat_type == "supergroup":
+                reply = (
+                    f"🆔 <b>Chat ID</b>:<code>{chat_id}</code>\n"
+                    f"群名:{title}\n"
+                    f"类型:Supergroup ✅\n\n"
+                    f"<b>用途</b>:\n"
+                    f"• ✅ 可作<b>档案群</b> → 复制到后台「设置 → TG 档案群 Chat ID」\n"
+                    f"• ✅ 可作<b>告警群</b> → 复制到「设置 → 预警群 Chat ID」"
+                )
+            elif chat_type == "group":
+                reply = (
+                    f"🆔 <b>Chat ID</b>:<code>{chat_id}</code>\n"
+                    f"群名:{title}\n"
+                    f"类型:普通群(basic group)\n\n"
+                    f"<b>用途</b>:\n"
+                    f"• ✅ 可作<b>告警群</b> → 复制到「设置 → 预警群 Chat ID」\n"
+                    f"• ❌ <b>不能作档案群</b>:档案群必须是 Supergroup,否则 t.me/c 深链 404\n\n"
+                    f"<b>想当档案群 → 先升级成 Supergroup</b>(三选一):\n"
+                    f"• 群设置 → 管理群组 → 群组类型 → 改成<b>公开</b> → 保存(最快)\n"
+                    f"• 或打开「新成员可见历史消息」开关\n"
+                    f"• 或打开「慢速模式」任意时长\n\n"
+                    f"升级后 chat.id <b>会变</b>成 <code>-100xxxxxxxxxx</code>,再发 /chatid 拿新 ID。"
+                )
+            elif chat_type == "channel":
+                reply = (
+                    f"🆔 <b>Chat ID</b>:<code>{chat_id}</code>\n"
+                    f"类型:Channel ⚠\n\n"
+                    f"Channel 不太适合做档案群或告警群(bot 权限 + 对话模型都不同)。\n"
+                    f"建议:新建一个 <b>Supergroup</b> 做档案群,告警群用普通群或 supergroup 都可。"
+                )
+            else:
+                reply = (
+                    f"🆔 你的个人 <b>Chat ID</b>(= user ID):<code>{chat_id}</code>\n"
+                    f"(私聊时 chat.id = 你的 user.id)\n\n"
+                    f"<b>用途</b>:\n"
+                    f"• ✅ 可填到「设置 → 审核按钮白名单」(限制谁能点预警群的通过/拒绝)\n"
+                    f"• ❌ 不能作群 ID(档案群 / 告警群请在<b>群里</b>发 /chatid)"
+                )
+            try:
+                await message.reply(reply, parse_mode="HTML")
+            except Exception as e:
+                logger.warning("/chatid 回复失败 chat_id=%s: %s", chat_id, e)
 
         @self.dp.callback_query(F.data.startswith("approve:") | F.data.startswith("reject:"))
         async def on_audit(callback: CallbackQuery):
