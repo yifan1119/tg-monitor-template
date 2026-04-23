@@ -871,15 +871,59 @@
                value="{{ d.media_archive_group_id or '' }}"
                placeholder="-1001234567890(supergroup,负数且 abs 以 100 开头)">
         <div class="hint" style="margin-top:8px;">
-          <b>做法</b>:
+          <b>完整步骤</b>(第 2 步特别重要 — 普通群不能用,必须升级成 supergroup):
           <ol style="margin:6px 0 0 16px;color:#bfd6e8;">
-            <li>TG 建新群(建议改成 supergroup:群里加个额外管理员就会自动升级)</li>
+            <li>TG 建新群(名字随便,例如「档案群 - 部门名」)</li>
+            <li><b style="color:#ffd28a;">把群升级成 supergroup(超级群)</b> — 见下方 ▼ 升级方法</li>
             <li>把<b>上方填的同一个 Bot</b> 拉进群,给<b>管理员 + 发送消息</b>权限</li>
-            <li>群里拉 <a href="https://t.me/RawDataBot" target="_blank" style="color:#7ec9ff;">@RawDataBot</a> 或 <a href="https://t.me/userinfobot" target="_blank" style="color:#7ec9ff;">@userinfobot</a>,它会回一条 JSON/消息,里面的 <code>chat.id</code> 就是(格式 <code>-100xxxxxxxxxx</code>)</li>
+            <li>群里拉 <a href="https://t.me/RawDataBot" target="_blank" style="color:#7ec9ff;">@RawDataBot</a>,它会回一条 JSON,找里面 <code>chat.id</code> 字段,格式 <code>-100xxxxxxxxxx</code>(-100 开头后面 10 位数字)</li>
+            <li>把 chat.id 填到上面输入框 → 保存</li>
             <li>拿到 ID 后可以把 RawDataBot 踢掉</li>
           </ol>
+
+          <details style="margin-top:10px;background:rgba(126,201,255,0.06);border-left:3px solid #7ec9ff;padding:10px 14px;border-radius:4px;">
+            <summary style="cursor:pointer;color:#7ec9ff;font-weight:600;">▸ 怎么把群升级成 supergroup(三种方法,挑最方便的)</summary>
+            <div style="margin-top:10px;color:#cfe3f5;font-size:12.5px;line-height:1.85;">
+
+              <div style="margin-bottom:10px;"><b style="color:#9ef0b8;">方法 A(最快):改成公开群触发</b>
+                <ol style="margin:6px 0 0 18px;color:#bfd6e8;">
+                  <li>群信息页 → 点「管理群组 / Manage group」</li>
+                  <li>找「群组类型 / Group Type」→ 选「<b>公开 / Public</b>」</li>
+                  <li>取个随便的 username(比如 <code>archive_xxx_202604</code>,不冲突就行)</li>
+                  <li>保存 → 群<b>立刻升级成 supergroup</b>,chat.id 变 <code>-100xxxxxxxxxx</code></li>
+                  <li>(可选)再回去改回「私有」清空 username — 升级<b>不会</b>回退</li>
+                </ol>
+              </div>
+
+              <div style="margin-bottom:10px;"><b style="color:#9ef0b8;">方法 B:开启「新成员可见历史消息」</b>
+                <ol style="margin:6px 0 0 18px;color:#bfd6e8;">
+                  <li>管理群组 → 打开「新成员可见历史消息 / New members see earlier messages」</li>
+                  <li>TG 弹窗提示「此操作会把群升级为超级群组,不可逆」→ 确认</li>
+                  <li>立刻升级</li>
+                </ol>
+              </div>
+
+              <div style="margin-bottom:10px;"><b style="color:#9ef0b8;">方法 C:打开慢速模式</b>
+                <ol style="margin:6px 0 0 18px;color:#bfd6e8;">
+                  <li>管理群组 → 「慢速模式 / Slow mode」→ 选任意非 Off 的值(比如 10 秒)</li>
+                  <li>立刻升级</li>
+                  <li>升完可以再关掉慢速模式</li>
+                </ol>
+              </div>
+
+              <div style="margin-top:10px;padding:8px 12px;background:rgba(255,155,61,0.1);border-left:3px solid #ff9b3d;border-radius:4px;color:#ffd28a;">
+                ⚠ <b>升级后注意</b>:chat.id <b>会变</b>(从老格式 <code>-4987xxxxxx</code> 变成 <code>-100xxxxxxxxxx</code>)。如果 bot 被自动踢出群,重新拉进来给管理员权限。用 @RawDataBot 拿<b>新的</b> chat.id 填上面。
+              </div>
+            </div>
+          </details>
+
           <div style="margin-top:8px;padding:8px 12px;background:rgba(255,155,61,0.08);border-left:3px solid #ff9b3d;border-radius:4px;color:#ffd28a;font-size:12.5px;">
-            ⚠ 格式必须是 <b>-100 开头的负数</b>。填用户 ID(正数)会被系统拒绝(防止把客户图片 DM 到某个人),填普通群 ID(负数但无 -100 前缀)也不支持(t.me/c 深链 404)
+            ⚠ 格式必须是 <b>-100 开头的负数</b>。系统会挡住:
+            <ul style="margin:4px 0 0 16px;">
+              <li>正数(用户 ID)— 防止把客户图片 DM 到某个人</li>
+              <li>负数但无 -100 前缀(普通群没升级)— t.me/c 深链会 404</li>
+            </ul>
+            挡住时 log 会 warn 一次,媒体回退文字占位不会崩。
           </div>
         </div>
       </div>
