@@ -2,7 +2,8 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v3.0.2(2026-04-23) — 🛠 **Caddy inode 自愈 + `scripts/caddy-doctor.sh` 自查工具** — 修 shared caddy 模式一台 VPS 部多部门 HTTPS 失败(docker file bind mount inode 断裂),enable_https.sh 加 host/容器 Caddyfile 同步校验,不一致自动 `docker restart` 兜底;silent fail 全改 fail-loud;新增 `caddy-doctor.sh` 6 项检查(inode 同步 / 语法 / 死站 / 证书 / ACME 错误)
+> 📌 **最新版**:v3.0.3(2026-04-23) — 🩺 **update.sh 升级时自动 Caddy 体检 + 自愈** — 承接 v3.0.2,把故障检测从"客户自己跑诊断工具"升到"升级自动自愈"。只动本部门相关的那一个 Caddy 容器,保护客户 VPS 上其他项目不受影响。客户零操作
+> 之前:v3.0.2(2026-04-23) — 🛠 **Caddy inode 自愈 + `scripts/caddy-doctor.sh` 自查工具** — 修 shared caddy 模式多部门 HTTPS 失败(docker file bind mount inode 断裂)
 > 之前:v3.0.0(2026-04-23) — 🆕 **两段式未回复预警 + TG 装置伪装** — 30 分钟 @ 商务 / 40 分钟 @ 负责人 + 违规/取消按钮 + 员工回复事件驱动自动结案 + Telethon 真名解析。全部 feature flag 默认关(`TWO_STAGE_NO_REPLY_ENABLED=false`),老客户升级零感知
 
 ---
@@ -391,7 +392,14 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v3.0.2** (2026-04-23) — 当前稳定版 🛠 **(Caddy inode 自愈 + caddy-doctor.sh)**
+- **v3.0.3** (2026-04-23) — 当前稳定版 🩺 **(update.sh 升级时自动 Caddy 体检 + 自愈)**
+  - [NEW] `update.sh` 5.6 段:升级末尾自动对比本部门使用的 Caddy 的 host/容器 Caddyfile size,不一致自动 `docker restart` 修复
+  - [SAFE] **只动本部门相关的那一个 Caddy**(own `tg-caddy-<company>` 或 shared Caddy 有本域名的那个)
+  - [SAFE] 其他项目容器一律跳过 — 只看 `^tg-caddy-` 前缀,客户 VPS 上跑的其他 bot / 网站 / 私有服务一概不碰
+  - [COMPAT] 单部门客户天然不会触发(没 shared caddy,inode 永远对得上)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v3.0.2** (2026-04-23) 🛠 **(Caddy inode 自愈 + caddy-doctor.sh)**
   - [FIX] **shared caddy 模式一台 VPS 部多部门 HTTPS 终于稳定**(ADR-0017)— 根因是 docker file bind mount 按 inode 绑定,
     `sed -i` / `cp` / vim 等原子替换会破坏 inode 链接 → 容器永远看老 Caddyfile → 新部门 site block 永不生效
   - [FIX] **`enable_https.sh` 追加后加 host/容器 Caddyfile size 对比**,不一致自动 `docker restart` 兜底重建 mount
