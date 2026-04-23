@@ -77,11 +77,16 @@ def reload_if_env_changed():
     except ValueError:
         pass
     _unreplied_new = os.environ.get("UNREPLIED_ALERT_GROUP_ID", "0").strip()
-    UNREPLIED_ALERT_GROUP_ID = (
-        int(_unreplied_new)
-        if _unreplied_new and _unreplied_new != "0" and _unreplied_new.lstrip("-").isdigit()
-        else 0
-    )
+    # v3.0.0 Codex P1:reload 时也用严格 regex
+    try:
+        import re as _re_cfg
+        UNREPLIED_ALERT_GROUP_ID = (
+            int(_unreplied_new)
+            if _unreplied_new and _unreplied_new != "0" and _re_cfg.fullmatch(r'-?\d+', _unreplied_new)
+            else 0
+        )
+    except (ValueError, Exception):
+        UNREPLIED_ALERT_GROUP_ID = 0
     REMIND_30MIN_TEXT = os.environ.get("REMIND_30MIN_TEXT", "").strip()
     REMIND_40MIN_TEXT = os.environ.get("REMIND_40MIN_TEXT", "").strip()
     # v3.0.0:TG 设备身份也支持热 reload(虽然 TG server 缓存会有延迟,但至少本进程能立刻读新值)
@@ -302,12 +307,17 @@ except ValueError:
 
 # 未回复预警专用群(空则 fallback 到 ALERT_GROUP_ID,老部署无感)
 # 配了 = stage1/stage2 推这个群,删除/关键词仍推 ALERT_GROUP_ID
+# v3.0.0 Codex P1 修:严格 regex 校验不让「---123」这种 lstrip('-').isdigit() 判合法却 int() 炸
 _unreplied_group = os.environ.get("UNREPLIED_ALERT_GROUP_ID", "0").strip()
-UNREPLIED_ALERT_GROUP_ID = (
-    int(_unreplied_group)
-    if _unreplied_group and _unreplied_group != "0" and _unreplied_group.lstrip("-").isdigit()
-    else 0
-)
+try:
+    import re as _re_cfg  # 避免污染模块级 import re 命名
+    UNREPLIED_ALERT_GROUP_ID = (
+        int(_unreplied_group)
+        if _unreplied_group and _unreplied_group != "0" and _re_cfg.fullmatch(r'-?\d+', _unreplied_group)
+        else 0
+    )
+except (ValueError, Exception):
+    UNREPLIED_ALERT_GROUP_ID = 0
 
 # 两段式提醒文案(全域配置,所有账号共用。v2.10.26 客户反馈:不要每个号填一遍)
 # 留空即用模板内置默认文案(「请尽快回复」/「已超过 40 分钟未回复,请处理」)。

@@ -763,14 +763,16 @@ def get_unwritten_alerts(limit=100):
     - sheet_written=0(从未 claim)+ stale claim(sheet_written=1 且 claimed_at 超期,
       即进程 crash 后 claim 没清也没完成)—— 两者都捡
     - keyword 类型:status!='silenced' 就撈(命中即应写分页)
-    - no_reply / deleted 类型:只撈 status='approved'
+    - no_reply / deleted 类型:只撈 status IN ('approved', 'violation_logged')
+      (v3.0.0 Codex P1 修:violation_logged 是 stage2「登记违规」终态,跟 approved
+      语义等价写到同一张 no_reply 分表。不纳入的话 claim-first 回滚时这条永不补写)
     - JOIN accounts + peers 一次撈齐 company/operator/account_name/peer_name
     - LIMIT 控制一轮量(默认 100),避免一次掏光撞配额
     """
     where_clause, stale_str = _writeback_candidate_where_clause()
     sql = f"""
         SELECT
-            a.id, a.type, a.keyword, a.message_text, a.created_at, a.status,
+            a.id, a.type, a.keyword, a.message_text, a.created_at, a.status, a.stage,
             acc.company AS account_company,
             acc.operator AS account_operator,
             acc.name AS account_name,
@@ -782,7 +784,8 @@ def get_unwritten_alerts(limit=100):
           AND a.status != 'silenced'
           AND (
               a.type = 'keyword'
-              OR (a.type IN ('no_reply', 'deleted') AND a.status = 'approved')
+              OR (a.type IN ('no_reply', 'deleted')
+                  AND a.status IN ('approved', 'violation_logged'))
           )
         ORDER BY a.id
         LIMIT ?
@@ -791,13 +794,16 @@ def get_unwritten_alerts(limit=100):
 
 
 def count_unwritten_alerts():
-    """v2.10.24.3:统计待 writeback 积压量(含 stale claim)供日志/监控用。"""
+    """v2.10.24.3:统计待 writeback 积压量(含 stale claim)供日志/监控用。
+    v3.0.0 Codex P1:violation_logged 纳入可补写状态,保持跟 get_unwritten_alerts 一致。"""
     where_clause, stale_str = _writeback_candidate_where_clause()
     sql = f"""
         SELECT COUNT(*) FROM alerts a
         WHERE {where_clause}
           AND a.status != 'silenced'
-          AND (a.type = 'keyword' OR (a.type IN ('no_reply','deleted') AND a.status = 'approved'))
+          AND (a.type = 'keyword'
+               OR (a.type IN ('no_reply','deleted')
+                   AND a.status IN ('approved', 'violation_logged')))
     """
     return get_conn().execute(sql, (stale_str,)).fetchone()[0]
 
@@ -934,6 +940,22 @@ def upgrade_to_stage2(alert_id, new_bot_msg_id=None):
             UPDATE alerts SET stage=2
             WHERE id=? AND stage=1 AND status='pending'
         """, (alert_id,))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def rollback_stage2_to_stage1(alert_id):
+    """v3.0.0 Codex P1:stage2 send_message 失败时把 stage=2 回退到 stage=1。
+    严格条件 WHERE stage=2 AND status='pending' AND bot_message_id IS NULL
+    (只回滚「已原子升级 stage=2 但 send 失败还没写 bot_message_id」的场景,
+     成功送达的 stage2 不动)。
+    返回 rowcount=1 代表回滚成功,下一轮 stage2 loop 会重新扫到并重试升级。
+    """
+    conn = get_conn()
+    cur = conn.execute("""
+        UPDATE alerts SET stage=1
+        WHERE id=? AND stage=2 AND status='pending' AND bot_message_id IS NULL
+    """, (alert_id,))
     conn.commit()
     return cur.rowcount == 1
 

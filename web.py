@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -641,11 +642,17 @@ def run_async(coro):
 
 
 async def _make_client(session_path):
-    """在 _loop 线程内创建 TelegramClient（避免 no event loop 错误）"""
+    """在 _loop 线程内创建 TelegramClient（避免 no event loop 错误）
+
+    v3.0.0 Codex P3:web 登录流建 client 也用 TG_* 伪装字段,跟 listener 端到端一致,
+    避免首次登入就在 TG「其他会话」留下 openclaw/shencha 等不一致标识。"""
     return TelegramClient(
         session_path, config.API_ID, config.API_HASH,
-        device_model=config.DEVICE_NAME,
-        system_version="1.0", app_version="1.0",
+        device_model=config.TG_DEVICE_MODEL,
+        system_version=config.TG_SYSTEM_VERSION,
+        app_version=config.TG_APP_VERSION,
+        lang_code=config.TG_LANG_CODE,
+        system_lang_code=config.TG_SYSTEM_LANG,
     )
 
 
@@ -1437,11 +1444,12 @@ def _save_settings(is_first):
         updates["WEB_PORT"] = read_env().get("WEB_PORT", "5001")
 
     # v3.0.0(ADR-0015/0016):两段式未回复预警 — 专用群 + 全域提醒文案
-    # unreplied_alert_group_id 做数字校验(可为空,可为负数 supergroup -100...)
+    # Codex P1 修:用严格 regex 不然 '---123' 会被 .lstrip('-').isdigit() 判合法
+    # 但 int('---123') 炸 → 启动时 config.py 爆
     if "unreplied_alert_group_id" in form:
         _urg = (form.get("unreplied_alert_group_id") or "").strip()
-        if _urg and not _urg.lstrip("-").isdigit():
-            return jsonify({"ok": False, "msg": f"未回复预警群 ID 必须是整数(可以是负数),当前填的是: {_urg}"}), 400
+        if _urg and not re.fullmatch(r'-?\d+', _urg):
+            return jsonify({"ok": False, "msg": f"未回复预警群 ID 必须是整数(可以是负数,只允许一个 - 号),当前填的是: {_urg}"}), 400
         updates["UNREPLIED_ALERT_GROUP_ID"] = _urg
     if "remind_30min_text" in form:
         updates["REMIND_30MIN_TEXT"] = (form.get("remind_30min_text") or "").strip()
@@ -1509,6 +1517,20 @@ def api_account_notify_config(account_id):
 
     # PATCH
     data = request.get_json(silent=True) or {}
+
+    # v3.0.0 Codex P1:business_tg_id / owner_tg_id 必须是 纯数字 或 合法 username
+    # 防止带 `<`、`&`、空格的非法值通过 → 下游 _format_tg_mention 裸拼 HTML → TG parser 爆
+    # TG username 规则:5-32 字符,允许 a-zA-Z0-9_,非 _ 开头
+    TG_MENTION_RE = re.compile(r'^(\d+|@?[A-Za-z][A-Za-z0-9_]{4,31})$')
+    for key in ("business_tg_id", "owner_tg_id"):
+        if key in data:
+            val = (data.get(key) or "").strip()
+            if val and not TG_MENTION_RE.fullmatch(val):
+                return jsonify({
+                    "ok": False,
+                    "error": f"{key} 必须是 TG 数字 ID(纯数字)或合法 username(5-32 字符字母/数字/下划线,可带 @ 前缀)。当前:{val!r}",
+                }), 400
+
     db.update_account_two_stage(
         account_id,
         business_tg_id=data.get("business_tg_id"),

@@ -451,8 +451,10 @@ class AlertBot:
         if val.isdigit():
             safe_name = html.escape(display_name) if display_name else "请处理"
             return f'<a href="tg://user?id={val}">{safe_name}</a>'
-        # username 形式
-        return f"@{val}"
+        # username 形式 — v3.0.0 Codex P1:也 escape 防御 TG username 规范外的非法字符
+        # (API 层有 ^(\d+|@?[A-Za-z][A-Za-z0-9_]{4,31})$ 校验,理论上不会进到这;
+        #  但 DB 里可能残留旧数据 / 非 API 路径写入,防御式 escape 不坏)
+        return f"@{html.escape(val)}"
 
     async def _resolve_tg_entity(self, tg_id_or_username: str):
         """用监听号 Telethon client 解析 TG 用户,返回 (numeric_user_id, display_name)。
@@ -635,7 +637,17 @@ class AlertBot:
             )
             db.update_alert_bot_msg(alert_id, sent.message_id)
         except Exception as e:
-            logger.error("发送 stage2 预警失败 alert_id=%s: %s", alert_id, e)
+            # v3.0.0 Codex P1:stage2 send 失败 → 回滚 stage=2 → stage=1,
+            # 让 _no_reply_stage2_loop 下轮重新扫到重试。不回滚会永久丢升级
+            # (stage2 loop 只扫 stage=1,writeback loop 也只补 sheet 不管 push)。
+            logger.error("发送 stage2 预警失败 alert_id=%s: %s (回滚到 stage=1)", alert_id, e)
+            try:
+                if db.rollback_stage2_to_stage1(alert_id):
+                    logger.info("stage2 回滚成功: alert_id=%s,下轮 loop 重试", alert_id)
+                else:
+                    logger.warning("stage2 回滚未命中(可能状态已变): alert_id=%s", alert_id)
+            except Exception as re:
+                logger.error("stage2 回滚异常 alert_id=%s: %s", alert_id, re)
 
     # ===================== v3.0.0 两段式结束 =====================
 
@@ -717,21 +729,35 @@ class AlertBot:
         ).fetchone()[0]
 
         def _status_breakdown(type_name):
+            """v3.0.0 Codex P2:把两段式预警新状态(violation_logged / cancelled / handled_by_reply)
+            并入现有三桶,不要漏算让 no_reply 总数失真。
+            - violation_logged(stage2 登记违规)= 业务视角「已通过审核」,并入 approved
+            - cancelled(stage2 取消)           = 业务视角「已拒绝」,并入 rejected
+            - handled_by_reply(商务已回复)      = 业务视角「已处理」,并入 approved
+            - silenced(开关关时静默)           = 独立桶,不进日报 bucket 但计入总数"""
             rows = conn.execute(
                 "SELECT status, COUNT(*) FROM alerts WHERE type=? AND created_at LIKE ? GROUP BY status",
                 (type_name, f"{yesterday}%")
             ).fetchall()
             bucket = {"approved": 0, "pending": 0, "rejected": 0}
+            total = 0
             for status, cnt in rows:
-                if status in bucket:
-                    bucket[status] = cnt
+                total += cnt
+                if status in ("approved", "violation_logged", "handled_by_reply"):
+                    bucket["approved"] += cnt
+                elif status in ("rejected", "cancelled"):
+                    bucket["rejected"] += cnt
+                elif status == "pending":
+                    bucket["pending"] += cnt
+                # silenced 不进 bucket,但进 total
+            bucket["_total"] = total
             return bucket
 
         no_reply_detail = _status_breakdown("no_reply")
-        no_reply = sum(no_reply_detail.values())
+        no_reply = no_reply_detail.pop("_total")
 
         delete_detail = _status_breakdown("deleted")
-        deleted = sum(delete_detail.values())
+        deleted = delete_detail.pop("_total")
 
         keyword_count = conn.execute(
             "SELECT COUNT(*) FROM alerts WHERE type='keyword' AND created_at LIKE ?",
