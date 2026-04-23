@@ -965,6 +965,17 @@
             {% else %}
               <span class="tag tag-active">● Online</span>
             {% endif %}
+            {# v3.0.0(ADR-0015):两段式预警账号级配置按钮,条件渲染(flag 关时不出)。
+               data-* 属性 + addEventListener 而非 onclick,避免嵌 JSON 双引号冲突 #}
+            {% if two_stage_no_reply_enabled and s.id %}
+            <button class="btn-remove two-stage-config-btn"
+                    data-account-id="{{ s.id }}"
+                    data-account-name="{{ s.name or s.phone }}"
+                    style="color:#7ec9ff;border-color:rgba(126,201,255,0.3);"
+                    title="配置两段式未回复预警:商务人员 TG / 负责人 TG(文案统一在设置页配)">
+              配置两段式
+            </button>
+            {% endif %}
             <button class="btn-remove" onclick="removeAccount('{{ s.phone }}')">移除</button>
           </div>
         </div>
@@ -976,8 +987,121 @@
   </div>
 </div>
 
+{% if two_stage_no_reply_enabled %}
+<!-- v3.0.0(ADR-0015):两段式预警账号级配置 modal -->
+<div id="notifyConfigModal" style="display:none;position:fixed;z-index:9999;left:0;top:0;width:100%;height:100%;background:rgba(4,13,22,0.85);">
+  <div style="position:relative;background:#0d1922;border:1px solid rgba(126,201,255,0.3);border-radius:12px;width:560px;max-width:92%;margin:6% auto;padding:28px;box-shadow:0 0 40px rgba(126,201,255,0.2);">
+    <h3 style="color:#7ec9ff;margin:0 0 6px 0;font-size:15px;letter-spacing:1px;">两段式未回复预警配置</h3>
+    <div id="ncAccountName" style="color:#5a7c9a;font-size:12px;margin-bottom:20px;"></div>
+
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div>
+        <label style="display:block;color:#a5c4e0;font-size:11px;letter-spacing:1px;margin-bottom:6px;">商务人员 TG ID / 用户名 <span style="color:#5a7c9a;">(30 分钟预警会 @ 他)</span></label>
+        <input type="text" id="nc_business_tg_id"
+               placeholder="例 @xiaofan 或 123456789,留空则不 at 任何人"
+               style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:monospace;font-size:12px;box-sizing:border-box;">
+      </div>
+      <div>
+        <label style="display:block;color:#a5c4e0;font-size:11px;letter-spacing:1px;margin-bottom:6px;">负责人 TG ID / 用户名 <span style="color:#5a7c9a;">(40 分钟仍未处理会 @ 他)</span></label>
+        <input type="text" id="nc_owner_tg_id"
+               placeholder="例 @manager 或 987654321,留空则不 at 任何人"
+               style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:monospace;font-size:12px;box-sizing:border-box;">
+      </div>
+      <div style="background:rgba(126,201,255,0.06);border:1px dashed rgba(126,201,255,0.25);border-radius:6px;padding:10px 12px;font-size:11px;color:#7c9ab5;line-height:1.5;">
+        💡 <b>30 / 40 分钟提醒文案</b>统一在 <a href="/settings" style="color:#7ec9ff;" target="_blank">系统设置</a> 里设置,所有账号共用一套,不用每个号填一遍。
+      </div>
+    </div>
+
+    <div id="ncMsg" style="min-height:18px;margin-top:14px;font-size:11px;"></div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;">
+      <button onclick="closeNotifyConfig()"
+              style="padding:8px 20px;background:transparent;border:1px solid rgba(126,201,255,0.3);border-radius:6px;color:#5a7c9a;cursor:pointer;font-family:inherit;letter-spacing:1px;">取消</button>
+      <button onclick="saveNotifyConfig()"
+              style="padding:8px 20px;background:rgba(126,201,255,0.15);border:1px solid rgba(126,201,255,0.5);border-radius:6px;color:#7ec9ff;cursor:pointer;font-family:inherit;letter-spacing:1px;">保存</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <script>
 let currentPhone = '';
+
+{% if two_stage_no_reply_enabled %}
+// v3.0.0(ADR-0015):两段式预警账号级配置 modal 交互
+let ncAccountId = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.two-stage-config-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = parseInt(btn.dataset.accountId, 10);
+      const name = btn.dataset.accountName || '';
+      openNotifyConfig(id, name);
+    });
+  });
+});
+
+async function openNotifyConfig(accountId, accountName) {
+  ncAccountId = accountId;
+  document.getElementById('ncAccountName').textContent = accountName + ' (account_id=' + accountId + ')';
+  document.getElementById('ncMsg').textContent = '加载中...';
+  document.getElementById('ncMsg').style.color = '#5a7c9a';
+  ['nc_business_tg_id', 'nc_owner_tg_id'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('notifyConfigModal').style.display = 'block';
+
+  try {
+    const r = await fetch('/api/accounts/' + accountId + '/notify-config');
+    const j = await r.json();
+    if (j.ok) {
+      document.getElementById('nc_business_tg_id').value = j.business_tg_id || '';
+      document.getElementById('nc_owner_tg_id').value = j.owner_tg_id || '';
+      document.getElementById('ncMsg').textContent = '';
+    } else {
+      document.getElementById('ncMsg').textContent = '✗ ' + (j.error || '加载失败');
+      document.getElementById('ncMsg').style.color = '#f56666';
+    }
+  } catch (e) {
+    document.getElementById('ncMsg').textContent = '✗ 网络错误: ' + e.message;
+    document.getElementById('ncMsg').style.color = '#f56666';
+  }
+}
+
+function closeNotifyConfig() {
+  document.getElementById('notifyConfigModal').style.display = 'none';
+  ncAccountId = null;
+}
+
+async function saveNotifyConfig() {
+  if (!ncAccountId) return;
+  const body = {
+    business_tg_id: document.getElementById('nc_business_tg_id').value,
+    owner_tg_id:    document.getElementById('nc_owner_tg_id').value,
+  };
+  document.getElementById('ncMsg').textContent = '保存中...';
+  document.getElementById('ncMsg').style.color = '#5a7c9a';
+  try {
+    const r = await fetch('/api/accounts/' + ncAccountId + '/notify-config', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      document.getElementById('ncMsg').textContent = '✓ 已保存';
+      document.getElementById('ncMsg').style.color = '#4fae4f';
+      setTimeout(closeNotifyConfig, 800);
+    } else {
+      document.getElementById('ncMsg').textContent = '✗ ' + (j.error || '保存失败');
+      document.getElementById('ncMsg').style.color = '#f56666';
+    }
+  } catch (e) {
+    document.getElementById('ncMsg').textContent = '✗ 网络错误: ' + e.message;
+    document.getElementById('ncMsg').style.color = '#f56666';
+  }
+}
+{% endif %}
 
 function showStep(step) {
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
