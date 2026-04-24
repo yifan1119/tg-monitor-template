@@ -674,13 +674,16 @@ class AlertBot:
         """发送删除预警（每个广告主每天只推一次)
 
         v2.10.23:同 send_no_reply_alert 的逻辑 — 静默走 silenced,失败留 pending 下次重试。
+        v3.0.5 客户反馈: 跟 stage2 一致的 @负责人 + 登记违规/取消 格式 (数据驱动):
+          - 账号配了 owner_tg_id → @负责人 + 登记违规/取消 (HTML mode)
+          - 账号没配 → 走老通过/拒绝 按钮路径,完全向后兼容
         """
         if not self.bot or not config.ALERT_GROUP_ID:
             return
         if db.has_alert_today("deleted", peer["id"]):
             return
 
-        account = db.get_conn().execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+        account = db.get_account_by_id(account_id)
         if not account:
             return
 
@@ -706,18 +709,36 @@ class AlertBot:
             message_text=message_text,
         )
 
+        # v3.0.5: 有配 owner_tg_id 走 @负责人 + 登记违规/取消 (跟 stage2 一致)
+        owner_tg = account["owner_tg_id"] if "owner_tg_id" in account.keys() else ""
+        owner_mention = (
+            await self._build_tg_mention(owner_tg, fallback_name="负责人") if owner_tg else ""
+        )
+        custom_text = getattr(config, "REMIND_DELETE_TEXT", "") or ""
+
         msg = templates.delete_alert(
             company=account["company"],
             operator=account["operator"],
             account_name=account["name"],
             peer_name=peer["name"],
             message_text=message_text,
+            owner_mention=owner_mention,
+            custom_text=custom_text,
         )
         try:
-            sent = await self.bot.send_message(
-                config.ALERT_GROUP_ID, msg,
-                reply_markup=self._make_keyboard(alert_id),
-            )
+            if owner_mention:
+                # 新格式: HTML + stage2 风格按钮(登记违规/取消,复用 on_stage2_action handler)
+                sent = await self.bot.send_message(
+                    config.ALERT_GROUP_ID, msg,
+                    parse_mode="HTML",
+                    reply_markup=self._make_keyboard_stage2(alert_id),
+                )
+            else:
+                # 老格式: 向后兼容没配 owner_tg_id 的账号,保持通过/拒绝 按钮
+                sent = await self.bot.send_message(
+                    config.ALERT_GROUP_ID, msg,
+                    reply_markup=self._make_keyboard(alert_id),
+                )
             db.update_alert_bot_msg(alert_id, sent.message_id)
         except Exception as e:
             logger.error("发送删除预警失败 alert_id=%s: %s (下次会重试)", alert_id, e)

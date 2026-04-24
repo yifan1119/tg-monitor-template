@@ -30,7 +30,7 @@ def reload_if_env_changed():
     global CALLBACK_AUTH_USER_IDS
     # v3.0.0:两段式预警 + TG 设备身份 都支持热 reload
     global TWO_STAGE_NO_REPLY_ENABLED, NO_REPLY_STAGE2_AFTER_MIN, UNREPLIED_ALERT_GROUP_ID
-    global REMIND_30MIN_TEXT, REMIND_40MIN_TEXT
+    global REMIND_30MIN_TEXT, REMIND_40MIN_TEXT, REMIND_DELETE_TEXT
     global TG_DEVICE_MODEL, TG_SYSTEM_VERSION, TG_APP_VERSION, TG_LANG_CODE, TG_SYSTEM_LANG
     try:
         m = _ENV_PATH.stat().st_mtime
@@ -89,6 +89,8 @@ def reload_if_env_changed():
         UNREPLIED_ALERT_GROUP_ID = 0
     REMIND_30MIN_TEXT = os.environ.get("REMIND_30MIN_TEXT", "").strip()
     REMIND_40MIN_TEXT = os.environ.get("REMIND_40MIN_TEXT", "").strip()
+    # v3.0.5: 删除消息预警的 @ 负责人提示文案,空=默认「请核实并做审批」
+    REMIND_DELETE_TEXT = os.environ.get("REMIND_DELETE_TEXT", "").strip()
     # v3.0.0:TG 设备身份也支持热 reload(虽然 TG server 缓存会有延迟,但至少本进程能立刻读新值)
     TG_DEVICE_MODEL   = os.environ.get("TG_DEVICE_MODEL",   "shencha")
     TG_SYSTEM_VERSION = os.environ.get("TG_SYSTEM_VERSION", "1.0")
@@ -323,6 +325,8 @@ except (ValueError, Exception):
 # 留空即用模板内置默认文案(「请尽快回复」/「已超过 40 分钟未回复,请处理」)。
 REMIND_30MIN_TEXT = os.environ.get("REMIND_30MIN_TEXT", "").strip()
 REMIND_40MIN_TEXT = os.environ.get("REMIND_40MIN_TEXT", "").strip()
+# v3.0.5: 删除消息预警 @ 负责人的提示文案,空=默认「请核实并做审批」
+REMIND_DELETE_TEXT = os.environ.get("REMIND_DELETE_TEXT", "").strip()
 
 # ============================================================
 # v3.0.0:TG 设备身份伪装(给被监听号看到的 session 显示)
