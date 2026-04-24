@@ -646,6 +646,11 @@
           <div class="kv-row"><span class="kv-k">最近写入</span><span class="kv-v" id="sh-last">—</span></div>
           <div class="kv-row"><span class="kv-k">Sheet ID</span><span class="kv-v dim" id="sh-id">—</span></div>
         </div>
+        {# v3.0.6: 诊断条 — 堵了才显示,给客户一眼看懂原因 + 修复按钮 #}
+        <div id="sh-diag" style="display:none;margin-top:12px;padding:10px 12px;border-radius:8px;">
+          <div id="sh-diag-msg" style="font-size:13px;line-height:1.6;"></div>
+          <div id="sh-diag-actions" style="margin-top:8px;"></div>
+        </div>
       </div>
     </div>
 
@@ -661,6 +666,40 @@
           <div class="kv-row"><span class="kv-k">预警群</span><span class="kv-v dim" id="bot-group">—</span></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  {# v3.0.6: 后台日志查看器 — 免 SSH 看容器 log #}
+  <div style="margin-top:24px;">
+    <div class="section-title" style="display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none;" onclick="toggleLogPanel()">
+      <span id="log-toggle-icon">▶</span>
+      <span>日志查看</span>
+      <span style="font-size:11px;color:#7c8a9a;font-weight:400;">(点击展开)</span>
+    </div>
+    <div id="log-panel" class="card" style="display:none;margin-top:8px;">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+        <label style="font-size:12px;color:#7c8a9a;">容器:</label>
+        <select id="log-container" style="padding:4px 8px;background:#1a2233;color:#e1e8f0;border:1px solid #2d3a4f;border-radius:4px;font-size:12px;">
+          <option>(加载中...)</option>
+        </select>
+        <label style="font-size:12px;color:#7c8a9a;">行数:</label>
+        <select id="log-tail" style="padding:4px 8px;background:#1a2233;color:#e1e8f0;border:1px solid #2d3a4f;border-radius:4px;font-size:12px;">
+          <option value="100">100</option>
+          <option value="200" selected>200</option>
+          <option value="500">500</option>
+          <option value="1000">1000</option>
+          <option value="2000">2000</option>
+        </select>
+        <label style="font-size:12px;color:#7c8a9a;">过滤:</label>
+        <input type="text" id="log-grep" placeholder="关键词(可选)"
+               style="padding:4px 8px;background:#1a2233;color:#e1e8f0;border:1px solid #2d3a4f;border-radius:4px;font-size:12px;width:160px;"
+               onkeydown="if(event.key==='Enter') loadLogs()">
+        <button onclick="loadLogs()" style="padding:4px 12px;background:#3b82f6;color:white;border:none;border-radius:4px;font-size:12px;cursor:pointer;">刷新</button>
+        <label style="font-size:12px;color:#7c8a9a;display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" id="log-auto" onchange="toggleAutoRefresh()"> 自动刷新 (5s)
+        </label>
+      </div>
+      <pre id="log-output" style="background:#0a0e17;color:#b8c5d6;padding:12px;border-radius:6px;font-size:11px;line-height:1.5;max-height:480px;overflow:auto;margin:0;white-space:pre-wrap;word-break:break-all;">点击「刷新」加载日志</pre>
     </div>
   </div>
 
@@ -976,6 +1015,35 @@ function renderSheets(s) {
   setText('sh-pending', s.pending > 0 ? s.pending + ' 条' : '0 (全部已写)');
   setText('sh-last', s.last_write_human || '—');
   setText('sh-id', '···' + (s.sheet_id || '—'));
+
+  // v3.0.6: 诊断条 — 只在异常时显示
+  const diag = el('sh-diag');
+  const diagMsg = el('sh-diag-msg');
+  const diagActions = el('sh-diag-actions');
+  if (!diag) return;
+  const status = s.status || 'ok';
+  if (status === 'ok' || !s.status_msg || s.status_msg === '正常') {
+    diag.style.display = 'none';
+    return;
+  }
+  diag.style.display = 'block';
+  if (status === 'error') {
+    diag.style.background = 'rgba(240,82,102,0.14)';
+    diag.style.border = '1px solid rgba(240,82,102,0.4)';
+  } else {
+    diag.style.background = 'rgba(251,191,36,0.12)';
+    diag.style.border = '1px solid rgba(251,191,36,0.35)';
+  }
+  diagMsg.textContent = s.status_msg;
+  diagActions.innerHTML = '';
+  if (s.action === 'reauth') {
+    diagActions.innerHTML = '<a href="/settings" style="display:inline-block;padding:6px 12px;background:#3b82f6;color:white;border-radius:6px;text-decoration:none;font-size:12px;">去设置页重新授权 →</a>';
+  } else if (s.action === 'check_sheet') {
+    const sid = (s.sheet_id && s.sheet_id !== '—') ? ('···' + s.sheet_id) : '设置页';
+    diagActions.innerHTML = '<a href="/settings" style="display:inline-block;padding:6px 12px;background:#3b82f6;color:white;border-radius:6px;text-decoration:none;font-size:12px;">检查 Sheet (' + sid + ') →</a>';
+  } else if (s.action === 'wait') {
+    diagActions.innerHTML = '<span style="color:#7c8a9a;font-size:12px;">系统自动退避重试,一般 15-30 分钟内自愈</span>';
+  }
 }
 
 function renderBot(b) {
@@ -985,6 +1053,83 @@ function renderBot(b) {
   setText('bot-last', b.last_push_human || '—');
   setText('bot-token', '···' + (b.bot_token_tail || '—'));
   setText('bot-group', b.alert_group_id || '—');
+}
+
+// ============ v3.0.6: 后台日志查看器 ============
+let logAutoRefreshTimer = null;
+let logContainersLoaded = false;
+
+function toggleLogPanel() {
+  const panel = el('log-panel');
+  const icon = el('log-toggle-icon');
+  if (!panel) return;
+  const opening = panel.style.display === 'none';
+  panel.style.display = opening ? 'block' : 'none';
+  if (icon) icon.textContent = opening ? '▼' : '▶';
+  if (opening && !logContainersLoaded) loadLogContainers();
+}
+
+async function loadLogContainers() {
+  try {
+    const r = await fetch('/api/diag/containers', {credentials: 'same-origin'});
+    const data = await r.json();
+    const sel = el('log-container');
+    if (!sel) return;
+    sel.innerHTML = '';
+    const list = data.containers || [];
+    if (list.length === 0) {
+      sel.innerHTML = '<option>(无可用容器)</option>';
+      return;
+    }
+    for (const c of list) {
+      const opt = document.createElement('option');
+      opt.value = c.name;
+      opt.textContent = c.name + ' (' + c.status + ')';
+      sel.appendChild(opt);
+    }
+    logContainersLoaded = true;
+  } catch (e) {
+    console.error('loadLogContainers error', e);
+  }
+}
+
+async function loadLogs() {
+  const container = el('log-container').value;
+  const tail = el('log-tail').value;
+  const grep = el('log-grep').value.trim();
+  const output = el('log-output');
+  if (!container || container.startsWith('(')) {
+    output.textContent = '请先选一个容器';
+    return;
+  }
+  output.textContent = '加载中...';
+  try {
+    const params = new URLSearchParams({c: container, tail: tail});
+    if (grep) params.set('grep', grep);
+    const r = await fetch('/api/diag/logs?' + params.toString(), {credentials: 'same-origin'});
+    const data = await r.json();
+    if (data.error) {
+      output.textContent = '❌ ' + data.error;
+      return;
+    }
+    output.textContent = data.logs || '(空)';
+    // 滚到底
+    output.scrollTop = output.scrollHeight;
+  } catch (e) {
+    output.textContent = '❌ 请求失败: ' + e.message;
+  }
+}
+
+function toggleAutoRefresh() {
+  const checked = el('log-auto').checked;
+  if (logAutoRefreshTimer) {
+    clearInterval(logAutoRefreshTimer);
+    logAutoRefreshTimer = null;
+  }
+  if (checked) {
+    loadLogs();  // 立刻刷一次
+    logAutoRefreshTimer = setInterval(loadLogs, 5000);
+  }
 }
 
 async function poll() {

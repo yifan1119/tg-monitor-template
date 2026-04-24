@@ -756,6 +756,16 @@
                   style="width:100%;box-sizing:border-box;">{{ d.remind_40min_text }}</textarea>
         <div class="hint">所有账号 40 分钟升级预警都用这段文案,末尾会自动 @ 对应账号的负责人。</div>
       </div>
+      <div class="field">
+        <label>删除消息提醒文案 <span style="color:#7c8a9a;font-weight:400;">(选填,留空用内置默认「请核实并做审批」)</span></label>
+        <textarea name="remind_delete_text" id="remind_delete_text" rows="2"
+                  placeholder="例:有消息被删除,请立刻核实是否违规"
+                  style="width:100%;box-sizing:border-box;">{{ d.remind_delete_text }}</textarea>
+        <div class="hint">
+          所有账号「删除消息预警」都用这段文案,末尾会自动 @ 对应账号的负责人。
+          <br>⚠ 要先在「账号管理」给账号配好<b>负责人 TG ID</b>,才会走 @负责人 + 登记违规/取消 格式。
+        </div>
+      </div>
     </div>
 
     <div class="section">

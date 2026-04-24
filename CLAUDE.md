@@ -170,6 +170,7 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 | v3.0.3 | `update.sh` 升级时自动 Caddy 体检 + 自愈(只动本部门相关的 Caddy,保护 VPS 上其他项目) — 承接 v3.0.2,把故障检测从"客户自己跑诊断工具"升到"升级自动自愈" | [0017](docs/adr/0017-v3.0.2-caddyfile-inode-bind-mount.md) |
 | v3.0.4 | 两段式预警 @ 通知修复:`@username` 格式不再强转 inline mention,改用 TG 原生 @ 解析(bot 的 inline mention 受反垃圾规则限制,没 /start 过 bot 的人收不到通知;用 `@text` 文本能稳稳触发) — `bot.py:_build_tg_mention` 优先级调整 | [0018](docs/adr/0018-v3.0.4-tg-mention-notification-fix.md) |
 | v3.0.5 | 删除消息预警跟 stage2 审批体验对齐:账号配了 `owner_tg_id` → @负责人 + 登记违规/取消按钮 (数据驱动,没配的账号保持老通过/拒绝路径向后兼容);新增 `REMIND_DELETE_TEXT` 配置 | [0019](docs/adr/0019-v3.0.5-delete-alert-owner-mention.md) |
+| v3.0.6 | 驾驶舱三件套运维自助化:(1) 后台日志查看面板(容器白名单防越权 + 注入防御正则)(2) Sheet 写入堵塞自动诊断(扫 tg-monitor log 识别 OAuth 失效/429/无权限 + 修复按钮) (3) 补齐 v3.0.5 的 `REMIND_DELETE_TEXT` UI 输入框 | [0020](docs/adr/0020-v3.0.6-dashboard-self-service-ops.md) |
 
 ## 发布流程
 
@@ -188,7 +189,8 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 
 ## 当前状态(2026-04-23)
 
-- main:`v3.0.5`(已发布 — 删除消息预警对齐 stage2 审批体验:@负责人 + 登记违规/取消,数据驱动按 `owner_tg_id` 触发)
+- main:`v3.0.6`(已发布 — 驾驶舱三件套运维自助化:日志面板 + Sheet 堵塞诊断 + REMIND_DELETE_TEXT UI)
+- 之前:`v3.0.5`(删除消息预警对齐 stage2 审批体验)
 - 之前:`v3.0.4`(两段式预警 @ 通知修复:`@username` 走 TG 原生解析)
 - 之前:`v3.0.3`(update.sh 升级时自动 Caddy 体检 + 自愈)
 - 之前:`v3.0.2`(Caddy inode 自愈 + caddy-doctor.sh 自查工具,shared caddy 多部门 HTTPS 稳定)
