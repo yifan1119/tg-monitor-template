@@ -168,6 +168,7 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 | v3.0.0 | 两段式预警推送 + callback + Telethon 真名解析 + 自动升级 loop(事件驱动 + poll 兜底) | [0016](docs/adr/0016-v3.0.0-two-stage-alert-push-callback.md) |
 | v3.0.2 | Caddyfile 热更新的 Docker file bind mount inode 断裂 — enable_https.sh 加 inode 自愈 + fail-loud + 新增 `scripts/caddy-doctor.sh` 自查工具(shared caddy 模式一台 VPS 部多部门 HTTPS 终于稳定)| [0017](docs/adr/0017-v3.0.2-caddyfile-inode-bind-mount.md) |
 | v3.0.3 | `update.sh` 升级时自动 Caddy 体检 + 自愈(只动本部门相关的 Caddy,保护 VPS 上其他项目) — 承接 v3.0.2,把故障检测从"客户自己跑诊断工具"升到"升级自动自愈" | [0017](docs/adr/0017-v3.0.2-caddyfile-inode-bind-mount.md) |
+| v3.0.4 | 两段式预警 @ 通知修复:`@username` 格式不再强转 inline mention,改用 TG 原生 @ 解析(bot 的 inline mention 受反垃圾规则限制,没 /start 过 bot 的人收不到通知;用 `@text` 文本能稳稳触发) — `bot.py:_build_tg_mention` 优先级调整 | [0018](docs/adr/0018-v3.0.4-tg-mention-notification-fix.md) |
 
 ## 发布流程
 
@@ -186,8 +187,9 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 
 ## 当前状态(2026-04-23)
 
-- main:`v3.0.3`(已发布 — update.sh 升级时自动 Caddy 体检 + 自愈,客户零操作)
-- 之前:`v3.0.2`(已发布 — Caddy inode 自愈 + caddy-doctor.sh 自查工具,shared caddy 多部门 HTTPS 稳定)
+- main:`v3.0.4`(已发布 — 两段式预警 @ 通知修复:`@username` 走 TG 原生解析,bot inline mention 的反垃圾限制绕开)
+- 之前:`v3.0.3`(update.sh 升级时自动 Caddy 体检 + 自愈)
+- 之前:`v3.0.2`(Caddy inode 自愈 + caddy-doctor.sh 自查工具,shared caddy 多部门 HTTPS 稳定)
 - 之前:`v3.0.1`(两段式预警数据驱动 + 驾驶舱版本号修正 + 硬规定 #8 Docker cp 列表)
 - 之前:`v2.10.25`(已发布 — 媒体存储切换 `MEDIA_STORAGE_MODE=drive|tg_archive|off`,默认 drive)
 - **feature/v3.0.0 → `integration/v3.0.0-on-main` 分支集成完成**:两段式未回复预警(30min @ 商务 + 40min @ 负责人 + 违规/取消按钮 + Telethon 真名解析 + 自动升级 loop + TG 装置伪装)。从 `origin/main@32e5029` 起,已完成 7 个核心代码 commit(database / config / templates / bot / listener / tasks / main)+ 文档整合 ADR-0015 / ADR-0016
