@@ -610,7 +610,9 @@ def alerts_24h_buckets():
 # ============ Sheet / Bot 健康 ============
 
 def sheets_health():
-    """从 messages 表反推 sheet 写入状态"""
+    """从 messages 表反推 sheet 写入状态。
+    v3.0.6: 增加具体故障原因识别(OAuth 失效 / 429 限流 / Sheet 无权限),
+    便于客户在驾驶舱直接看懂卡在哪一步,不用 SSH 查 log。"""
     def _q():
         today = _today_bj()
         conn = db.get_conn()
@@ -624,17 +626,143 @@ def sheets_health():
         last = conn.execute(
             "SELECT MAX(timestamp) AS t FROM messages WHERE sheet_written=1"
         ).fetchone()["t"]
+        # v3.0.6: 诊断具体原因
+        status, status_msg, action = _diagnose_sheets_stuck(pending, last)
         return {
             "today_writes": today_writes,
             "pending": pending,
             "last_write": last,
             "last_write_human": _human_age(last),
             "sheet_id": (config.SHEET_ID or "")[-8:] if config.SHEET_ID else "—",
+            "status": status,          # "ok" / "warning" / "error"
+            "status_msg": status_msg,  # 给客户看的白话说明
+            "action": action,          # None / "reauth" / "wait" / "check_sheet"
         }
     return _safe(_q, {
         "today_writes": 0, "pending": 0,
         "last_write": None, "last_write_human": "—", "sheet_id": "—",
+        "status": "unknown", "status_msg": "—", "action": None,
     })
+
+
+def _diagnose_sheets_stuck(pending, last_write_ts):
+    """v3.0.6: 判断 Sheets 是否堵塞 + 为什么。
+    策略: pending 过多 + 上次写入超过 N 分钟前 → 扫最近 tg-monitor log 找错误模式。
+    无堵塞 → ("ok", "正常", None),不扫 log 省开销。"""
+    from datetime import datetime as _dt
+    # 阈值: 积压超 50 条 + 最近一次写入超 15 分钟前 才算"堵"
+    if pending < 50:
+        return "ok", "正常", None
+    try:
+        last_dt = _dt.strptime(last_write_ts, "%Y-%m-%d %H:%M:%S") if last_write_ts else None
+    except Exception:
+        last_dt = None
+    if last_dt:
+        now = _dt.now()
+        age_min = (now - last_dt).total_seconds() / 60
+        if age_min < 15:
+            # 积压多但还在写,可能只是慢不是卡
+            return "warning", f"积压 {pending} 条,但还在写入(最近 {int(age_min)} 分钟前)", None
+
+    # 确认堵塞 → 扫 log
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        container_name = f"tg-monitor-{config.COMPANY_NAME or 'default'}"
+        c = client.containers.get(container_name)
+        # 只看最近 1 小时 log,避免拉太大
+        import time as _time
+        since = int(_time.time() - 3600)
+        log_bytes = c.logs(tail=300, since=since)
+        log_text = log_bytes.decode("utf-8", errors="replace").lower()
+
+        # OAuth 失效(最常见)
+        if any(k in log_text for k in [
+            "invalid_grant", "token has been expired", "refreshError", "refresh_error",
+            "credentials do not contain", "oauth.*revoked", "401",
+        ]):
+            return "error", f"❌ Google 授权失效 — 积压 {pending} 条,写不进 Sheet", "reauth"
+
+        # 429 限流
+        if any(k in log_text for k in [
+            "429", "rate_limit", "quota exceeded", "user_rate_limit_exceeded", "rate limit",
+        ]):
+            return "warning", f"⏳ 触发 Google 配额限流,正在自愈(最长 30 分钟) — 积压 {pending} 条", "wait"
+
+        # Sheet 不存在 / 无权限
+        if any(k in log_text for k in [
+            "not found", "permission denied", "does not have access", "404", "403",
+        ]):
+            return "error", f"❌ Sheet 不存在或权限被改 — 积压 {pending} 条", "check_sheet"
+
+        # 其他错误 — 通用
+        return "warning", f"⚠ 积压 {pending} 条 >15 分钟没写入,原因待查", None
+    except Exception:
+        return "warning", f"⚠ 积压 {pending} 条,无法自动诊断(容器不可访问)", None
+
+
+def container_logs(container_name, tail=200, grep=""):
+    """v3.0.6: 给后台"日志查看"面板用的 — 读容器 log,可选 grep 过滤。
+    安全约束: 只允许读 tg-*-<本部门> 和 tg-caddy-* 容器,不越权看其他项目。"""
+    import re as _re
+    # 白名单校验先于 docker 导入,保证越权请求永远被拦,跟 docker 模块可用性无关
+    company = config.COMPANY_NAME or "default"
+    allowed_exact = {
+        f"tg-monitor-{company}",
+        f"tg-web-{company}",
+        f"tg-caddy-{company}",
+    }
+    if container_name not in allowed_exact and not _re.fullmatch(r"tg-caddy-[A-Za-z0-9_\-]+", container_name):
+        return {
+            "logs": "",
+            "error": f"不允许查看容器 {container_name}(只能看本部门的 tg-monitor/tg-web/tg-caddy)",
+            "container": container_name,
+        }
+
+    def _q():
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        try:
+            c = client.containers.get(container_name)
+        except Exception:
+            return {"logs": "", "error": f"容器 {container_name} 不存在或未运行", "container": container_name}
+        # 防爆: tail 夹到 10-2000
+        tail_n = max(10, min(int(tail or 200), 2000))
+        try:
+            log_bytes = c.logs(tail=tail_n, timestamps=True)
+            text = log_bytes.decode("utf-8", errors="replace")
+        except Exception as e:
+            return {"logs": "", "error": f"读 log 失败: {e}", "container": container_name}
+        if grep:
+            kw = grep.lower()
+            lines = [l for l in text.split("\n") if kw in l.lower()]
+            text = "\n".join(lines) if lines else f"(无匹配 '{grep}' 的日志行)"
+        return {"logs": text, "error": None, "container": container_name}
+    return _safe(_q, {"logs": "", "error": "内部错误", "container": container_name})
+
+
+def list_containers():
+    """v3.0.6: 给前端 dropdown 用 — 列本部门相关容器。"""
+    def _q():
+        import docker as docker_sdk
+        import re as _re
+        company = config.COMPANY_NAME or "default"
+        client = docker_sdk.from_env()
+        out = []
+        for c in client.containers.list(all=True):
+            name = c.name
+            if name in (f"tg-monitor-{company}", f"tg-web-{company}") or \
+               _re.fullmatch(r"tg-caddy-[A-Za-z0-9_\-]+", name):
+                out.append({"name": name, "status": c.status})
+        # 排序: monitor → web → caddy
+        def _sort_key(x):
+            n = x["name"]
+            if "tg-monitor-" in n: return 0
+            if "tg-web-" in n: return 1
+            return 2
+        out.sort(key=_sort_key)
+        return out
+    return _safe(_q, [])
 
 
 def bot_health():

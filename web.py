@@ -831,6 +831,7 @@ def setup_page():
         "no_reply_stage2_after_min": env.get("NO_REPLY_STAGE2_AFTER_MIN", "10"),
         "remind_30min_text": env.get("REMIND_30MIN_TEXT", ""),
         "remind_40min_text": env.get("REMIND_40MIN_TEXT", ""),
+        "remind_delete_text": env.get("REMIND_DELETE_TEXT", ""),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -870,6 +871,7 @@ def settings_page():
         "no_reply_stage2_after_min": env.get("NO_REPLY_STAGE2_AFTER_MIN", "10"),
         "remind_30min_text": env.get("REMIND_30MIN_TEXT", ""),
         "remind_40min_text": env.get("REMIND_40MIN_TEXT", ""),
+        "remind_delete_text": env.get("REMIND_DELETE_TEXT", ""),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -1453,6 +1455,9 @@ def _save_settings(is_first):
         updates["REMIND_30MIN_TEXT"] = (form.get("remind_30min_text") or "").strip()
     if "remind_40min_text" in form:
         updates["REMIND_40MIN_TEXT"] = (form.get("remind_40min_text") or "").strip()
+    # v3.0.6: 删除消息预警提示文案(全域)
+    if "remind_delete_text" in form:
+        updates["REMIND_DELETE_TEXT"] = (form.get("remind_delete_text") or "").strip()
 
     write_env(updates)
 
@@ -2499,6 +2504,34 @@ def dashboard_snapshot():
     except Exception as e:
         logger.error("dashboard snapshot 失败: %s", e)
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/diag/logs", methods=["GET"])
+@login_required
+def api_diag_logs():
+    """v3.0.6: 后台日志查看面板接口 — 免 SSH 看容器 log。
+    白名单限制只能读本部门相关容器(dashboard_api.container_logs 里校验)。"""
+    try:
+        import dashboard_api
+        container = request.args.get("c", f"tg-monitor-{config.COMPANY_NAME or 'default'}")
+        tail = int(request.args.get("tail", 200))
+        grep = (request.args.get("grep", "") or "").strip()
+        return jsonify(dashboard_api.container_logs(container, tail, grep))
+    except Exception as e:
+        logger.error("api_diag_logs 失败: %s", e)
+        return jsonify({"logs": "", "error": str(e), "container": ""}), 500
+
+
+@app.route("/api/diag/containers", methods=["GET"])
+@login_required
+def api_diag_containers():
+    """v3.0.6: 列本部门相关容器(给前端 dropdown)。"""
+    try:
+        import dashboard_api
+        return jsonify({"containers": dashboard_api.list_containers()})
+    except Exception as e:
+        logger.error("api_diag_containers 失败: %s", e)
+        return jsonify({"containers": [], "error": str(e)}), 500
 
 
 if __name__ == "__main__":
