@@ -62,7 +62,29 @@ def no_reply_alert_stage2(company, operator, account_name, peer_name,
     return f"{base}\n\n{tail_text}"
 
 
-def delete_alert(company, operator, account_name, peer_name, message_text=""):
+def delete_alert(company, operator, account_name, peer_name, message_text="",
+                 owner_mention="", custom_text=""):
+    """v3.0.5 客户反馈: 跟 stage2 预警一致的审批体验 —
+    - 账号配了 owner_tg_id → 追加 @负责人 尾行 + 自定义文案,模板自动 html.escape
+    - 账号没配 → 退化成老格式,保持完全向后兼容
+
+    owner_mention 非空时才走 HTML 路径(调用方负责 parse_mode='HTML')。
+    """
+    if owner_mention:
+        e = _html.escape
+        text = (
+            f"【信息删除预警{config.COMPANY_DISPLAY}】\n\n"
+            f"中心/部门：{e(company)}\n"
+            f"{config.OPERATOR_LABEL}：{e(operator)}\n"
+            f"外事号：{e(account_name)}\n"
+            f"{config.PEER_ROLE_LABEL}：{e(peer_name)}"
+        )
+        if message_text:
+            text += f"\n已删除信息：{e(message_text)}"
+        tail_text = e(custom_text.strip()) if custom_text else "请核实并做审批"
+        return f"{text}\n\n{owner_mention} {tail_text}"
+
+    # 老路径 — 保持完全不变,兼容没配 owner_tg_id 的账号
     text = (
         f"【信息删除预警{config.COMPANY_DISPLAY}】\n\n"
         f"中心/部门：{company}\n"
