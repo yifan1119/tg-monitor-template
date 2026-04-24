@@ -488,21 +488,36 @@ class AlertBot:
     async def _build_tg_mention(self, tg_id_or_username: str, fallback_name: str = "") -> str:
         """构造 TG @ mention 字符串(parse_mode=HTML 发送)。
 
-        优先走 Telethon 解析: 拿到 numeric ID + 真实显示名 →
-          `<a href="tg://user?id=N">伊凡</a>` (最可靠,对方没 username 也能 @)
+        v3.0.4 优先级调整(客户反馈「人在群里但没收到通知」):
+          bot 用 `<a href="tg://user?id=N">...</a>` 的 inline mention 受 TG 反垃圾规则限制 —
+          被 @ 的人如果没 /start 过该 bot,TG 可能不触发通知,只把名字渲染成蓝色可点(看起来像
+          @ 但不 ping 人)。反而 `@username` 文本让 TG 自动识别成 native mention,稳稳触发通知。
 
-        退化路径(Telethon 查不到 / listener 未注入):
-          - 数字输入 → `<a href="tg://user?id=N">{fallback_name}</a>`
-          - username → `@username` (TG 不支持 username 形式的自定义显示名)
-          - 空 → ""
+        新规则:
+          1. 输入 `@username` (有字母的) → 直接 `@username` 文本,TG 自动解析 + 通知到人
+          2. 输入纯数字 UID → 走 Telethon 取真名 → inline mention
+                              (numeric 没 username 可用,只能走 inline)
+          3. 空值 → ""
+
+        这样客户只要配 `@xxx` 就一定收得到通知,不需要 TA 事先 /start 过 bot。
         """
         if not tg_id_or_username:
             return ""
-        uid, resolved = await self._resolve_tg_entity(tg_id_or_username)
+        raw = str(tg_id_or_username).strip()
+        val = raw.lstrip("@")
+        if not val:
+            return ""
+        # username 格式(非纯数字)→ 直接 @text 走 TG 原生 mention 解析(稳稳通知)
+        if not val.isdigit():
+            return f"@{html.escape(val)}"
+        # 纯数字 UID → Telethon 解析真名 + inline mention(没 username 可用,只能这样)
+        uid, resolved = await self._resolve_tg_entity(val)
         if uid:
             name = resolved or fallback_name or "请处理"
             return f'<a href="tg://user?id={uid}">{html.escape(name)}</a>'
-        return self._format_tg_mention(tg_id_or_username, display_name=fallback_name)
+        # Telethon 也解不到 → 保底 inline 套个默认名字,起码能点开 profile
+        safe_name = html.escape(fallback_name) if fallback_name else "请处理"
+        return f'<a href="tg://user?id={val}">{safe_name}</a>'
 
     def _make_keyboard_stage2(self, alert_id):
         """stage2 带「登记违规 / 取消」两按钮。"""
