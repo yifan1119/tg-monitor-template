@@ -5,7 +5,11 @@ services:
     restart: unless-stopped
     # 启动前把 host 代码同步到 /app,git pull 后 restart 即生效
     # (避免 Docker 镜像里的旧 COPY 跟 host 不同步导致诡异 bug)
-    command: sh -c "cp -rf /app/repo/*.py /app/ 2>/dev/null; python main.py"
+    # v3.0.8.1 (CLAUDE.md 硬规定 #8): 显式 cp 列表 — 把所有 host 改动文件都同步,
+    # 防止只 cp .py 漏掉 README/release_notes 导致 update_checker 推老文案。
+    # Codex P1 修: cp 失败不再静默 (改 echo CP_*_FAIL 到 docker logs), 操作员能立刻
+    # 在日志看到具体哪个文件 cp 错了。容器仍照常启动 (不阻塞), 让镜像 fallback 兜底。
+    command: sh -c "cp -rf /app/repo/*.py /app/ || echo CP_PY_FAIL; cp -rf /app/repo/release_notes.json /app/release_notes.json || echo CP_NOTES_FAIL; cp -rf /app/repo/README.md /app/README.md || echo CP_README_FAIL; python main.py"
     volumes:
       - ./sessions:/app/sessions
       - ./data:/app/data
@@ -25,7 +29,16 @@ services:
     container_name: tg-web-${COMPANY_NAME:-default}
     restart: unless-stopped
     # 启动前把 host 代码同步到 /app,git pull + restart 即生效(不用 rebuild)
-    command: sh -c "cp -rf /app/repo/*.py /app/repo/templates /app/ 2>/dev/null; python web.py"
+    # v3.0.8.1 真坑根治:
+    #   原 `cp -rf /app/repo/templates /app/` 是「目录复制」, 镜像里 /app/templates
+    #   已存在 → cp 把整个 templates 复制成嵌套 /app/templates/templates/dashboard.html,
+    #   Flask 还是读 /app/templates/dashboard.html (镜像旧版) → 升级后客户看不到新按钮。
+    #   现在改成 *.html 文件级 glob,确保新 templates 直接覆盖目录里的文件,不嵌套。
+    #   同时 cp README + release_notes 给 _app_version_string + 升级通知用。
+    # Codex P1 修: cp 失败不再静默 (改 echo CP_*_FAIL 到 docker logs), 操作员能立刻
+    # 在日志看到具体哪个文件 cp 错了。容器仍照常启动 (不阻塞), 让镜像 fallback 兜底,
+    # 避免 host bind mount 短暂 race 时容器无法启动。
+    command: sh -c "cp -rf /app/repo/*.py /app/ || echo CP_PY_FAIL; cp -rf /app/repo/templates/*.html /app/templates/ || echo CP_TEMPLATES_FAIL; cp -rf /app/repo/README.md /app/README.md || echo CP_README_FAIL; cp -rf /app/repo/release_notes.json /app/release_notes.json || echo CP_NOTES_FAIL; python web.py"
     ports:
       - "${WEB_PORT:-5001}:5001"
     volumes:

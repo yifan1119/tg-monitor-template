@@ -2,7 +2,8 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v3.0.8(2026-04-25) — 🚀 **Sheet 写入治本 + 卡死一键自助** — 写入用 `values.append` 替代 `update + col_values read`(quota 用量砍半 + 客户改表单不会被覆盖) + 全局令牌桶 50 req/min(不撞 Google 60/min/user 上限)+ 驾驶舱「立刻深度诊断」modal(后台 SQL 列出孤儿消息 / col_group=NULL 明细) + 「一键修复」按钮(`/api/diag/sheets-fix-stuck`) + 「立刻重启监听器」按钮(整合 v3.0.7.1) + 设置页 `SHEETS_FLUSH_INTERVAL` / `SHEETS_RATE_LIMIT_PER_MIN` 输入框 + 诊断关键词收紧不再 false positive
+> 📌 **最新版**:v3.0.8.1(2026-04-25) — 🔧 **docker cp 漏同步根治 + 普通用户隐藏 admin 按钮** — `docker-compose.yml` `tg-web` command 从 `cp -rf templates 目录复制`(嵌套 bug,Flask 读旧版)改成 `templates/*.html` 文件级 glob,以后 templates / README / release_notes 改动 update.sh 后自动生效不用 docker exec 手动同步;`web.py::dashboard_page` 传 `is_admin` 给 template,`dashboard.html` 加 `IS_ADMIN` 全局 JS 标志,管理员才看到「立刻深度诊断」/「一键修复」/「立刻重启监听器」按钮,普通成员看到「请联系管理员」文字提示。CLAUDE.md 硬规定 #8 长期修法落地
+> 之前:v3.0.8(2026-04-25) — 🚀 **Sheet 写入治本 + 卡死一键自助** — 写入用 `values.append` 替代 `update + col_values read`(quota 用量砍半 + 客户改表单不会被覆盖) + 全局令牌桶 50 req/min + 驾驶舱「立刻深度诊断」modal + 「一键修复」按钮 + 「立刻重启监听器」按钮(整合 v3.0.7.1) + 设置页 `SHEETS_FLUSH_INTERVAL` / `SHEETS_RATE_LIMIT_PER_MIN`
 > 之前:v3.0.7(2026-04-25) — 🔁 **OAuth 重新授权后 Sheets 自愈** — 闭合 v3.0.6 的诊断—修复链路。客户在驾驶舱点「去重新授权」走完 OAuth,**5-30 秒内 Sheets 自动恢复写入**,不用 SSH `docker restart`。`flush_pending` 加 `RefreshError` 自愈,`OAUTH_FAIL_MARKERS` 抽到 `oauth_helper.py` 单一来源(诊断卡片 + 自愈逻辑共用)。`SheetsWriter._write_lock` 改 RLock 防递归死锁
 > 之前:v3.0.6(2026-04-24) — 🛠 **驾驶舱三件套运维自助化** — 后台日志面板 + Sheet 堵塞自动诊断 + REMIND_DELETE 文案 UI
 > 之前:v3.0.5(2026-04-24) — 🗑 **删除消息预警对齐 stage2 审批体验** — @负责人 + 登记违规/取消按钮(数据驱动,没配 owner_tg_id 的账号保持老路径)
@@ -397,7 +398,14 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v3.0.8** (2026-04-25) — 当前稳定版 🚀 **(Sheet 写入治本 + 卡死一键自助)**
+- **v3.0.8.1** (2026-04-25) — 当前稳定版 🔧 **(docker cp 漏同步根治 + 普通用户隐藏 admin 按钮)**
+  - [FIX] **docker-compose.yml `tg-web` command 改 `cp -rf templates 目录复制` → `templates/*.html` 文件级 glob**(ADR-0023)— 修 v3.0.8 客户「升级了看不到深度诊断按钮」的根因(嵌套 cp 让 Flask 读不到新版),CLAUDE.md 硬规定 #8 长期修法落地
+  - [FIX] **`tg-web` + `tg-monitor` command 都加 `cp README.md` + `cp release_notes.json`** — 升级后 `_app_version_string` / update_checker 推送都用最新文案,不再吃镜像旧版
+  - [UX] **`web.py::dashboard_page` 传 `is_admin` 给 template + `dashboard.html` 加 `IS_ADMIN` 全局 JS 标志** — 普通成员账号不再显示「立刻深度诊断」/「一键修复」/「立刻重启监听器」三个按钮(避免点了 403),改显示「请联系管理员重启监听器」文字提示
+  - [SAFE] 后端 `/api/restart` `@login_required` **不变**(保留账号管理页历史按钮兼容);`/api/diag/sheets-stuck-detail` + `/api/diag/sheets-fix-stuck` `@admin_required` 维持 v3.0.8 收紧
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`(必经 `docker compose up -d --build` 让新 command 生效)
+
+- **v3.0.8** (2026-04-25) 🚀 **(Sheet 写入治本 + 卡死一键自助)**
   - [ARCH] **`write_messages` 改用 `values.append`** 替代 `update + col_values read`(ADR-0022)— 每个 peer 从 2 次 API call 砍到 1 次。客户在表里手动改/插/删行**不会被覆盖**(append 自动跟随当前末尾)
   - [ARCH] **全局令牌桶限流** — `_rate_limit` 加 60 秒滑动窗口最多 N 次 API call,默认 50,可配 `SHEETS_RATE_LIMIT_PER_MIN`(5-60)。Google 配额 60/min/user 不能超
   - [DIAG] **驾驶舱「立刻深度诊断」按钮 + modal** — 后台跑 SQL 列出孤儿消息(peer FK 失效)/ `col_group=NULL` peer / 缺 sheet_tab 的账号明细。新 `/api/diag/sheets-stuck-detail` GET endpoint

@@ -713,6 +713,9 @@
 </div>
 
 <script>
+// v3.0.8.1: is_admin flag from server-side context — gate admin-only buttons
+// (深度诊断/一键修复/立刻重启监听器). 普通成员看不到这些按钮, 避免点了 403 体验差。
+const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
 const POLL_INTERVAL = 5000;
 let pollFails = 0;
 
@@ -1036,8 +1039,8 @@ function renderSheets(s) {
     return;
   }
   diag.style.display = 'block';
-  // v3.0.8: 异常时显示深度诊断按钮
-  if (deepDiagWrap) deepDiagWrap.style.display = 'block';
+  // v3.0.8.1: 深度诊断按钮 admin-only — 普通成员看不到
+  if (deepDiagWrap) deepDiagWrap.style.display = IS_ADMIN ? 'block' : 'none';
   if (status === 'error') {
     diag.style.background = 'rgba(240,82,102,0.14)';
     diag.style.border = '1px solid rgba(240,82,102,0.4)';
@@ -1047,21 +1050,34 @@ function renderSheets(s) {
   }
   diagMsg.textContent = s.status_msg;
   diagActions.innerHTML = '';
+  // v3.0.8.1: reauth / check_sheet 是普通链接, 任何账号都能去设置页(权限自己拦)
   if (s.action === 'reauth') {
     diagActions.innerHTML = '<a href="/settings" style="display:inline-block;padding:6px 12px;background:#3b82f6;color:white;border-radius:6px;text-decoration:none;font-size:12px;">去设置页重新授权 →</a>';
   } else if (s.action === 'check_sheet') {
     const sid = (s.sheet_id && s.sheet_id !== '—') ? ('···' + s.sheet_id) : '设置页';
     diagActions.innerHTML = '<a href="/settings" style="display:inline-block;padding:6px 12px;background:#3b82f6;color:white;border-radius:6px;text-decoration:none;font-size:12px;">检查 Sheet (' + sid + ') →</a>';
   } else if (s.action === 'wait_or_restart') {
-    // v3.0.7.1: 429 卡死场景 — 给「立刻重启」兜底按钮
-    diagActions.innerHTML =
-      '<span style="color:#7c8a9a;font-size:12px;margin-right:10px;">系统自动退避重试,一般 15-30 分钟内自愈;若长时间不动 →</span>' +
-      '<button onclick="diagRestartMonitor(this)" style="padding:6px 12px;background:#f59e0b;color:white;border:0;border-radius:6px;cursor:pointer;font-size:12px;">立刻重启监听器</button>';
+    // v3.0.7.1: 429 卡死场景 — 「立刻重启」按钮 admin-only (前端隐藏)
+    // 注意: 后端 /api/restart 仍是 login_required (账号管理页历史按钮在用,
+    //       不能改;前端隐藏只是 UX 收紧让普通成员不点 → 减少误操作)
+    if (IS_ADMIN) {
+      diagActions.innerHTML =
+        '<span style="color:#7c8a9a;font-size:12px;margin-right:10px;">系统自动退避重试,一般 15-30 分钟内自愈;若长时间不动 →</span>' +
+        '<button onclick="diagRestartMonitor(this)" style="padding:6px 12px;background:#f59e0b;color:white;border:0;border-radius:6px;cursor:pointer;font-size:12px;">立刻重启监听器</button>';
+    } else {
+      diagActions.innerHTML =
+        '<span style="color:#7c8a9a;font-size:12px;">系统自动退避重试,一般 15-30 分钟内自愈;长时间不动请联系管理员重启监听器。</span>';
+    }
   } else if (s.action === 'restart_monitor') {
-    // v3.0.7.1: 通用警告 — 重启常常能解开卡住状态
-    diagActions.innerHTML =
-      '<button onclick="diagRestartMonitor(this)" style="padding:6px 12px;background:#f59e0b;color:white;border:0;border-radius:6px;cursor:pointer;font-size:12px;">立刻重启监听器</button>' +
-      '<span style="color:#7c8a9a;font-size:12px;margin-left:10px;">(重启 = 清空写入退避 + 立刻重试一轮)</span>';
+    // v3.0.7.1: 通用警告 — admin-only 重启按钮
+    if (IS_ADMIN) {
+      diagActions.innerHTML =
+        '<button onclick="diagRestartMonitor(this)" style="padding:6px 12px;background:#f59e0b;color:white;border:0;border-radius:6px;cursor:pointer;font-size:12px;">立刻重启监听器</button>' +
+        '<span style="color:#7c8a9a;font-size:12px;margin-left:10px;">(重启 = 清空写入退避 + 立刻重试一轮)</span>';
+    } else {
+      diagActions.innerHTML =
+        '<span style="color:#7c8a9a;font-size:12px;">原因待查,请联系管理员重启监听器。</span>';
+    }
   } else if (s.action === 'wait') {
     // v3.0.7 之前的 fallback,新版本应该不再走这里 — 留兼容
     diagActions.innerHTML = '<span style="color:#7c8a9a;font-size:12px;">系统自动退避重试,一般 15-30 分钟内自愈</span>';

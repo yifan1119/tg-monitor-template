@@ -173,6 +173,7 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 | v3.0.6 | 驾驶舱三件套运维自助化:(1) 后台日志查看面板(容器白名单防越权 + 注入防御正则)(2) Sheet 写入堵塞自动诊断(扫 tg-monitor log 识别 OAuth 失效/429/无权限 + 修复按钮) (3) 补齐 v3.0.5 的 `REMIND_DELETE_TEXT` UI 输入框 | [0020](docs/adr/0020-v3.0.6-dashboard-self-service-ops.md) |
 | v3.0.7 | OAuth 重新授权后 Sheets 自愈 — 闭合 v3.0.6 诊断—修复链路:`SheetsWriter` 加 `reload_credentials()` + `_write_lock` 改 RLock(防递归死锁);`flush_pending` 加三层 OAuth 自愈 catch(`RefreshError` 主路径 + `APIError` 关键词兜底 + bare Exception 兜底,**OAuth 检查在 429 检查之前**);`OAUTH_FAIL_MARKERS` + `is_oauth_failure()` helper 抽到 `oauth_helper.py` 单一来源,跟 `dashboard_api.py` 共用。**Codex 抓出的关键约束**:`tg-monitor` / `tg-web` 是独立容器跨进程不能共享 in-memory singleton — 走文件 IPC(`data/google_oauth_token.json` 共享 docker volume),flush_pending 自愈时读最新文件 | [0021](docs/adr/0021-v3.0.7-oauth-reauth-hot-reload.md) |
 | v3.0.8 | Sheets 写入架构治本 + 卡死深度诊断 + 自助修复:`write_messages` 改用 `values.append` 替代 `update + col_values read`(每个 peer 2 → 1 API call,client 改/插/删行 append 自动跟随末尾不被覆盖); `_rate_limit` 加 60s 滑动窗口令牌桶(默认 50/min,Google 配额 60/min/user 不超); 驾驶舱「立刻深度诊断」modal 后台跑 SQL 显示孤儿消息(peer FK 失效)/ `col_group=NULL` / 缺 sheet_tab 明细; 「一键修复」按钮 `/api/diag/sheets-fix-stuck` POST `@admin_required` 自动放弃孤儿 / 分配 NULL col_group; 「立刻重启监听器」按钮整合 v3.0.7.1; 设置页加 `SHEETS_FLUSH_INTERVAL` / `SHEETS_RATE_LIMIT_PER_MIN` 输入框; 诊断关键词收紧不再 false positive 把 Drive 上传 404 误判成 Sheet 不存在。**关键设计 pivot**:用户审阅抓到原计划的"DB 缓存 row counter"会被客户改表破坏 → pivot 到 append API 自动跟随末尾 | [0022](docs/adr/0022-v3.0.8-sheets-quota-fix-and-deep-diag.md) |
+| v3.0.8.1 | docker cp 漏同步根治 + 普通用户隐藏 admin 按钮:`docker-compose.yml::tg-web` command 从 `cp -rf templates 目录复制`(嵌套 bug 让 Flask 读旧版,v3.0.8 客户升级看不到按钮就是这个)改成 `templates/*.html` 文件级 glob;tg-web + tg-monitor command 都加 `cp README.md` + `cp release_notes.json`(`_app_version_string` / update_checker 用最新文案);**CLAUDE.md 硬规定 #8 长期修法终于落地**。`web.py::dashboard_page` 传 `is_admin` 给 template,`dashboard.html` 加 `IS_ADMIN` 全局 JS 标志,3 个 admin-only 按钮(深度诊断 / 一键修复 / 立刻重启)前端隐藏给普通成员看「请联系管理员」文字提示。后端 `/api/restart` `@login_required` 不动(保账号管理页历史按钮兼容)| [0023](docs/adr/0023-v3.0.8.1-docker-cp-rule-fix-and-admin-button-gate.md) |
 
 ## 发布流程
 
@@ -191,7 +192,8 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 
 ## 当前状态(2026-04-25)
 
-- main:`v3.0.8`(已发布 — Sheets 写入架构治本 + 卡死深度诊断 + 自助修复;`append` 替代 `update` 砍 quota 用量一半;驾驶舱「立刻深度诊断」+「一键修复」+「立刻重启监听器」三个按钮纯 web 自助;诊断关键词收紧)
+- main:`v3.0.8.1`(已发布 — docker cp 漏同步根治 + 普通用户隐藏 admin 按钮:修 v3.0.8 升级看不到按钮的根因 (`cp -rf templates 目录复制` 嵌套),CLAUDE.md 硬规定 #8 终于落地;`is_admin` flag 传 dashboard.html,3 个 admin-only 按钮前端隐藏)
+- 之前:`v3.0.8`(Sheets 写入架构治本 + 卡死深度诊断 + 自助修复;`append` 替代 `update` 砍 quota 用量一半;驾驶舱「立刻深度诊断」+「一键修复」+「立刻重启监听器」三个按钮纯 web 自助;诊断关键词收紧)
 - 之前:`v3.0.7.1`(救命补丁,驾驶舱诊断卡片加「立刻重启监听器」按钮 — **整合到 v3.0.8 一起发**,无独立 tag)
 - 之前:`v3.0.7`(OAuth 重新授权后 Sheets 自愈,闭合 v3.0.6 的诊断—修复链路;客户在驾驶舱点「去重新授权」走完 OAuth,Sheets 写入 5-30 秒内自动恢复,无需 SSH `docker restart`)
 - 之前:`v3.0.6`(驾驶舱三件套运维自助化:日志面板 + Sheet 堵塞诊断 + REMIND_DELETE_TEXT UI)

@@ -2519,11 +2519,16 @@ def api_update_upgrade_status():
 @login_required
 def dashboard_page():
     db.init_db()
+    # v3.0.8.1: 传 is_admin 给 template — 普通成员不显示 admin-only 按钮。
+    # 三个 admin-only 按钮: 「立刻深度诊断」/「一键修复」/「立刻重启监听器」。
+    # 普通成员能看见但点了后端 403, UX 烂; 直接前端隐藏。
+    me = flask_session.get("username", "")
     return render_template(
         "dashboard.html",
         company=config.COMPANY_DISPLAY,
         operator_label=config.OPERATOR_LABEL,
         peer_role_label=config.PEER_ROLE_LABEL,
+        is_admin=is_admin(me),
     )
 
 
