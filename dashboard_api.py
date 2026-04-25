@@ -676,11 +676,11 @@ def _diagnose_sheets_stuck(pending, last_write_ts):
         log_bytes = c.logs(tail=300, since=since)
         log_text = log_bytes.decode("utf-8", errors="replace").lower()
 
-        # OAuth 失效(最常见)
-        if any(k in log_text for k in [
-            "invalid_grant", "token has been expired", "refreshError", "refresh_error",
-            "credentials do not contain", "oauth.*revoked", "401",
-        ]):
+        # OAuth 失效(最常见) — v3.0.7 改用 oauth_helper.is_oauth_failure 跟 sheets.py
+        # 自愈逻辑共用同一份关键词清单,避免诊断说"OAuth 失效"但自愈识别不出。
+        # log_text 已经 .lower() 过, helper 内部还会再 lower 一次(幂等)。
+        import oauth_helper as _oh
+        if _oh.is_oauth_failure(log_text):
             return "error", f"❌ Google 授权失效 — 积压 {pending} 条,写不进 Sheet", "reauth"
 
         # 429 限流

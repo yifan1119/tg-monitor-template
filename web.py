@@ -1054,11 +1054,20 @@ def api_oauth_callback():
         t["email"] = email
         oauth_helper.save_token(t)
         # 重置 Drive client 让下次上传用新 token
+        # (Drive 跟 Sheets 不一样: media_uploader 跟 web.py 同进程,这个 reset 直接生效)
         try:
             import media_uploader
             media_uploader.reset_drive_cache()
         except Exception:
             pass
+
+        # v3.0.7: Sheets 端的自愈走另一条路径 — tg-monitor / tg-web 是两个独立容器
+        # (docker-compose.yml 分别 services), 跨进程没法直接 reset 长寿命 SheetsWriter。
+        # 我们走 sheets.py::flush_pending 的 invalid_grant catch: tg-monitor 下一轮
+        # flush(默认 5 秒一次)撞 RefreshError 时 reload_credentials() 自动从
+        # 共享的 data/google_oauth_token.json 读到新 token。
+        # 实测恢复时间: 客户授权完后 5-30 秒内 Sheets 写入自动恢复, 不用 docker restart。
+        # (跟 setup.html banner / ADR-0021 / release_notes 文案统一)
 
         # 自动建 Drive 文件夹(如果客户没填) → 客户连建文件夹这步都免了
         existing_folder = read_env().get("MEDIA_FOLDER_ID", "").strip()
@@ -1102,6 +1111,7 @@ def api_oauth_callback():
           <p style='font-size:18px;margin:20px 0;'>授权账号:<code style='background:#1a2230;padding:4px 10px;border-radius:4px;'>{email or '(unknown)'}</code></p>
           <p style='color:#7c8a9a;'>后续客户发的图片/文件会上传到这个账号的 Drive,使用其 15GB 免费配额。</p>
           {auto_folder_msg}
+          <p style='color:#9ef0b8;margin-top:18px;'>✓ Google Sheets 写入将在 5-30 秒内自动恢复(下一次 flush 周期)。</p>
           <p style='margin-top:40px;'><a href='/settings' style='color:#7ec9ff;font-size:16px;'>← 返回设置页</a></p>
         </body></html>
         """

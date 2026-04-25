@@ -171,6 +171,7 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 | v3.0.4 | 两段式预警 @ 通知修复:`@username` 格式不再强转 inline mention,改用 TG 原生 @ 解析(bot 的 inline mention 受反垃圾规则限制,没 /start 过 bot 的人收不到通知;用 `@text` 文本能稳稳触发) — `bot.py:_build_tg_mention` 优先级调整 | [0018](docs/adr/0018-v3.0.4-tg-mention-notification-fix.md) |
 | v3.0.5 | 删除消息预警跟 stage2 审批体验对齐:账号配了 `owner_tg_id` → @负责人 + 登记违规/取消按钮 (数据驱动,没配的账号保持老通过/拒绝路径向后兼容);新增 `REMIND_DELETE_TEXT` 配置 | [0019](docs/adr/0019-v3.0.5-delete-alert-owner-mention.md) |
 | v3.0.6 | 驾驶舱三件套运维自助化:(1) 后台日志查看面板(容器白名单防越权 + 注入防御正则)(2) Sheet 写入堵塞自动诊断(扫 tg-monitor log 识别 OAuth 失效/429/无权限 + 修复按钮) (3) 补齐 v3.0.5 的 `REMIND_DELETE_TEXT` UI 输入框 | [0020](docs/adr/0020-v3.0.6-dashboard-self-service-ops.md) |
+| v3.0.7 | OAuth 重新授权后 Sheets 自愈 — 闭合 v3.0.6 诊断—修复链路:`SheetsWriter` 加 `reload_credentials()` + `_write_lock` 改 RLock(防递归死锁);`flush_pending` 加三层 OAuth 自愈 catch(`RefreshError` 主路径 + `APIError` 关键词兜底 + bare Exception 兜底,**OAuth 检查在 429 检查之前**);`OAUTH_FAIL_MARKERS` + `is_oauth_failure()` helper 抽到 `oauth_helper.py` 单一来源,跟 `dashboard_api.py` 共用。**Codex 抓出的关键约束**:`tg-monitor` / `tg-web` 是独立容器跨进程不能共享 in-memory singleton — 走文件 IPC(`data/google_oauth_token.json` 共享 docker volume),flush_pending 自愈时读最新文件 | [0021](docs/adr/0021-v3.0.7-oauth-reauth-hot-reload.md) |
 
 ## 发布流程
 
@@ -187,9 +188,10 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 **真实客户 / 部门列表 / 联系人 / VPS 地址** 放在 `.claude/private-notes.md`
 (gitignored,不进 GitHub)。需要时本地查。
 
-## 当前状态(2026-04-23)
+## 当前状态(2026-04-25)
 
-- main:`v3.0.6`(已发布 — 驾驶舱三件套运维自助化:日志面板 + Sheet 堵塞诊断 + REMIND_DELETE_TEXT UI)
+- main:`v3.0.7`(已发布 — OAuth 重新授权后 Sheets 自愈,闭合 v3.0.6 的诊断—修复链路;客户在驾驶舱点「去重新授权」走完 OAuth,Sheets 写入 5-30 秒内自动恢复,无需 SSH `docker restart`)
+- 之前:`v3.0.6`(驾驶舱三件套运维自助化:日志面板 + Sheet 堵塞诊断 + REMIND_DELETE_TEXT UI)
 - 之前:`v3.0.5`(删除消息预警对齐 stage2 审批体验)
 - 之前:`v3.0.4`(两段式预警 @ 通知修复:`@username` 走 TG 原生解析)
 - 之前:`v3.0.3`(update.sh 升级时自动 Caddy 体检 + 自愈)

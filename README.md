@@ -2,7 +2,11 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v3.0.3(2026-04-23) — 🩺 **update.sh 升级时自动 Caddy 体检 + 自愈** — 承接 v3.0.2,把故障检测从"客户自己跑诊断工具"升到"升级自动自愈"。只动本部门相关的那一个 Caddy 容器,保护客户 VPS 上其他项目不受影响。客户零操作
+> 📌 **最新版**:v3.0.7(2026-04-25) — 🔁 **OAuth 重新授权后 Sheets 自愈** — 闭合 v3.0.6 的诊断—修复链路。客户在驾驶舱点「去重新授权」走完 OAuth,**5-30 秒内 Sheets 自动恢复写入**,不用 SSH `docker restart`。`flush_pending` 加 `RefreshError` 自愈,`OAUTH_FAIL_MARKERS` 抽到 `oauth_helper.py` 单一来源(诊断卡片 + 自愈逻辑共用)。`SheetsWriter._write_lock` 改 RLock 防递归死锁
+> 之前:v3.0.6(2026-04-24) — 🛠 **驾驶舱三件套运维自助化** — 后台日志面板 + Sheet 堵塞自动诊断 + REMIND_DELETE 文案 UI
+> 之前:v3.0.5(2026-04-24) — 🗑 **删除消息预警对齐 stage2 审批体验** — @负责人 + 登记违规/取消按钮(数据驱动,没配 owner_tg_id 的账号保持老路径)
+> 之前:v3.0.4(2026-04-24) — 📣 **两段式预警 @username 改走 TG 原生解析** — 修 inline mention 反垃圾不通知问题
+> 之前:v3.0.3(2026-04-23) — 🩺 **update.sh 升级时自动 Caddy 体检 + 自愈** — 承接 v3.0.2,把故障检测从"客户自己跑诊断工具"升到"升级自动自愈"。只动本部门相关的那一个 Caddy 容器,保护客户 VPS 上其他项目不受影响。客户零操作
 > 之前:v3.0.2(2026-04-23) — 🛠 **Caddy inode 自愈 + `scripts/caddy-doctor.sh` 自查工具** — 修 shared caddy 模式多部门 HTTPS 失败(docker file bind mount inode 断裂)
 > 之前:v3.0.0(2026-04-23) — 🆕 **两段式未回复预警 + TG 装置伪装** — 30 分钟 @ 商务 / 40 分钟 @ 负责人 + 违规/取消按钮 + 员工回复事件驱动自动结案 + Telethon 真名解析。全部 feature flag 默认关(`TWO_STAGE_NO_REPLY_ENABLED=false`),老客户升级零感知
 
@@ -392,7 +396,36 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v3.0.3** (2026-04-23) — 当前稳定版 🩺 **(update.sh 升级时自动 Caddy 体检 + 自愈)**
+- **v3.0.7** (2026-04-25) — 当前稳定版 🔁 **(OAuth 重新授权后 Sheets 自愈)**
+  - [FIX] **闭合 v3.0.6 诊断—修复链路**(ADR-0021)— 客户在驾驶舱点「去重新授权」按钮走完 OAuth,Sheets 写入 **5-30 秒内自动恢复**,不用 SSH `docker restart`
+  - [NEW] `SheetsWriter.reload_credentials()` — 重读 token + 重建 `gc` + 清空所有账号退避状态(否则新 token 拿到了但还卡在 600s 退避)。原子替换 — 中途失败保留旧 `self.gc` 不破坏现状
+  - [NEW] `flush_pending` 加三层 OAuth 自愈 catch:`google.auth.exceptions.RefreshError`(主路径) + `gspread.APIError` 关键词兜底 + bare Exception 关键词兜底。**OAuth 检查在 429 检查之前**,避免 `"invalid_grant — quota project context lost"` 字样误吞退避
+  - [REFACTOR] `OAUTH_FAIL_MARKERS` + `is_oauth_failure(text)` 抽到 `oauth_helper.py` 单一来源 — `sheets.py` 自愈 + `dashboard_api.py` 诊断卡片共用,避免 v3.0.6 的两份分歧 bug(`refreshError` camelCase 在 lowercased 文本里 dead-match,`oauth.*revoked` 是正则用作 substring,`401` 太宽松)
+  - [SAFE] `_write_lock` 从 `threading.Lock()` 改 `threading.RLock()` — 防 `flush_pending` → `reload_credentials` 同线程递归死锁
+  - [DESIGN] 不在 web.py callback 里直接 reset SheetsWriter — `tg-monitor` / `tg-web` 是两个独立容器(独立进程),跨进程没有共享内存。改走文件 IPC:`tg-web` 调 `save_token()` 写新 token 到 `data/google_oauth_token.json`(共享 docker volume),`tg-monitor` 下次 flush 自愈时读到。详见 ADR-0021 第 5 节
+  - [UI] 设置页 OAuth 完成 banner 加 `(Google Sheets 写入将在 5-30 秒内自动恢复)` 文字提示
+  - [OBSERV] 新增 `_oauth_reload_count` 计数器 + `[oauth_reload] gc 已重建 (累计 N 次)` 日志,可观察自愈次数
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`(升级动作本身就会重启容器读新 token,如果客户现在卡在「授权了但还是不写」直接救活)
+
+- **v3.0.6** (2026-04-24) 🛠 **(驾驶舱三件套运维自助化)**
+  - [NEW] 后台日志查看面板(容器白名单防越权 + 注入防御正则)— 客户在浏览器看 tg-monitor / tg-web / tg-caddy log,不用 SSH
+  - [NEW] Sheet 写入堵塞自动诊断 — 积压 ≥50 条 + ≥15 分钟没写入时扫 tg-monitor log 识别 OAuth 失效 / 429 / 无权限,显示红/黄条 + 修复按钮
+  - [NEW] 补齐 v3.0.5 漏的 `REMIND_DELETE_TEXT` UI 输入框(系统设置「两段式未回复预警」区块加第三个 textarea)
+  - [SAFE] 容器名白名单 `{tg-monitor-<dept>, tg-web-<dept>, tg-caddy-<dept>}` + `tg-caddy-*` 正则,严格拒绝 shell 注入字符
+  - 详见 ADR-0020
+
+- **v3.0.5** (2026-04-24) 🗑 **(删除消息预警对齐 stage2 审批体验)**
+  - [NEW] 配了 `owner_tg_id` 的账号:删除消息预警 @负责人 + 登记违规/取消按钮(跟两段式 stage2 一致)
+  - [NEW] 新增 `REMIND_DELETE_TEXT` 配置项(可自定义删除预警提示文案)
+  - [COMPAT] 没配 `owner_tg_id` 的账号保持老通过/拒绝路径,完全向后兼容
+  - 详见 ADR-0019
+
+- **v3.0.4** (2026-04-24) 📣 **(两段式预警 @username 走 TG 原生解析)**
+  - [FIX] `bot.py:_build_tg_mention` 优先级调整:`@username` 格式不再强转 inline mention,改用 TG 原生 `@text` 文本(bot inline mention 受反垃圾规则限制,没 /start 过 bot 的人收不到通知,改原生解析能稳稳触发)
+  - [COMPAT] 纯数字 UID 仍走 Telethon 真名解析 + inline mention(没 username 时只能这样)
+  - 详见 ADR-0018
+
+- **v3.0.3** (2026-04-23) 🩺 **(update.sh 升级时自动 Caddy 体检 + 自愈)**
   - [NEW] `update.sh` 5.6 段:升级末尾自动对比本部门使用的 Caddy 的 host/容器 Caddyfile size,不一致自动 `docker restart` 修复
   - [SAFE] **只动本部门相关的那一个 Caddy**(own `tg-caddy-<company>` 或 shared Caddy 有本域名的那个)
   - [SAFE] 其他项目容器一律跳过 — 只看 `^tg-caddy-` 前缀,客户 VPS 上跑的其他 bot / 网站 / 私有服务一概不碰

@@ -1668,7 +1668,7 @@ async function startOAuthFromSetup() {
   if (params.get('oauth_done') !== '1') return;
   const banner = document.createElement('div');
   banner.style.cssText = 'background:rgba(74,222,128,0.15);border:1px solid #4ade80;color:#9ef0b8;padding:12px 18px;border-radius:6px;margin:0 0 16px 0;font-weight:600;';
-  banner.innerHTML = '✓ Google Drive 已连接,Drive 文件夹已自动建。正在自动建 Spreadsheet...';
+  banner.innerHTML = '✓ Google Drive 已连接,Drive 文件夹已自动建。正在自动建 Spreadsheet... <small style="opacity:.85;">(Google Sheets 写入将在 5-30 秒内自动恢复)</small>';
   const form = document.querySelector('form');
   if (form) form.parentNode.insertBefore(banner, form);
   // 自动建 Sheet(如果 sheet_id 还空)
@@ -1677,14 +1677,14 @@ async function startOAuthFromSetup() {
     fetch('/api/sheets/auto-create', {method: 'POST'}).then(r => r.json()).then(data => {
       if (data.ok) {
         sheetInput.value = data.sheet_id || '';
-        banner.innerHTML = '✓ Google Drive 已连接 + Spreadsheet 已建好。继续填其他字段,最后点「保存并启动」即可。';
+        banner.innerHTML = '✓ Google Drive 已连接 + Spreadsheet 已建好。继续填其他字段,最后点「保存并启动」即可。 <small style="opacity:.85;">(Google Sheets 写入将在 5-30 秒内自动恢复)</small>';
       } else {
         banner.innerHTML = '✓ Google Drive 已连接。建 Spreadsheet 失败:' + (data.msg || '未知');
         banner.style.color = '#ffd28a';
       }
     }).catch(() => { /* 忽略,用户可手动点 */ });
   } else {
-    banner.innerHTML = '✓ Google Drive 已连接。继续填其他字段,最后点「保存并启动」即可。';
+    banner.innerHTML = '✓ Google Drive 已连接。继续填其他字段,最后点「保存并启动」即可。 <small style="opacity:.85;">(Google Sheets 写入将在 5-30 秒内自动恢复)</small>';
   }
   // 清干净 URL,避免刷新时重复触发
   history.replaceState({}, '', '/setup');

@@ -13,6 +13,7 @@ import time
 import threading
 from datetime import datetime, timedelta, timezone
 import gspread
+import google.auth.exceptions
 
 import config
 import database as db
@@ -37,12 +38,16 @@ class SheetsWriter:
         self.spreadsheet = self.gc.open_by_key(config.SHEET_ID)
         self._last_api_call = 0
         self._min_interval = 1.5
-        self._write_lock = threading.Lock()
+        # v3.0.7: 改 RLock — reload_credentials 会从 flush_pending 持锁路径里被调,
+        # 同线程递归拿锁,非可重入 Lock 立即死锁。RLock 性能差异可忽略。
+        self._write_lock = threading.RLock()
         # v2.10.23: 按账号的 flush 退避状态 — 单账号 429 不影响其他账号写入
         # {account_id: unix_ts_next_retry}
         self._flush_backoff = {}
         # {account_id: 当前退避级别,用于指数退避}
         self._flush_backoff_level = {}
+        # v3.0.7: OAuth reload 计数器,日志可观察自愈次数
+        self._oauth_reload_count = 0
         logger.info("Google Sheets 连接成功 (OAuth): %s", self.spreadsheet.title)
         self.ensure_alert_tabs()
         self.ensure_account_tabs()  # v2.10.10: 启动时给 DB 里每个账号补缺失的分页
@@ -52,6 +57,44 @@ class SheetsWriter:
                 self.backfill_alert_history()
             except Exception as e:
                 logger.warning("backfill_alert_history 启动时失败(不阻塞启动): %s", e)
+
+    def reload_credentials(self):
+        """v3.0.7: 客户在 web 端重新授权 Google OAuth 后调用 — 重读 token 文件并
+        重建 gc / spreadsheet handle, 同时清空所有账号退避状态(否则新 token 拿到了
+        但还卡在 600s 退避里)。
+
+        触发路径有两条:
+          1. web.py /api/oauth/callback 完成 → 主动通知 (最常见)
+          2. flush_pending 撞 invalid_grant → 自愈 (兜底, 比如客户在 myaccount 撤了
+             授权又重新授, 没经过本系统的 callback)
+
+        线程安全: 依赖 self._write_lock 已是 RLock, 可被持锁的 flush_pending 路径
+        递归调用而不死锁。
+
+        失败处理: 任何异常都不抛出, 保留旧 self.gc 不破坏现状, 下轮 flush 自动再试。
+        """
+        try:
+            creds = oauth_helper.get_credentials()
+            if not creds:
+                logger.warning("[oauth_reload] 凭证不存在 (data/google_oauth_token.json 缺失或损坏), 跳过重载")
+                return False
+            with self._write_lock:
+                new_gc = gspread.authorize(creds)
+                new_spreadsheet = new_gc.open_by_key(config.SHEET_ID)
+                # 全部成功后再原子替换 — 避免半建好状态污染 self
+                self.gc = new_gc
+                self.spreadsheet = new_spreadsheet
+                self._flush_backoff.clear()
+                self._flush_backoff_level.clear()
+                self._oauth_reload_count += 1
+            logger.info(
+                "[oauth_reload] gc 已重建, backoff 已清空 (累计 %d 次)",
+                self._oauth_reload_count,
+            )
+            return True
+        except Exception as e:
+            logger.error("[oauth_reload] 重建失败 (保留旧 gc, 下轮再试): %s", e)
+            return False
 
     def ensure_account_tabs(self):
         """v2.10.10: 扫 DB 所有账号,分页不存在就建一个(对齐登录时 _create_sheet_tab 的承诺)。
@@ -1063,9 +1106,39 @@ class SheetsWriter:
                         logger.info("[sheets_flush] account=%s 恢复正常", account_id)
                     self._flush_backoff_level[account_id] = 0
                     self._flush_backoff[account_id] = 0
+                except google.auth.exceptions.RefreshError as e:
+                    # v3.0.7: OAuth refresh_token 失效 (最常见的 invalid_grant 路径)
+                    # google-auth 在 token 刷新失败时直接 raise RefreshError, 不经 gspread.APIError
+                    # 必须放在 APIError catch 之前: 避免 google-auth changelog 出现过的
+                    # "invalid_grant — quota project context lost" 字样被宽松的 "quota in msg" 误吞退避
+                    logger.warning(
+                        "[sheets_flush] account=%s OAuth 刷新失败,尝试自愈: %s",
+                        account_id, e,
+                    )
+                    if self.reload_credentials():
+                        logger.info(
+                            "[sheets_flush] account=%s OAuth 自愈成功,下轮重试", account_id,
+                        )
+                    else:
+                        logger.error(
+                            "[sheets_flush] account=%s OAuth 自愈失败,等待 web 端 reauth",
+                            account_id,
+                        )
+                    continue   # 不进退避,下轮立刻重试
                 except gspread.exceptions.APIError as e:
                     msg = str(e)
-                    if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
+                    msg_low = msg.lower()
+                    # v3.0.7: 罕见情况兜底 — gspread 把 401 包装成 APIError 而不是
+                    # raise RefreshError 透出。先匹配 OAuth 关键词再走自愈,避免被下面
+                    # 的 429 路径误吞 (例如错误文本含 "unauthorized + 429" 混合)。
+                    if oauth_helper.is_oauth_failure(msg):
+                        logger.warning(
+                            "[sheets_flush] account=%s APIError 含 OAuth 失败标记,自愈: %s",
+                            account_id, e,
+                        )
+                        self.reload_credentials()
+                        continue
+                    if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg_low:
                         lvl = self._flush_backoff_level.get(account_id, 0)
                         wait = min(5 * (2 ** lvl), 600)
                         self._flush_backoff[account_id] = now + wait
@@ -1078,6 +1151,15 @@ class SheetsWriter:
                         logger.error("[sheets_flush] account=%s gspread 异常: %s", account_id, e)
                     continue
                 except Exception as e:
+                    # v3.0.7: bare Exception 兜底 — 也尝试匹配 OAuth 标记
+                    # (例如 google.auth 之外其他库包了一层异常)
+                    if oauth_helper.is_oauth_failure(str(e)):
+                        logger.warning(
+                            "[sheets_flush] account=%s 通用异常含 OAuth 失败标记,自愈: %s",
+                            account_id, e,
+                        )
+                        self.reload_credentials()
+                        continue
                     logger.error(
                         "[sheets_flush] account=%s flush 失败,下次重试: %s",
                         account_id, e,
