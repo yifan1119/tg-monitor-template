@@ -228,7 +228,7 @@ def write_env(updates):
         "KEYWORDS", "NO_REPLY_MINUTES",
         "WORK_HOUR_START", "WORK_HOUR_END",
         "PATROL_DAYS", "HISTORY_DAYS",
-        "SHEETS_FLUSH_INTERVAL", "PATROL_INTERVAL",
+        "SHEETS_FLUSH_INTERVAL", "SHEETS_RATE_LIMIT_PER_MIN", "PATROL_INTERVAL",
         "SETUP_COMPLETE",
     ]
     lines = []
@@ -832,6 +832,9 @@ def setup_page():
         "remind_30min_text": env.get("REMIND_30MIN_TEXT", ""),
         "remind_40min_text": env.get("REMIND_40MIN_TEXT", ""),
         "remind_delete_text": env.get("REMIND_DELETE_TEXT", ""),
+        # v3.0.8: Sheets 写入节流配置(让客户自己调,不用 SSH 改 .env)
+        "sheets_flush_interval": env.get("SHEETS_FLUSH_INTERVAL", DEFAULT_SHEETS_FLUSH_INTERVAL),
+        "sheets_rate_limit_per_min": env.get("SHEETS_RATE_LIMIT_PER_MIN", "50"),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -872,6 +875,9 @@ def settings_page():
         "remind_30min_text": env.get("REMIND_30MIN_TEXT", ""),
         "remind_40min_text": env.get("REMIND_40MIN_TEXT", ""),
         "remind_delete_text": env.get("REMIND_DELETE_TEXT", ""),
+        # v3.0.8: Sheets 写入节流配置(让客户自己调,不用 SSH 改 .env)
+        "sheets_flush_interval": env.get("SHEETS_FLUSH_INTERVAL", DEFAULT_SHEETS_FLUSH_INTERVAL),
+        "sheets_rate_limit_per_min": env.get("SHEETS_RATE_LIMIT_PER_MIN", "50"),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -1468,6 +1474,22 @@ def _save_settings(is_first):
     # v3.0.6: 删除消息预警提示文案(全域)
     if "remind_delete_text" in form:
         updates["REMIND_DELETE_TEXT"] = (form.get("remind_delete_text") or "").strip()
+
+    # v3.0.8: Sheets 写入节流 — 客户能自助调,不用 SSH 改 .env
+    # SHEETS_FLUSH_INTERVAL: 秒级整数,5-300 范围。值越大写入越慢但越省 quota
+    # SHEETS_RATE_LIMIT_PER_MIN: 全局令牌桶,5-60 范围。Google 配额 60/min/user 不能超
+    if "sheets_flush_interval" in form:
+        _sfi = (form.get("sheets_flush_interval") or "").strip()
+        if _sfi:
+            if not _sfi.isdigit() or not (1 <= int(_sfi) <= 600):
+                return jsonify({"ok": False, "msg": f"Sheets 写入间隔必须是 1-600 的整数(秒),当前: {_sfi}"}), 400
+            updates["SHEETS_FLUSH_INTERVAL"] = _sfi
+    if "sheets_rate_limit_per_min" in form:
+        _srl = (form.get("sheets_rate_limit_per_min") or "").strip()
+        if _srl:
+            if not _srl.isdigit() or not (5 <= int(_srl) <= 60):
+                return jsonify({"ok": False, "msg": f"Sheets 每分钟请求上限必须是 5-60 的整数(Google 配额 60/min/user),当前: {_srl}"}), 400
+            updates["SHEETS_RATE_LIMIT_PER_MIN"] = _srl
 
     write_env(updates)
 
@@ -2542,6 +2564,72 @@ def api_diag_containers():
     except Exception as e:
         logger.error("api_diag_containers 失败: %s", e)
         return jsonify({"containers": [], "error": str(e)}), 500
+
+
+@app.route("/api/diag/sheets-stuck-detail", methods=["GET"])
+@login_required
+@admin_required
+def api_diag_sheets_stuck_detail():
+    """v3.0.8: 后台跑 SQL 把"为什么积压不写"的明细返给驾驶舱"立刻深度诊断"按钮。
+
+    Codex P1 修: 加 @admin_required (返回里有 phone/name 这种账号身份字段
+    + orphan message id sample, 普通成员不该看)。
+    """
+    try:
+        import dashboard_api
+        return jsonify(dashboard_api.sheets_stuck_detail())
+    except Exception as e:
+        logger.error("api_diag_sheets_stuck_detail 失败: %s", e)
+        return jsonify({"errors": [str(e)]}), 500
+
+
+@app.route("/api/diag/sheets-fix-stuck", methods=["POST"])
+@login_required
+@admin_required
+def api_diag_sheets_fix_stuck():
+    """v3.0.8: 一键修复 sheets 卡住状态。
+    根据 form/json 里的 action 字段决定修哪个:
+      - 'orphan_messages' → 把孤儿消息 (peer FK 失效) 标 sheet_written=1 放弃
+      - 'col_group_null'  → 给 col_group IS NULL 的 peer 分配下一个空闲列组
+      - 'all'             → 两个都修
+    需要管理员权限 — 修改 DB 状态的操作。
+
+    Codex P1 修: 部分 sub-action 失败 → 顶层 ok 也返 False, UI 不再绿色误报。
+    """
+    body = request.json or {}
+    action = (body.get("action") or "").strip().lower()
+    if action not in ("orphan_messages", "col_group_null", "all"):
+        return jsonify({"ok": False, "msg": "action 必须是 orphan_messages / col_group_null / all"}), 400
+    try:
+        import dashboard_api
+        results = {}
+        if action in ("orphan_messages", "all"):
+            results["orphan_messages"] = dashboard_api.fix_orphan_messages()
+        if action in ("col_group_null", "all"):
+            results["col_group_null"] = dashboard_api.fix_peers_no_col_group()
+        # v3.0.8 Codex P1 修: 顶层 ok = 所有 sub-action 都 ok
+        all_ok = all(r.get("ok", False) for r in results.values())
+        any_fixed = any(
+            (r.get("ok") and r.get("fixed_count", 0) > 0)
+            for r in results.values()
+        )
+        # 失败 sub-action 摘要 → 给前端显示哪个失败
+        failed_msgs = [f"{k}: {r.get('msg', '失败')}" for k, r in results.items() if not r.get("ok")]
+        if not all_ok:
+            top_msg = "部分修复失败: " + " | ".join(failed_msgs)
+        elif any_fixed:
+            top_msg = "修复完成,请点驾驶舱「立刻重启监听器」让变动立刻生效。"
+        else:
+            top_msg = "无可修复项,系统状态正常。"
+        return jsonify({
+            "ok": all_ok,
+            "results": results,
+            "needs_restart": any_fixed,
+            "msg": top_msg,
+        }), (200 if all_ok else 500)
+    except Exception as e:
+        logger.error("api_diag_sheets_fix_stuck 失败: %s", e)
+        return jsonify({"ok": False, "msg": str(e)}), 500
 
 
 if __name__ == "__main__":

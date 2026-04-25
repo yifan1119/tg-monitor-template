@@ -343,6 +343,11 @@ TG_SYSTEM_LANG    = os.environ.get("TG_SYSTEM_LANG",    "zh-CN")
 # Sheets 刷写间隔（秒）
 SHEETS_FLUSH_INTERVAL = int(os.environ.get("SHEETS_FLUSH_INTERVAL", "5"))
 
+# v3.0.8: Sheets 写入端全局令牌桶上限 — 60 秒滑动窗口最多 N 次 API call
+# Google 配额 60 写/分钟/user, 默认 50 留 10 给突发 + retry 头
+# 200+ 账号大客户撞配额时可调 30-40 进一步保守
+SHEETS_RATE_LIMIT_PER_MIN = int(os.environ.get("SHEETS_RATE_LIMIT_PER_MIN", "50"))
+
 # 巡检间隔（秒）
 PATROL_INTERVAL = int(os.environ.get("PATROL_INTERVAL", "60"))
 

@@ -38,6 +38,10 @@ class SheetsWriter:
         self.spreadsheet = self.gc.open_by_key(config.SHEET_ID)
         self._last_api_call = 0
         self._min_interval = 1.5
+        # v3.0.8: 全局令牌桶 — 60 秒滑动窗口内最多 N 次 Sheets API call
+        # 默认 50 (Google 配额 60/min/user 留 10 给突发 + retry),配 SHEETS_RATE_LIMIT_PER_MIN
+        self._call_window_max = max(5, int(getattr(config, "SHEETS_RATE_LIMIT_PER_MIN", 50)))
+        self._call_times = []  # 滑动窗口里的 timestamp list, 比 deque 简单且在持锁后操作不竞争
         # v3.0.7: 改 RLock — reload_credentials 会从 flush_pending 持锁路径里被调,
         # 同线程递归拿锁,非可重入 Lock 立即死锁。RLock 性能差异可忽略。
         self._write_lock = threading.RLock()
@@ -795,10 +799,39 @@ class SheetsWriter:
         return (written, failed)
 
     def _rate_limit(self):
-        elapsed = time.time() - self._last_api_call
+        """v3.0.8: 双层限流 — min_interval (per-call 1.5s 间隔, 老逻辑) +
+        滑动窗口令牌桶 (60s 窗口最多 _call_window_max 次, 默认 50)。
+
+        为什么双层:
+          - min_interval 防 burst 内连续打满
+          - 令牌桶防整轮 flush 累计超 Google 60/min/user 配额
+          - 之前 (v2.10.23-v3.0.7) 只有 min_interval, 在 200 账号 × 5 peer 场景下
+            理论上 1.5s 间隔 = 40 calls/min 应该够,但实际还是会撞 429 (gspread
+            内部 retry 不经过 _rate_limit + 同 OAuth 跨进程共享配额)
+          - 加令牌桶后, 即使 min_interval 路径松了, 令牌桶也是硬天花板
+        """
+        now = time.time()
+        # 清掉 60s 之前的旧记录
+        self._call_times = [t for t in self._call_times if now - t < 60.0]
+        # 令牌桶: 满 N 次就睡到最早一个过期 + 0.1s 安全余量
+        if len(self._call_times) >= self._call_window_max:
+            wait = 60.0 - (now - self._call_times[0]) + 0.1
+            if wait > 0:
+                logger.info(
+                    "[rate_limit] 令牌桶满 %d/60s, 等 %.1fs",
+                    self._call_window_max, wait,
+                )
+                time.sleep(wait)
+                now = time.time()
+                self._call_times = [t for t in self._call_times if now - t < 60.0]
+        # min_interval: per-call 1.5s 间隔 (v2.10.23 起的老逻辑, 兼容保留)
+        elapsed = now - self._last_api_call
         if elapsed < self._min_interval:
             time.sleep(self._min_interval - elapsed)
-        self._last_api_call = time.time()
+        # 记录这次 call (放在 sleep 之后 = 真实发出时刻)
+        now = time.time()
+        self._last_api_call = now
+        self._call_times.append(now)
 
     def get_or_create_sheet(self, account):
         """获取账号分表,v2.10.10 起真的会 auto-create(以前只 get)。
@@ -1000,7 +1033,17 @@ class SheetsWriter:
             self.spreadsheet.batch_update({"requests": [r for r in requests if "addBanding" not in r]})
 
     def write_messages(self, ws, peer, messages):
-        """把消息写入对话框对应的列组"""
+        """把消息写入对话框对应的列组。
+
+        v3.0.8 关键改动: `update` → `append_rows`,**干掉每次写入前的 col_values 读 API 调用**。
+        - 旧 (v3.0.7-): 1 次 col_values 读 + 1 次 update 写 = 每个 peer 2 次 API call
+        - 新 (v3.0.8): 1 次 append_rows 写 = 每个 peer 1 次 API call (砍半,接近 Google 配额上限)
+        - 安全性: append 自动追加到 table_range 末尾, **永远不覆盖客户已有数据**
+          (用户场景: 客户在表格里手动改/插/删行 → 旧 update + 缓存 row 会覆盖客户改动;
+           新 append 自动跟随当前末尾, 客户改动安全)
+        - row 号回写 db.mark_written: 从 append 响应的 updatedRange 解析
+          (e.g. "'TabName'!A123:C145" → start_row=123)
+        """
         if not messages:
             return
 
@@ -1009,41 +1052,72 @@ class SheetsWriter:
         col_a = _col_letter(col_start)
         col_c = _col_letter(col_start + 2)
 
-        # 找出当前列组已有多少行数据（从 row 7 开始）
-        self._rate_limit()
-        existing = ws.col_values(col_start + 1)  # 1-based
-        current_row = max(len(existing) + 1, 7)
-
         rows = []
         for m in messages:
             rows.append([m["timestamp"], m["direction"], m["text"]])
 
-        if rows:
-            end_row = current_row + len(rows) - 1
+        if not rows:
+            return
+
+        # v3.0.8: append_rows 替代 update + col_values
+        # table_range = "{col_a}:{col_c}" 限定本列组的 3 列, 不会跨列组打架
+        # insert_data_option="OVERWRITE" → 写到末尾, 不在中间插行打乱其他列组的对齐
+        # value_input_option="USER_ENTERED" → =IMAGE() / =HYPERLINK() 公式渲染 (媒体上传场景)
+        self._rate_limit()
+        try:
+            resp = ws.append_rows(
+                rows,
+                value_input_option="USER_ENTERED",
+                insert_data_option="OVERWRITE",
+                table_range=f"{col_a}:{col_c}",
+                include_values_in_response=False,
+            )
+        except TypeError:
+            # 兼容老 gspread (<3.7) 不支持 include_values_in_response 关键字
+            resp = ws.append_rows(
+                rows,
+                value_input_option="USER_ENTERED",
+                insert_data_option="OVERWRITE",
+                table_range=f"{col_a}:{col_c}",
+            )
+
+        # 解析 updates.updatedRange 拿 start_row, 回写 db.mark_written
+        # resp 形如: {'spreadsheetId': '...', 'tableRange': "'Tab'!A1:C6",
+        #            'updates': {'spreadsheetId':'...', 'updatedRange':"'Tab'!A7:C9",
+        #                        'updatedRows':3, ...}}
+        import re as _re
+        updated_range = ((resp or {}).get("updates") or {}).get("updatedRange", "")
+        m = _re.search(r"![A-Z]+(\d+):[A-Z]+(\d+)$", updated_range)
+        if not m:
+            # 极少数情况下 gspread 没返 updatedRange (老版本/响应被截断) — 保守 fallback:
+            # 触发一次 col_values 拿真实当前末尾, 反推 start_row。这是 v3.0.8 之前的老行为兜底。
+            logger.warning("[append_rows] updatedRange 解析失败 (resp=%s), 走 col_values fallback", resp)
             self._rate_limit()
-            # value_input_option=USER_ENTERED → =IMAGE() / =HYPERLINK() 公式才会渲染（启用 MEDIA_FOLDER_ID 后）
-            # 普通文字消息不受影响：USER_ENTERED 对纯文本等同 RAW，只是不会自动转日期/数字
-            ws.update(f"{col_a}{current_row}:{col_c}{end_row}", rows, value_input_option="USER_ENTERED")
+            existing = ws.col_values(col_start + 1)
+            start_row = max(len(existing) - len(rows) + 1, 7)
+        else:
+            start_row = int(m.group(1))
 
-            # v2.10.23: 写完立刻标 sheet_written=1,同时回头看「写入期间是否被删」— 如果
-            # 有消息在 sheet_row 设好前已经删了(delete_mark_pending=1),这里立刻补标红删除线。
-            # 修正之前「消息未写就被删 → 永远不会红字标记」的 bug。
-            pending_delete_rows = []  # [(row, msg_db_id)]
-            for i, m in enumerate(messages):
-                db.mark_written(m["id"], current_row + i)
-                if db.check_delete_mark_pending(m["id"]):
-                    pending_delete_rows.append((current_row + i, m["id"]))
+        # v2.10.23: 写完立刻标 sheet_written=1,同时回头看「写入期间是否被删」
+        pending_delete_rows = []   # [(row, msg_db_id)]
+        for i, msg in enumerate(messages):
+            db.mark_written(msg["id"], start_row + i)
+            if db.check_delete_mark_pending(msg["id"]):
+                pending_delete_rows.append((start_row + i, msg["id"]))
 
-            logger.info("写入 %d 条到 %s 列组%d (%s-%s列)", len(rows), ws.title, col_group, col_a, col_c)
+        logger.info(
+            "写入 %d 条到 %s 列组%d (%s-%s列, row %d-%d, append API)",
+            len(rows), ws.title, col_group, col_a, col_c, start_row, start_row + len(rows) - 1,
+        )
 
-            # 补红(可能失败但不致命,下次 patrol 也会补)
-            for row, msg_db_id in pending_delete_rows:
-                try:
-                    self._mark_row_red_strikethrough(ws, row, col_group)
-                    db.clear_delete_mark_pending(msg_db_id)
-                    logger.info("[delete_backfill] 补标红 msg_db_id=%s row=%s", msg_db_id, row)
-                except Exception as e:
-                    logger.warning("[delete_backfill] 补标红失败 msg_db_id=%s: %s", msg_db_id, e)
+        # 补红(可能失败但不致命,下次 patrol 也会补)
+        for row, msg_db_id in pending_delete_rows:
+            try:
+                self._mark_row_red_strikethrough(ws, row, col_group)
+                db.clear_delete_mark_pending(msg_db_id)
+                logger.info("[delete_backfill] 补标红 msg_db_id=%s row=%s", msg_db_id, row)
+            except Exception as e:
+                logger.warning("[delete_backfill] 补标红失败 msg_db_id=%s: %s", msg_db_id, e)
 
     def mark_deleted_in_sheet(self, ws, msg):
         """把被删除的消息标红+删除线"""

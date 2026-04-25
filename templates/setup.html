@@ -766,6 +766,29 @@
           <br>⚠ 要先在「账号管理」给账号配好<b>负责人 TG ID</b>,才会走 @负责人 + 登记违规/取消 格式。
         </div>
       </div>
+
+      {# v3.0.8: Sheets 写入节流(高级,大客户/Sheet 卡死时调) #}
+      <div class="field">
+        <label>Sheets 写入节流 <span style="color:#7c8a9a;font-weight:400;">(高级,默认值适用 95% 客户,Sheet 持续 429 卡死时调)</span></label>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:200px;">
+            <input type="number" name="sheets_flush_interval" id="sheets_flush_interval"
+                   value="{{ d.sheets_flush_interval or 5 }}" min="1" max="600"
+                   style="width:100%;box-sizing:border-box;">
+            <div class="hint" style="margin-top:4px;">
+              <b>每 N 秒 flush 一次</b>(默认 5,撞 quota 的客户调 30-60)。值越大越省 Google 配额但写入延迟越大。
+            </div>
+          </div>
+          <div style="flex:1;min-width:200px;">
+            <input type="number" name="sheets_rate_limit_per_min" id="sheets_rate_limit_per_min"
+                   value="{{ d.sheets_rate_limit_per_min or 50 }}" min="5" max="60"
+                   style="width:100%;box-sizing:border-box;">
+            <div class="hint" style="margin-top:4px;">
+              <b>每分钟最多 N 次 API 调用</b>(默认 50,Google 配额 60/min/user 不能超)。200+ 账号大客户调 30-40 更保守。
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="section">

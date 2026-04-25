@@ -683,22 +683,223 @@ def _diagnose_sheets_stuck(pending, last_write_ts):
         if _oh.is_oauth_failure(log_text):
             return "error", f"❌ Google 授权失效 — 积压 {pending} 条,写不进 Sheet", "reauth"
 
-        # 429 限流
+        # 429 限流 — v3.0.7.1: 加「立刻重启监听器」按钮兜底,
+        # 因为 per-account 退避到 600s 后还撞 429 会卡死(yueda 案例),
+        # 重启 = 退避状态全清零 + 立刻重试,客户能自助救自己。
         if any(k in log_text for k in [
             "429", "rate_limit", "quota exceeded", "user_rate_limit_exceeded", "rate limit",
         ]):
-            return "warning", f"⏳ 触发 Google 配额限流,正在自愈(最长 30 分钟) — 积压 {pending} 条", "wait"
+            return "warning", f"⏳ 触发 Google 配额限流,正在自愈(最长 30 分钟) — 积压 {pending} 条", "wait_or_restart"
 
-        # Sheet 不存在 / 无权限
-        if any(k in log_text for k in [
-            "not found", "permission denied", "does not have access", "404", "403",
-        ]):
-            return "error", f"❌ Sheet 不存在或权限被改 — 积压 {pending} 条", "check_sheet"
+        # v3.0.8: 关键词更精确 — 区分"分页(worksheet)被删/改"vs"整表(spreadsheet)不存在"
+        # vs 通用 404/403。原 v3.0.6 关键词太松, 任何 404/403/permission denied 都被
+        # 误判成 "Sheet 不存在",实际可能是 Drive 媒体上传 404 / 单一 peer col_group 写错。
+        #
+        # 策略:精确强信号优先匹配,通用弱信号只在拼上下文时才匹配。
 
-        # 其他错误 — 通用
-        return "warning", f"⚠ 积压 {pending} 条 >15 分钟没写入,原因待查", None
+        # 分页(worksheet)级别问题 — 单个账号分页被删/改
+        if "worksheetnotfound" in log_text or "worksheet not found" in log_text:
+            return "error", f"❌ 某账号 Sheet 分页被删或重命名 — 积压 {pending} 条", "check_sheet"
+
+        # 整张 spreadsheet 不存在 — 强信号
+        if "spreadsheet not found" in log_text or "requested entity was not found" in log_text:
+            return "error", f"❌ 整个 Spreadsheet 不存在或被删 — 积压 {pending} 条", "check_sheet"
+
+        # 写入权限被改 — 必须配 sheet/range/spreadsheet 上下文,避免 Drive 上传 403 误判
+        if any(k in log_text for k in ["permission_denied", "the caller does not have permission"]) or \
+           ("does not have access" in log_text and ("sheet" in log_text or "range" in log_text)):
+            return "error", f"❌ Sheet 写权限被改或 OAuth scope 不足 — 积压 {pending} 条", "check_sheet"
+
+        # 范围被锁定/受保护
+        if "protected" in log_text and ("range" in log_text or "sheet" in log_text):
+            return "error", f"❌ Sheet 某范围被锁定/受保护 — 积压 {pending} 条", "check_sheet"
+
+        # 其他错误 — 通用 — v3.0.7.1+: 给「立刻重启监听器」兜底按钮,
+        # 不知道具体原因但重启常常能解开卡住状态(SheetsWriter 退避卡死等)
+        return "warning", f"⚠ 积压 {pending} 条 >15 分钟没写入,原因待查", "restart_monitor"
     except Exception:
         return "warning", f"⚠ 积压 {pending} 条,无法自动诊断(容器不可访问)", None
+
+
+def sheets_stuck_detail():
+    """v3.0.8: 后台跑 SQL 把"为什么积压不写"的明细列出来,纯 web 看,不用 SSH。
+
+    返回 dict, 4 块:
+    - per_account_unwritten: [{'account_id': N, 'phone': '+xxx', 'name': 'xxx', 'unwritten_count': K}]
+    - orphan_messages: [{'account_id': N, 'count': K, 'sample_msg_ids': [...]}]
+       — 有未写消息但 peer FK 拉不到 (peers 表里 id 缺失) → INNER JOIN 永远拉不出 → 永远不会 flush
+    - peers_no_col_group: [{'peer_id': N, 'account_id': N, 'tg_user_id': N}]
+       — peer.col_group IS NULL → _flush_account 内 col_start = None * 3 必崩
+    - missing_worksheets: [{'account_id': N, 'expected_tab_name': 'xxx', 'phone': '+xxx'}]
+       — accounts 表有 sheet_tab 但 spreadsheet 里没这分页 → get_or_create_sheet 撞失败
+
+    任一非空 → 客户驾驶舱看到具体哪条卡住,有明确修复目标。
+    """
+    out = {
+        "per_account_unwritten": [],
+        "orphan_messages": [],
+        "peers_no_col_group": [],
+        "missing_worksheets": [],
+        "errors": [],   # 自诊断本身报错,降级到诊断卡片普通信息
+    }
+
+    # 1. 各账号未写数量
+    try:
+        rows = db.get_conn().execute(
+            "SELECT m.account_id, a.phone, a.name, COUNT(*) as c "
+            "FROM messages m LEFT JOIN accounts a ON m.account_id=a.id "
+            "WHERE m.sheet_written=0 GROUP BY m.account_id ORDER BY c DESC LIMIT 50"
+        ).fetchall()
+        for r in rows:
+            out["per_account_unwritten"].append({
+                "account_id": r["account_id"],
+                "phone": r["phone"] or "",
+                "name": r["name"] or "",
+                "unwritten_count": r["c"],
+            })
+    except Exception as e:
+        out["errors"].append(f"per_account 查询失败: {e}")
+
+    # 2. 孤儿消息 (peer 缺失) — 这是 #2 真根因路径
+    try:
+        rows = db.get_conn().execute(
+            "SELECT m.account_id, COUNT(*) as c, GROUP_CONCAT(m.id) as ids "
+            "FROM messages m LEFT JOIN peers p ON m.peer_id=p.id "
+            "WHERE m.sheet_written=0 AND p.id IS NULL "
+            "GROUP BY m.account_id"
+        ).fetchall()
+        for r in rows:
+            sample = (r["ids"] or "").split(",")[:5]
+            out["orphan_messages"].append({
+                "account_id": r["account_id"],
+                "count": r["c"],
+                "sample_msg_ids": [int(x) for x in sample if x.isdigit()],
+            })
+    except Exception as e:
+        out["errors"].append(f"orphan 查询失败: {e}")
+
+    # 3. col_group=NULL 的 peer (写入时会 None * 3 TypeError 崩)
+    try:
+        rows = db.get_conn().execute(
+            "SELECT p.id, p.account_id, p.tg_id, COUNT(m.id) as msg_count "
+            "FROM peers p LEFT JOIN messages m ON m.peer_id=p.id AND m.sheet_written=0 "
+            "WHERE p.col_group IS NULL "
+            "GROUP BY p.id"
+        ).fetchall()
+        for r in rows:
+            out["peers_no_col_group"].append({
+                "peer_id": r["id"],
+                "account_id": r["account_id"],
+                "tg_id": r["tg_id"],
+                "stuck_message_count": r["msg_count"],
+            })
+    except Exception as e:
+        out["errors"].append(f"col_group 查询失败: {e}")
+
+    # 4. accounts 表有 sheet_tab 但 spreadsheet 里没这分页
+    # 需要 SheetsWriter 引用 — 跨进程,所以这步走不到。改成只列出 accounts.sheet_tab 让前端
+    # 跟客户在 Google Sheet 里看到的对比 (人工)。或者依赖 sheets.py 启动时 ensure_account_tabs 自动补建,
+    # 这里就不做检测了避免引入跨进程依赖。
+    try:
+        accounts = db.get_conn().execute(
+            "SELECT id, phone, name, sheet_tab FROM accounts ORDER BY id"
+        ).fetchall()
+        # 只列出有未写消息但 sheet_tab 为空的账号 (这些必然撞 get_or_create_sheet)
+        unwritten_acc_ids = {x["account_id"] for x in out["per_account_unwritten"]}
+        for a in accounts:
+            if a["id"] in unwritten_acc_ids and not (a["sheet_tab"] or "").strip():
+                out["missing_worksheets"].append({
+                    "account_id": a["id"],
+                    "phone": a["phone"] or "",
+                    "name": a["name"] or "",
+                    "expected_tab_name": a["name"] or a["phone"] or f"account-{a['id']}",
+                })
+    except Exception as e:
+        out["errors"].append(f"missing_worksheets 查询失败: {e}")
+
+    return out
+
+
+def fix_orphan_messages():
+    """v3.0.8: 一键修复孤儿消息 — 把 sheet_written=0 但 peer FK 失效的消息标 sheet_written=1
+    (放弃,反正永远写不进 Sheet),解开 flush_pending 死循环。
+
+    返回 dict: {ok, fixed_count, fixed_account_ids}
+
+    Codex P0 修: 不再写 messages.last_write_error 列 (该列只在 alerts 表上有, messages
+    表没有,会 UPDATE 炸)。改为 logger 记录被放弃的 message id,留追溯依据。
+    """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    try:
+        # 找出所有孤儿消息 id
+        rows = db.get_conn().execute(
+            "SELECT m.id, m.account_id FROM messages m "
+            "LEFT JOIN peers p ON m.peer_id=p.id "
+            "WHERE m.sheet_written=0 AND p.id IS NULL"
+        ).fetchall()
+        if not rows:
+            return {"ok": True, "fixed_count": 0, "fixed_account_ids": [], "msg": "无孤儿消息"}
+        ids = [r["id"] for r in rows]
+        account_ids = sorted({r["account_id"] for r in rows})
+        # 留 log 追溯 (避免依赖 messages 表里没有的 last_write_error 列)
+        _log.warning(
+            "[fix_orphan_messages] 放弃 %d 条孤儿消息 (sheet_written 0→1), "
+            "account_ids=%s, message_ids 前 20 = %s",
+            len(ids), account_ids, ids[:20],
+        )
+        # 批量标 sheet_written=1 (放弃)
+        # 注意: 不能用 WHERE id IN (...) 接太长 → 分批 200
+        BATCH = 200
+        for i in range(0, len(ids), BATCH):
+            chunk = ids[i:i + BATCH]
+            placeholders = ",".join("?" * len(chunk))
+            db.get_conn().execute(
+                f"UPDATE messages SET sheet_written=1 WHERE id IN ({placeholders})",
+                chunk,
+            )
+        db.get_conn().commit()
+        return {
+            "ok": True,
+            "fixed_count": len(ids),
+            "fixed_account_ids": account_ids,
+            "msg": f"已放弃 {len(ids)} 条孤儿消息 (account_ids: {account_ids})。详细 message id 列表已写入容器日志便于追溯",
+        }
+    except Exception as e:
+        return {"ok": False, "msg": f"修复失败: {e}"}
+
+
+def fix_peers_no_col_group():
+    """v3.0.8: 一键修复 peer.col_group=NULL — 给每个 NULL peer 分配下一个空闲列组。
+
+    分配策略: 跟 listener._next_col_group 对齐 — 看本账号已用过的最大 col_group + 1。
+    返回 dict: {ok, fixed_count, fixed_peers}
+    """
+    try:
+        nulls = db.get_conn().execute(
+            "SELECT id, account_id FROM peers WHERE col_group IS NULL ORDER BY account_id, id"
+        ).fetchall()
+        if not nulls:
+            return {"ok": True, "fixed_count": 0, "fixed_peers": [], "msg": "无 NULL col_group peer"}
+        fixed = []
+        for p in nulls:
+            # 该账号下一个空闲列组
+            row = db.get_conn().execute(
+                "SELECT COALESCE(MAX(col_group), -1) + 1 AS next_g FROM peers WHERE account_id=? AND col_group IS NOT NULL",
+                (p["account_id"],),
+            ).fetchone()
+            next_g = row["next_g"] if row and row["next_g"] is not None else 0
+            db.get_conn().execute("UPDATE peers SET col_group=? WHERE id=?", (next_g, p["id"]))
+            fixed.append({"peer_id": p["id"], "account_id": p["account_id"], "assigned_col_group": next_g})
+        db.get_conn().commit()
+        return {
+            "ok": True,
+            "fixed_count": len(fixed),
+            "fixed_peers": fixed,
+            "msg": f"已分配 {len(fixed)} 个 peer 的 col_group",
+        }
+    except Exception as e:
+        return {"ok": False, "msg": f"修复失败: {e}"}
 
 
 def container_logs(container_name, tail=200, grep=""):

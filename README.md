@@ -2,7 +2,8 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v3.0.7(2026-04-25) — 🔁 **OAuth 重新授权后 Sheets 自愈** — 闭合 v3.0.6 的诊断—修复链路。客户在驾驶舱点「去重新授权」走完 OAuth,**5-30 秒内 Sheets 自动恢复写入**,不用 SSH `docker restart`。`flush_pending` 加 `RefreshError` 自愈,`OAUTH_FAIL_MARKERS` 抽到 `oauth_helper.py` 单一来源(诊断卡片 + 自愈逻辑共用)。`SheetsWriter._write_lock` 改 RLock 防递归死锁
+> 📌 **最新版**:v3.0.8(2026-04-25) — 🚀 **Sheet 写入治本 + 卡死一键自助** — 写入用 `values.append` 替代 `update + col_values read`(quota 用量砍半 + 客户改表单不会被覆盖) + 全局令牌桶 50 req/min(不撞 Google 60/min/user 上限)+ 驾驶舱「立刻深度诊断」modal(后台 SQL 列出孤儿消息 / col_group=NULL 明细) + 「一键修复」按钮(`/api/diag/sheets-fix-stuck`) + 「立刻重启监听器」按钮(整合 v3.0.7.1) + 设置页 `SHEETS_FLUSH_INTERVAL` / `SHEETS_RATE_LIMIT_PER_MIN` 输入框 + 诊断关键词收紧不再 false positive
+> 之前:v3.0.7(2026-04-25) — 🔁 **OAuth 重新授权后 Sheets 自愈** — 闭合 v3.0.6 的诊断—修复链路。客户在驾驶舱点「去重新授权」走完 OAuth,**5-30 秒内 Sheets 自动恢复写入**,不用 SSH `docker restart`。`flush_pending` 加 `RefreshError` 自愈,`OAUTH_FAIL_MARKERS` 抽到 `oauth_helper.py` 单一来源(诊断卡片 + 自愈逻辑共用)。`SheetsWriter._write_lock` 改 RLock 防递归死锁
 > 之前:v3.0.6(2026-04-24) — 🛠 **驾驶舱三件套运维自助化** — 后台日志面板 + Sheet 堵塞自动诊断 + REMIND_DELETE 文案 UI
 > 之前:v3.0.5(2026-04-24) — 🗑 **删除消息预警对齐 stage2 审批体验** — @负责人 + 登记违规/取消按钮(数据驱动,没配 owner_tg_id 的账号保持老路径)
 > 之前:v3.0.4(2026-04-24) — 📣 **两段式预警 @username 改走 TG 原生解析** — 修 inline mention 反垃圾不通知问题
@@ -396,7 +397,17 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v3.0.7** (2026-04-25) — 当前稳定版 🔁 **(OAuth 重新授权后 Sheets 自愈)**
+- **v3.0.8** (2026-04-25) — 当前稳定版 🚀 **(Sheet 写入治本 + 卡死一键自助)**
+  - [ARCH] **`write_messages` 改用 `values.append`** 替代 `update + col_values read`(ADR-0022)— 每个 peer 从 2 次 API call 砍到 1 次。客户在表里手动改/插/删行**不会被覆盖**(append 自动跟随当前末尾)
+  - [ARCH] **全局令牌桶限流** — `_rate_limit` 加 60 秒滑动窗口最多 N 次 API call,默认 50,可配 `SHEETS_RATE_LIMIT_PER_MIN`(5-60)。Google 配额 60/min/user 不能超
+  - [DIAG] **驾驶舱「立刻深度诊断」按钮 + modal** — 后台跑 SQL 列出孤儿消息(peer FK 失效)/ `col_group=NULL` peer / 缺 sheet_tab 的账号明细。新 `/api/diag/sheets-stuck-detail` GET endpoint
+  - [FIX] **驾驶舱「一键修复」按钮** — 检测可修复项时显示。`/api/diag/sheets-fix-stuck` POST(`@admin_required`)action ∈ {orphan_messages / col_group_null / all},自动放弃孤儿消息(标 `sheet_written=1, last_write_error='ABANDONED_orphan_v308'`)/ 给 NULL peer 分配下一空闲列组
+  - [UI] **驾驶舱「立刻重启监听器」按钮整合 v3.0.7.1** — 429 / 通用 warning 路径有,复用现有 `/api/restart` endpoint
+  - [SETTING] **设置页加 2 个高级字段** — `SHEETS_FLUSH_INTERVAL`(1-600 秒)/ `SHEETS_RATE_LIMIT_PER_MIN`(5-60)。客户自助调流速,不用 SSH 改 .env
+  - [DIAG] **诊断关键词收紧** — `worksheetnotfound` / `spreadsheet not found` / `permission_denied` 精确匹配,不再 false positive 把 Drive 上传 404 误判成 Sheet 不存在
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v3.0.7** (2026-04-25) 🔁 **(OAuth 重新授权后 Sheets 自愈)**
   - [FIX] **闭合 v3.0.6 诊断—修复链路**(ADR-0021)— 客户在驾驶舱点「去重新授权」按钮走完 OAuth,Sheets 写入 **5-30 秒内自动恢复**,不用 SSH `docker restart`
   - [NEW] `SheetsWriter.reload_credentials()` — 重读 token + 重建 `gc` + 清空所有账号退避状态(否则新 token 拿到了但还卡在 600s 退避)。原子替换 — 中途失败保留旧 `self.gc` 不破坏现状
   - [NEW] `flush_pending` 加三层 OAuth 自愈 catch:`google.auth.exceptions.RefreshError`(主路径) + `gspread.APIError` 关键词兜底 + bare Exception 关键词兜底。**OAuth 检查在 429 检查之前**,避免 `"invalid_grant — quota project context lost"` 字样误吞退避

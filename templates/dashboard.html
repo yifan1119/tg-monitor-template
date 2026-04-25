@@ -651,6 +651,13 @@
           <div id="sh-diag-msg" style="font-size:13px;line-height:1.6;"></div>
           <div id="sh-diag-actions" style="margin-top:8px;"></div>
         </div>
+
+        {# v3.0.8: 深度诊断按钮 — 只在 sh-diag 显示时露出, click 弹 modal 拉 SQL 明细 + 一键修复 #}
+        <div id="sh-deep-diag-wrap" style="display:none;margin-top:6px;">
+          <button onclick="openSheetsDeepDiag()" style="padding:5px 10px;background:rgba(126,201,255,0.15);border:1px solid rgba(126,201,255,0.4);color:#7ec9ff;border-radius:6px;cursor:pointer;font-size:11px;">
+            ▸ 立刻深度诊断(看具体哪个账号 / peer 卡住)
+          </button>
+        </div>
       </div>
     </div>
 
@@ -1020,13 +1027,17 @@ function renderSheets(s) {
   const diag = el('sh-diag');
   const diagMsg = el('sh-diag-msg');
   const diagActions = el('sh-diag-actions');
+  const deepDiagWrap = el('sh-deep-diag-wrap');
   if (!diag) return;
   const status = s.status || 'ok';
   if (status === 'ok' || !s.status_msg || s.status_msg === '正常') {
     diag.style.display = 'none';
+    if (deepDiagWrap) deepDiagWrap.style.display = 'none';
     return;
   }
   diag.style.display = 'block';
+  // v3.0.8: 异常时显示深度诊断按钮
+  if (deepDiagWrap) deepDiagWrap.style.display = 'block';
   if (status === 'error') {
     diag.style.background = 'rgba(240,82,102,0.14)';
     diag.style.border = '1px solid rgba(240,82,102,0.4)';
@@ -1041,8 +1052,50 @@ function renderSheets(s) {
   } else if (s.action === 'check_sheet') {
     const sid = (s.sheet_id && s.sheet_id !== '—') ? ('···' + s.sheet_id) : '设置页';
     diagActions.innerHTML = '<a href="/settings" style="display:inline-block;padding:6px 12px;background:#3b82f6;color:white;border-radius:6px;text-decoration:none;font-size:12px;">检查 Sheet (' + sid + ') →</a>';
+  } else if (s.action === 'wait_or_restart') {
+    // v3.0.7.1: 429 卡死场景 — 给「立刻重启」兜底按钮
+    diagActions.innerHTML =
+      '<span style="color:#7c8a9a;font-size:12px;margin-right:10px;">系统自动退避重试,一般 15-30 分钟内自愈;若长时间不动 →</span>' +
+      '<button onclick="diagRestartMonitor(this)" style="padding:6px 12px;background:#f59e0b;color:white;border:0;border-radius:6px;cursor:pointer;font-size:12px;">立刻重启监听器</button>';
+  } else if (s.action === 'restart_monitor') {
+    // v3.0.7.1: 通用警告 — 重启常常能解开卡住状态
+    diagActions.innerHTML =
+      '<button onclick="diagRestartMonitor(this)" style="padding:6px 12px;background:#f59e0b;color:white;border:0;border-radius:6px;cursor:pointer;font-size:12px;">立刻重启监听器</button>' +
+      '<span style="color:#7c8a9a;font-size:12px;margin-left:10px;">(重启 = 清空写入退避 + 立刻重试一轮)</span>';
   } else if (s.action === 'wait') {
+    // v3.0.7 之前的 fallback,新版本应该不再走这里 — 留兼容
     diagActions.innerHTML = '<span style="color:#7c8a9a;font-size:12px;">系统自动退避重试,一般 15-30 分钟内自愈</span>';
+  }
+}
+
+// v3.0.7.1: 驾驶舱「立刻重启监听器」按钮 click handler
+// 复用现有 /api/restart endpoint (web.py:2207, 跟账号管理页「重启监听」按钮同一个),
+// 0 新后端代码,0 安全模型变化 — 只是把现有 login_required 重启能力新位置暴露。
+async function diagRestartMonitor(btn) {
+  if (!confirm('确认重启监听器?\n\n重启会清空所有账号的写入退避状态并立刻重试一轮。\n大约 5-10 秒完成,期间消息接收不会丢(Telethon session 持久化)。')) {
+    return;
+  }
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '重启中...';
+  try {
+    const r = await fetch('/api/restart', {method: 'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      btn.style.background = '#10b981';
+      btn.textContent = '✓ ' + (j.msg || '已重启');
+      // 30 秒后自动恢复按钮(诊断条本身让前端 poll 自己决定是否还显示)
+      setTimeout(() => { btn.disabled = false; btn.textContent = orig; btn.style.background = '#f59e0b'; }, 30000);
+    } else {
+      // /api/restart 失败响应字段叫 error 不是 msg (web.py:2218)
+      btn.style.background = '#ef4444';
+      btn.textContent = '✗ ' + (j.error || j.msg || '失败');
+      setTimeout(() => { btn.disabled = false; btn.textContent = orig; btn.style.background = '#f59e0b'; }, 8000);
+    }
+  } catch (e) {
+    btn.style.background = '#ef4444';
+    btn.textContent = '✗ 网络错误';
+    setTimeout(() => { btn.disabled = false; btn.textContent = orig; btn.style.background = '#f59e0b'; }, 8000);
   }
 }
 
@@ -1307,6 +1360,191 @@ poll();
     }catch(e){}
   })();
 })();
+</script>
+
+{# v3.0.8: 深度诊断 modal — 拉 SQL 明细 + 一键修复 + 一键重启 #}
+<div id="sheets-deep-diag-modal" style="display:none;position:fixed;inset:0;background:rgba(5,5,5,0.85);z-index:9999;backdrop-filter:blur(8px);" onclick="if(event.target===this)closeSheetsDeepDiag()">
+  <div style="max-width:900px;margin:5vh auto;background:#0d1320;border:1px solid rgba(126,201,255,0.3);border-radius:12px;padding:24px;max-height:90vh;overflow-y:auto;color:#cfe3f5;font-family:JetBrains Mono,monospace;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <h3 style="margin:0;color:#7ec9ff;font-size:16px;">📊 Sheets 写入卡死深度诊断</h3>
+      <button onclick="closeSheetsDeepDiag()" style="background:transparent;border:0;color:#7c8a9a;font-size:24px;cursor:pointer;line-height:1;">×</button>
+    </div>
+    <div id="sdd-loading" style="color:#7c8a9a;text-align:center;padding:30px;">加载中...</div>
+    <div id="sdd-content" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+let _sddData = null;
+
+function openSheetsDeepDiag() {
+  const modal = document.getElementById('sheets-deep-diag-modal');
+  modal.style.display = 'block';
+  document.getElementById('sdd-loading').style.display = 'block';
+  document.getElementById('sdd-loading').textContent = '加载中...';
+  document.getElementById('sdd-content').style.display = 'none';
+  fetch('/api/diag/sheets-stuck-detail')
+    .then(r => r.json())
+    .then(data => {
+      _sddData = data;
+      document.getElementById('sdd-loading').style.display = 'none';
+      const c = document.getElementById('sdd-content');
+      c.style.display = 'block';
+      c.innerHTML = renderSheetsDeepDiag(data);
+    })
+    .catch(e => {
+      document.getElementById('sdd-loading').textContent = '✗ 加载失败: ' + e.message;
+    });
+}
+
+function closeSheetsDeepDiag() {
+  document.getElementById('sheets-deep-diag-modal').style.display = 'none';
+}
+
+function renderSheetsDeepDiag(d) {
+  const acc = d.per_account_unwritten || [];
+  const orphan = d.orphan_messages || [];
+  const noCG = d.peers_no_col_group || [];
+  const missWS = d.missing_worksheets || [];
+  const errs = d.errors || [];
+
+  let html = '';
+
+  // 错误条
+  if (errs.length) {
+    html += '<div style="background:rgba(240,82,102,0.14);border:1px solid #f05266;padding:10px;border-radius:6px;margin-bottom:12px;font-size:12px;">';
+    html += '<b>诊断本身报错</b>:<br>' + errs.map(e => '• ' + escapeHtml(e)).join('<br>');
+    html += '</div>';
+  }
+
+  // 总览
+  const totalUnwritten = acc.reduce((sum, a) => sum + a.unwritten_count, 0);
+  const totalOrphan = orphan.reduce((sum, o) => sum + o.count, 0);
+  html += '<div style="background:rgba(126,201,255,0.08);padding:12px;border-radius:6px;margin-bottom:16px;font-size:13px;">';
+  html += '总未写消息:<b style="color:#fbbf24;">' + totalUnwritten + '</b> 条';
+  html += ' &nbsp;|&nbsp; 孤儿消息:<b style="color:' + (totalOrphan > 0 ? '#f05266' : '#4ade80') + ';">' + totalOrphan + '</b> 条';
+  html += ' &nbsp;|&nbsp; col_group 缺失 peer:<b style="color:' + (noCG.length > 0 ? '#f05266' : '#4ade80') + ';">' + noCG.length + '</b> 个';
+  html += ' &nbsp;|&nbsp; 缺 sheet_tab 账号:<b style="color:' + (missWS.length > 0 ? '#fbbf24' : '#4ade80') + ';">' + missWS.length + '</b> 个';
+  html += '</div>';
+
+  // 一键修复按钮区
+  const hasFixable = totalOrphan > 0 || noCG.length > 0;
+  if (hasFixable) {
+    html += '<div style="background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);padding:12px;border-radius:6px;margin-bottom:16px;">';
+    html += '<div style="font-size:13px;margin-bottom:8px;color:#fbbf24;"><b>检测到可一键修复的卡住根因:</b></div>';
+    if (totalOrphan > 0) {
+      html += '<button onclick="diagFixStuck(\'orphan_messages\', this)" style="margin-right:8px;padding:6px 12px;background:#f59e0b;color:white;border:0;border-radius:6px;cursor:pointer;font-size:12px;">';
+      html += '修复 ' + totalOrphan + ' 条孤儿消息(放弃,标已写)';
+      html += '</button>';
+    }
+    if (noCG.length > 0) {
+      html += '<button onclick="diagFixStuck(\'col_group_null\', this)" style="margin-right:8px;padding:6px 12px;background:#f59e0b;color:white;border:0;border-radius:6px;cursor:pointer;font-size:12px;">';
+      html += '修复 ' + noCG.length + ' 个 peer 列组缺失';
+      html += '</button>';
+    }
+    if (totalOrphan > 0 && noCG.length > 0) {
+      html += '<button onclick="diagFixStuck(\'all\', this)" style="padding:6px 12px;background:#10b981;color:white;border:0;border-radius:6px;cursor:pointer;font-size:12px;">';
+      html += '一键修复全部';
+      html += '</button>';
+    }
+    html += '<div id="sdd-fix-result" style="margin-top:8px;font-size:12px;"></div>';
+    html += '</div>';
+  } else if (totalUnwritten > 0) {
+    html += '<div style="background:rgba(74,222,128,0.10);border:1px solid rgba(74,222,128,0.35);padding:12px;border-radius:6px;margin-bottom:16px;font-size:13px;color:#9ef0b8;">';
+    html += '✓ DB 状态正常,无孤儿/无列组缺失。卡住可能是:监听器循环挂了 / 持续 429 退避 → 试驾驶舱「立刻重启监听器」按钮';
+    html += '</div>';
+  } else {
+    html += '<div style="background:rgba(74,222,128,0.10);border:1px solid rgba(74,222,128,0.35);padding:12px;border-radius:6px;margin-bottom:16px;font-size:13px;color:#9ef0b8;">';
+    html += '✓ 所有消息已写完,系统正常';
+    html += '</div>';
+  }
+
+  // 各账号未写明细
+  if (acc.length) {
+    html += '<div style="margin-bottom:14px;"><div style="font-size:12px;color:#7c8a9a;margin-bottom:6px;">▾ 各账号未写消息(top 50):</div>';
+    html += '<div style="background:#0a0e14;padding:10px;border-radius:6px;font-size:11px;max-height:200px;overflow-y:auto;">';
+    html += acc.map(a => {
+      const orphCnt = (orphan.find(o => o.account_id === a.account_id) || {}).count || 0;
+      const orphStr = orphCnt > 0 ? ' <span style="color:#f05266;">(其中孤儿 ' + orphCnt + ')</span>' : '';
+      return '<div style="padding:3px 0;border-bottom:1px solid rgba(126,201,255,0.08);">'
+           + 'account_id=<b>' + a.account_id + '</b> '
+           + (a.phone ? escapeHtml(a.phone) + ' ' : '')
+           + (a.name ? escapeHtml(a.name) + ' ' : '')
+           + '→ <b style="color:#fbbf24;">' + a.unwritten_count + '</b> 条未写'
+           + orphStr
+           + '</div>';
+    }).join('');
+    html += '</div></div>';
+  }
+
+  // col_group 缺失明细
+  if (noCG.length) {
+    html += '<div style="margin-bottom:14px;"><div style="font-size:12px;color:#7c8a9a;margin-bottom:6px;">▾ col_group 缺失的 peer(写入时会崩):</div>';
+    html += '<div style="background:#0a0e14;padding:10px;border-radius:6px;font-size:11px;">';
+    html += noCG.slice(0, 30).map(p =>
+      '<div>peer_id=' + p.peer_id + ' account_id=' + p.account_id + ' tg_id=' + p.tg_id + ' 卡 ' + (p.stuck_message_count || 0) + ' 条</div>'
+    ).join('');
+    if (noCG.length > 30) html += '<div style="color:#7c8a9a;">... 还有 ' + (noCG.length - 30) + ' 个未显示</div>';
+    html += '</div></div>';
+  }
+
+  // 缺 sheet_tab 账号明细
+  if (missWS.length) {
+    html += '<div style="margin-bottom:14px;"><div style="font-size:12px;color:#7c8a9a;margin-bottom:6px;">▾ accounts 缺 sheet_tab(get_or_create_sheet 撞失败):</div>';
+    html += '<div style="background:#0a0e14;padding:10px;border-radius:6px;font-size:11px;">';
+    html += missWS.slice(0, 30).map(a =>
+      '<div>account_id=' + a.account_id + ' phone=' + escapeHtml(a.phone) + ' 期望分页名: ' + escapeHtml(a.expected_tab_name) + '</div>'
+    ).join('');
+    html += '</div></div>';
+  }
+
+  return html;
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function diagFixStuck(action, btn) {
+  if (!confirm('确认执行「' + action + '」修复?\n\n孤儿消息会被标 sheet_written=1(放弃,反正写不进去)。\ncol_group=NULL 的 peer 会自动分配下一个空闲列组。\n操作不可逆,但只动 SQLite,Sheet 数据不变。')) return;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '修复中...';
+  const result = document.getElementById('sdd-fix-result');
+  result.innerHTML = '';
+  try {
+    const r = await fetch('/api/diag/sheets-fix-stuck', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: action}),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      result.style.color = '#9ef0b8';
+      let lines = ['<b>✓ ' + escapeHtml(j.msg || '修复完成') + '</b>'];
+      for (const k in (j.results || {})) {
+        const r = j.results[k];
+        lines.push('• ' + k + ': ' + escapeHtml(r.msg || JSON.stringify(r)));
+      }
+      if (j.needs_restart) {
+        lines.push('<br><b style="color:#fbbf24;">⚠ 请关闭本框 → 点驾驶舱诊断卡片的「立刻重启监听器」按钮让变动生效</b>');
+      }
+      result.innerHTML = lines.join('<br>');
+      btn.style.background = '#10b981';
+      btn.textContent = '✓ 已修复';
+    } else {
+      result.style.color = '#f05266';
+      result.innerHTML = '✗ ' + escapeHtml(j.msg || '修复失败');
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  } catch (e) {
+    result.style.color = '#f05266';
+    result.innerHTML = '✗ 网络错误: ' + escapeHtml(e.message);
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
 </script>
 
 </body>
