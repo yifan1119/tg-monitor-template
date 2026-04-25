@@ -668,8 +668,35 @@ def _diagnose_sheets_stuck(pending, last_write_ts):
     try:
         import docker as docker_sdk
         client = docker_sdk.from_env()
-        container_name = f"tg-monitor-{config.COMPANY_NAME or 'default'}"
-        c = client.containers.get(container_name)
+        # v3.0.8.3 (Codex P1 修, 多部门 VPS 安全): 跟 web.py:_start_tg_monitor 同策略 —
+        # 1. tg-monitor-{COMPANY_NAME} (老路径)
+        # 2. 同 compose project label 的 tg-monitor service (多部门 VPS 安全)
+        # 3. 全 tg-monitor-* prefix 第一个 (单部门 VPS 终极兜底)
+        primary = f"tg-monitor-{config.COMPANY_NAME or 'default'}"
+        c = None
+        try:
+            c = client.containers.get(primary)
+        except docker_sdk.errors.NotFound:
+            try:
+                import socket as _socket
+                me = client.containers.get(_socket.gethostname())
+                project = (me.labels or {}).get("com.docker.compose.project", "")
+                if project:
+                    siblings = client.containers.list(all=True, filters={
+                        "label": [
+                            f"com.docker.compose.project={project}",
+                            "com.docker.compose.service=tg-monitor",
+                        ]
+                    })
+                    if siblings:
+                        c = siblings[0]
+            except Exception:
+                pass
+            if c is None:
+                cands = [x for x in client.containers.list(all=True) if x.name.startswith("tg-monitor-")]
+                if not cands:
+                    return "warning", f"⚠ 积压 {pending} 条,无法自动诊断(找不到 tg-monitor 容器)", None
+                c = cands[0]
         # 只看最近 1 小时 log,避免拉太大
         import time as _time
         since = int(_time.time() - 3600)

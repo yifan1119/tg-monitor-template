@@ -448,25 +448,59 @@ def _schedule_listener_restart(delay=4.0):
 
 
 def _start_tg_monitor():
-    """通过 docker API 重启 tg-monitor 容器（install.sh 已建好，只需 restart 就会读新 .env）"""
+    """通过 docker API 重启 tg-monitor 容器（install.sh 已建好，只需 restart 就会读新 .env）。
+
+    v3.0.8.3 (Codex P1 修, 多部门 VPS 安全): fallback 从「prefix 找任何 tg-monitor-*」
+    改成「同 docker compose project 找 service=tg-monitor」, 多部门 VPS 不会误重启
+    别人的容器。fallback 链:
+      1. tg-monitor-{COMPANY_NAME} (老路径, 大多数客户)
+      2. 同 compose project label 的 tg-monitor service (跨进程发现自己的兄弟容器)
+      3. 全 tg-monitor-* prefix 第一个 (终极兜底, 单部门 VPS 安全)
+    """
     try:
         import docker as docker_sdk
         client = docker_sdk.from_env()
         company = read_env().get("COMPANY_NAME", "")
-        if not company:
-            return False, "COMPANY_NAME 未设置"
-        container_name = f"tg-monitor-{company}"
+
+        # Step 1: 老路径优先 — tg-monitor-{COMPANY_NAME}
+        if company:
+            container_name = f"tg-monitor-{company}"
+            try:
+                c = client.containers.get(container_name)
+                c.restart(timeout=10)
+                return True, f"{container_name} 已重启，开始读取新配置"
+            except docker_sdk.errors.NotFound:
+                pass
+
+        # Step 2: compose project label fallback — 找跟当前 web 容器同 project 的 tg-monitor service
+        # (多部门 VPS 安全: 永远只 restart 自己 compose project 的兄弟容器)
         try:
-            c = client.containers.get(container_name)
-            c.restart(timeout=10)
-            return True, f"{container_name} 已重启，开始读取新配置"
-        except docker_sdk.errors.NotFound:
-            # 找旧名字（首次设置时 container_name 可能是 default）
-            for c in client.containers.list(all=True):
-                if c.name.startswith("tg-monitor-"):
+            import socket as _socket
+            me = client.containers.get(_socket.gethostname())
+            project = (me.labels or {}).get("com.docker.compose.project", "")
+            if project:
+                siblings = client.containers.list(all=True, filters={
+                    "label": [
+                        f"com.docker.compose.project={project}",
+                        "com.docker.compose.service=tg-monitor",
+                    ]
+                })
+                if siblings:
+                    c = siblings[0]
                     c.restart(timeout=10)
-                    return True, f"{c.name} 已重启（建议之后手动 docker compose up -d --build 重命名为 {container_name}）"
-            return False, f"找不到 tg-monitor 容器，请手动 docker compose up -d --build"
+                    return True, f"{c.name} 已重启 (compose project={project} fallback)"
+        except Exception as label_err:
+            logger.warning("[restart] compose label fallback 失败 (跳到 prefix fallback): %s", label_err)
+
+        # Step 3: prefix fallback (终极兜底, 仅单部门 VPS 安全)
+        # 多部门 VPS 此处可能误重启别人, 但 step 2 应该已经命中。如果连 step 2 都没命中
+        # 说明部署严重异常 (compose label 都没了), 此时 prefix fallback 也不一定对
+        cands = [c for c in client.containers.list(all=True) if c.name.startswith("tg-monitor-")]
+        if cands:
+            c = cands[0]
+            c.restart(timeout=10)
+            return True, f"{c.name} 已重启 (prefix fallback, 建议手动 docker compose up -d --build 对齐 .env COMPANY_NAME)"
+        return False, "找不到 tg-monitor 容器,请手动 docker compose up -d --build"
     except Exception as e:
         return False, str(e)
 
@@ -2229,16 +2263,17 @@ def api_dedup_clear():
 @app.route("/api/restart", methods=["POST"])
 @login_required
 def restart_monitor():
-    """重启监控容器，加载新 session (via docker.sock)"""
-    try:
-        import docker as docker_sdk
-        client = docker_sdk.from_env()
-        container_name = "tg-monitor-" + config.COMPANY_NAME
-        container = client.containers.get(container_name)
-        container.restart(timeout=10)
-        return jsonify({"ok": True, "msg": "监控已重启，新账号将自动开始监听"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    """重启监控容器，加载新 session (via docker.sock)。
+
+    v3.0.8.3 修: 改用 _start_tg_monitor() 复用 line 450-471 的 fallback —
+    硬拼 'tg-monitor-' + config.COMPANY_NAME 找不到时, 自动 fallback 到本机任何
+    tg-monitor-* 容器 restart, 解决 .env COMPANY_NAME 跟 docker compose project
+    name 对不齐的部署遗留问题 (客户案例: .env=dingfenggs1 但实际容器=dingfenggs2)。
+    """
+    ok, msg = _start_tg_monitor()
+    if ok:
+        return jsonify({"ok": True, "msg": msg})
+    return jsonify({"ok": False, "error": msg})
 
 
 @app.route("/api/remove", methods=["POST"])

@@ -2,7 +2,8 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v3.0.8.2(2026-04-25) — 🔧 **升级提示去掉 SSH 包装 + 复制按钮 HTTP/HTTPS 三层兜底 + 深度诊断永远可见入口** — `upgrader.build_upgrade_cmd` 不再 wrap `ssh root@<IP>`(误导客户);3 个 templates 复制按钮加 `copyTextFallback`(`navigator.clipboard` → `execCommand('copy')` → `prompt()` 三层);驾驶舱日志面板上方新增「Sheet 写入诊断 ▸ 立刻深度诊断」**永远可见按钮**(admin only),客户随时点查未写明细 + 一键修
+> 📌 **最新版**:v3.0.8.3(2026-04-25) — 🔧 **修「立刻重启监听器」404 找不到容器** — `/api/restart` 改用 `_start_tg_monitor()` 复用现有 fallback(`.env COMPANY_NAME` 跟实际 docker 容器名对不齐时自动 fallback 到本机任意 tg-monitor-*);`dashboard_api._diagnose_sheets_stuck` 同样加 fallback。客户案例: URL `gs2` 但 `.env` 是 `gs1`(部署遗留 inconsistency)
+> 之前:v3.0.8.2(2026-04-25) — 🔧 **升级提示去掉 SSH 包装 + 复制按钮 HTTP/HTTPS 三层兜底 + 深度诊断永远可见入口** — `upgrader.build_upgrade_cmd` 不再 wrap `ssh root@<IP>`(误导客户);3 个 templates 复制按钮加 `copyTextFallback`(`navigator.clipboard` → `execCommand('copy')` → `prompt()` 三层);驾驶舱日志面板上方新增「Sheet 写入诊断 ▸ 立刻深度诊断」**永远可见按钮**(admin only),客户随时点查未写明细 + 一键修
 > 之前:v3.0.8.1(2026-04-25) — 🔧 **docker cp 漏同步根治 + 普通用户隐藏 admin 按钮** — `docker-compose.yml` `tg-web` command 从 `cp -rf templates 目录复制`(嵌套 bug,Flask 读旧版)改成 `templates/*.html` 文件级 glob,以后 templates / README / release_notes 改动 update.sh 后自动生效不用 docker exec 手动同步;`web.py::dashboard_page` 传 `is_admin` 给 template,`dashboard.html` 加 `IS_ADMIN` 全局 JS 标志,管理员才看到「立刻深度诊断」/「一键修复」/「立刻重启监听器」按钮,普通成员看到「请联系管理员」文字提示。CLAUDE.md 硬规定 #8 长期修法落地
 > 之前:v3.0.8(2026-04-25) — 🚀 **Sheet 写入治本 + 卡死一键自助** — 写入用 `values.append` 替代 `update + col_values read`(quota 用量砍半 + 客户改表单不会被覆盖) + 全局令牌桶 50 req/min + 驾驶舱「立刻深度诊断」modal + 「一键修复」按钮 + 「立刻重启监听器」按钮(整合 v3.0.7.1) + 设置页 `SHEETS_FLUSH_INTERVAL` / `SHEETS_RATE_LIMIT_PER_MIN`
 > 之前:v3.0.7(2026-04-25) — 🔁 **OAuth 重新授权后 Sheets 自愈** — 闭合 v3.0.6 的诊断—修复链路。客户在驾驶舱点「去重新授权」走完 OAuth,**5-30 秒内 Sheets 自动恢复写入**,不用 SSH `docker restart`。`flush_pending` 加 `RefreshError` 自愈,`OAUTH_FAIL_MARKERS` 抽到 `oauth_helper.py` 单一来源(诊断卡片 + 自愈逻辑共用)。`SheetsWriter._write_lock` 改 RLock 防递归死锁
@@ -399,7 +400,14 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v3.0.8.2** (2026-04-25) — 当前稳定版 🔧 **(升级提示去 SSH 包装 + 复制 fallback + 深度诊断永远可见)**
+- **v3.0.8.3** (2026-04-25) — 当前稳定版 🔧 **(修「立刻重启监听器」404 找不到容器)**
+  - [FIX] **`web.py /api/restart` 改用 `_start_tg_monitor()` 复用 fallback**(ADR-0025)— 老 endpoint 直接 `client.containers.get('tg-monitor-' + COMPANY_NAME)` 找不到就 throw 404,现在 fallback 到本机任意 `tg-monitor-*`(`_start_tg_monitor` 早就有此逻辑,但 `/api/restart` 没复用)
+  - [FIX] **`dashboard_api._diagnose_sheets_stuck` 加同样 fallback** — 部署遗留 COMPANY_NAME 错配的部门 Sheet 诊断也能用
+  - [SCOPE] 不动设置页 COMPANY_NAME 锁定逻辑 — 部署 lifecycle 重新设计留 v3.1+
+  - [FUTURE] session_health get_me() false positive 重试逻辑留 v3.0.9
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v3.0.8.2** (2026-04-25) 🔧 **(升级提示去 SSH 包装 + 复制 fallback + 深度诊断永远可见)**
   - [FIX] **`upgrader.build_upgrade_cmd` 去掉 `ssh root@<IP>` wrap**(ADR-0024)— `.env` 配 `VPS_PUBLIC_IP` 时不再生成 `ssh root@1.2.3.4 "cd ... && bash update.sh"`(客户没有 root 凭据 + 命令本来就要在 VPS 跑,wrap 误导)。直接给 `cd ... && bash update.sh`
   - [FIX] **3 个 templates 复制按钮加 `copyTextFallback` 三层兜底** — HTTPS `navigator.clipboard` → HTTP `execCommand('copy')` → 终极 `prompt()` 弹窗。修 v3.0.8.1 客户「点了没复制」反馈
   - [NEW] **驾驶舱「Sheet 写入诊断」永远可见入口** — 日志面板上方新增 `{% if is_admin %}` 区块,管理员随时点「立刻深度诊断」查未写明细 / 孤儿消息 / col_group 缺失 + 一键修(复用 v3.0.8 modal,无新代码)
