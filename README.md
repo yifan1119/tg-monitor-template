@@ -2,7 +2,8 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v3.0.8.1(2026-04-25) — 🔧 **docker cp 漏同步根治 + 普通用户隐藏 admin 按钮** — `docker-compose.yml` `tg-web` command 从 `cp -rf templates 目录复制`(嵌套 bug,Flask 读旧版)改成 `templates/*.html` 文件级 glob,以后 templates / README / release_notes 改动 update.sh 后自动生效不用 docker exec 手动同步;`web.py::dashboard_page` 传 `is_admin` 给 template,`dashboard.html` 加 `IS_ADMIN` 全局 JS 标志,管理员才看到「立刻深度诊断」/「一键修复」/「立刻重启监听器」按钮,普通成员看到「请联系管理员」文字提示。CLAUDE.md 硬规定 #8 长期修法落地
+> 📌 **最新版**:v3.0.8.2(2026-04-25) — 🔧 **升级提示去掉 SSH 包装 + 复制按钮 HTTP/HTTPS 三层兜底 + 深度诊断永远可见入口** — `upgrader.build_upgrade_cmd` 不再 wrap `ssh root@<IP>`(误导客户);3 个 templates 复制按钮加 `copyTextFallback`(`navigator.clipboard` → `execCommand('copy')` → `prompt()` 三层);驾驶舱日志面板上方新增「Sheet 写入诊断 ▸ 立刻深度诊断」**永远可见按钮**(admin only),客户随时点查未写明细 + 一键修
+> 之前:v3.0.8.1(2026-04-25) — 🔧 **docker cp 漏同步根治 + 普通用户隐藏 admin 按钮** — `docker-compose.yml` `tg-web` command 从 `cp -rf templates 目录复制`(嵌套 bug,Flask 读旧版)改成 `templates/*.html` 文件级 glob,以后 templates / README / release_notes 改动 update.sh 后自动生效不用 docker exec 手动同步;`web.py::dashboard_page` 传 `is_admin` 给 template,`dashboard.html` 加 `IS_ADMIN` 全局 JS 标志,管理员才看到「立刻深度诊断」/「一键修复」/「立刻重启监听器」按钮,普通成员看到「请联系管理员」文字提示。CLAUDE.md 硬规定 #8 长期修法落地
 > 之前:v3.0.8(2026-04-25) — 🚀 **Sheet 写入治本 + 卡死一键自助** — 写入用 `values.append` 替代 `update + col_values read`(quota 用量砍半 + 客户改表单不会被覆盖) + 全局令牌桶 50 req/min + 驾驶舱「立刻深度诊断」modal + 「一键修复」按钮 + 「立刻重启监听器」按钮(整合 v3.0.7.1) + 设置页 `SHEETS_FLUSH_INTERVAL` / `SHEETS_RATE_LIMIT_PER_MIN`
 > 之前:v3.0.7(2026-04-25) — 🔁 **OAuth 重新授权后 Sheets 自愈** — 闭合 v3.0.6 的诊断—修复链路。客户在驾驶舱点「去重新授权」走完 OAuth,**5-30 秒内 Sheets 自动恢复写入**,不用 SSH `docker restart`。`flush_pending` 加 `RefreshError` 自愈,`OAUTH_FAIL_MARKERS` 抽到 `oauth_helper.py` 单一来源(诊断卡片 + 自愈逻辑共用)。`SheetsWriter._write_lock` 改 RLock 防递归死锁
 > 之前:v3.0.6(2026-04-24) — 🛠 **驾驶舱三件套运维自助化** — 后台日志面板 + Sheet 堵塞自动诊断 + REMIND_DELETE 文案 UI
@@ -398,7 +399,14 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v3.0.8.1** (2026-04-25) — 当前稳定版 🔧 **(docker cp 漏同步根治 + 普通用户隐藏 admin 按钮)**
+- **v3.0.8.2** (2026-04-25) — 当前稳定版 🔧 **(升级提示去 SSH 包装 + 复制 fallback + 深度诊断永远可见)**
+  - [FIX] **`upgrader.build_upgrade_cmd` 去掉 `ssh root@<IP>` wrap**(ADR-0024)— `.env` 配 `VPS_PUBLIC_IP` 时不再生成 `ssh root@1.2.3.4 "cd ... && bash update.sh"`(客户没有 root 凭据 + 命令本来就要在 VPS 跑,wrap 误导)。直接给 `cd ... && bash update.sh`
+  - [FIX] **3 个 templates 复制按钮加 `copyTextFallback` 三层兜底** — HTTPS `navigator.clipboard` → HTTP `execCommand('copy')` → 终极 `prompt()` 弹窗。修 v3.0.8.1 客户「点了没复制」反馈
+  - [NEW] **驾驶舱「Sheet 写入诊断」永远可见入口** — 日志面板上方新增 `{% if is_admin %}` 区块,管理员随时点「立刻深度诊断」查未写明细 / 孤儿消息 / col_group 缺失 + 一键修(复用 v3.0.8 modal,无新代码)
+  - [UI] 升级 modal 文案 "📋 复制 SSH 命令" → "📋 复制升级命令";底部说明改 "涉及镜像重建的版本要在服务器跑命令(给你复制好,SSH 上去贴一下就行)"
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v3.0.8.1** (2026-04-25) 🔧 **(docker cp 漏同步根治 + 普通用户隐藏 admin 按钮)**
   - [FIX] **docker-compose.yml `tg-web` command 改 `cp -rf templates 目录复制` → `templates/*.html` 文件级 glob**(ADR-0023)— 修 v3.0.8 客户「升级了看不到深度诊断按钮」的根因(嵌套 cp 让 Flask 读不到新版),CLAUDE.md 硬规定 #8 长期修法落地
   - [FIX] **`tg-web` + `tg-monitor` command 都加 `cp README.md` + `cp release_notes.json`** — 升级后 `_app_version_string` / update_checker 推送都用最新文案,不再吃镜像旧版
   - [UX] **`web.py::dashboard_page` 传 `is_admin` 给 template + `dashboard.html` 加 `IS_ADMIN` 全局 JS 标志** — 普通成员账号不再显示「立刻深度诊断」/「一键修复」/「立刻重启监听器」三个按钮(避免点了 403),改显示「请联系管理员重启监听器」文字提示

@@ -235,7 +235,13 @@ def _run_upgrade(company: str, latest_sha: str):
 
 
 def build_upgrade_cmd(company: str = "") -> str:
-    """生成升级命令 — 读 .env 的 INSTALL_DIR 和 VPS_PUBLIC_IP,非标准安装/带 IP 都兼容"""
+    """生成升级命令 — 只返本地 cd + bash update.sh, 不再 wrap ssh root@IP。
+
+    v3.0.8.2 修: 之前 .env 有 VPS_PUBLIC_IP 时返 'ssh root@IP "cd ... && bash update.sh"',
+    客户看到「ssh root@xxx」会误以为要从某个跳板机执行,但实际上命令本身是要在 VPS 上跑的。
+    更糟的是这个 wrap 后的 ssh 命令客户也没有 root 凭据可用。直接给命令本身让客户自己 ssh
+    进 VPS 后跑 — 跟 release_notes 里的升级指引完全一致。
+    """
     env_path = REPO_ROOT / ".env"
     env = {}
     if env_path.exists():
@@ -245,9 +251,6 @@ def build_upgrade_cmd(company: str = "") -> str:
                 env[k.strip()] = v.strip().strip('"').strip("'")
     company = company or env.get("COMPANY_NAME", "") or "default"
     install_dir = env.get("INSTALL_DIR") or f"/root/tg-monitor-{company}"
-    ip = env.get("VPS_PUBLIC_IP", "").strip()
-    if ip:
-        return f'ssh root@{ip} "cd {install_dir} && bash update.sh"'
     return f"cd {install_dir} && bash update.sh"
 
 

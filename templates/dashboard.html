@@ -676,6 +676,17 @@
     </div>
   </div>
 
+  {# v3.0.8.2: Sheet 深度诊断 — 永远可见入口, 不依赖卡死状态 (admin only) #}
+  {% if is_admin %}
+  <div style="margin-top:18px;">
+    <div class="section-title" style="display:flex;align-items:center;gap:12px;">
+      <span>Sheet 写入诊断</span>
+      <button onclick="openSheetsDeepDiag()" style="padding:5px 12px;background:rgba(126,201,255,0.15);border:1px solid rgba(126,201,255,0.4);color:#7ec9ff;border-radius:6px;cursor:pointer;font-size:12px;">▸ 立刻深度诊断</button>
+      <span style="font-size:11px;color:#7c8a9a;font-weight:400;">(任何时候都能查 — 看各账号未写数 / 孤儿消息 / col_group 缺失明细 + 一键修复)</span>
+    </div>
+  </div>
+  {% endif %}
+
   {# v3.0.6: 后台日志查看器 — 免 SSH 看容器 log #}
   <div style="margin-top:24px;">
     <div class="section-title" style="display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none;" onclick="toggleLogPanel()">
@@ -1300,14 +1311,41 @@ poll();
       '</div>'+
       '<div style="display:flex;gap:10px;flex-wrap:wrap;">'+
         '<button type="button" id="upg-soft" style="flex:1;min-width:160px;padding:12px 16px;background:rgba(42,171,238,0.15);border:1px solid rgba(42,171,238,0.5);color:#2aabee;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;">⬇ 一键软升级</button>'+
-        '<button type="button" id="upg-ssh" style="flex:1;min-width:160px;padding:12px 16px;background:transparent;border:1px solid rgba(191,214,232,0.3);color:#bfd6e8;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;">📋 复制 SSH 命令</button>'+
+        '<button type="button" id="upg-ssh" style="flex:1;min-width:160px;padding:12px 16px;background:transparent;border:1px solid rgba(191,214,232,0.3);color:#bfd6e8;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;">📋 复制升级命令</button>'+
       '</div>'+
-      '<div style="margin-top:10px;font-size:11px;color:#6a7f93;">软升级 ≈ 15 秒,失败会自动回退。涉及镜像重建的版本会提示你用 SSH。</div>';
+      '<div style="margin-top:10px;font-size:11px;color:#6a7f93;">软升级 ≈ 15 秒,失败会自动回退。涉及镜像重建的版本要在服务器跑命令(给你复制好,你 SSH 上去贴一下就行)。</div>';
 
     document.getElementById('upg-soft').onclick=doSoftUpgrade;
     document.getElementById('upg-ssh').onclick=async function(){
-      try{ await navigator.clipboard.writeText(cmds); this.textContent='✓ 已复制'; setTimeout(()=>{this.textContent='📋 复制 SSH 命令';},2000);}catch(e){ prompt('复制以下命令:', cmds); }
+      try{ await navigator.clipboard.writeText(cmds); this.textContent='✓ 已复制'; setTimeout(()=>{this.textContent='📋 复制升级命令';},2000);}catch(e){ prompt('复制以下命令:', cmds); }
     };
+  }
+
+  // v3.0.8.2: HTTP 场景 navigator.clipboard 不可用, 加 execCommand fallback + prompt 兜底
+  // (升级提示 modal 里有 inline onclick 调这个 helper)
+  window.copyTextFallback = function(text, btn) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function(){
+        if (btn) btn.textContent = '✓ 已复制';
+      }).catch(function(){
+        _legacyCopy(text, btn);
+      });
+    } else {
+      _legacyCopy(text, btn);
+    }
+  };
+  function _legacyCopy(text, btn) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch(e) {}
+    document.body.removeChild(ta);
+    if (ok) {
+      if (btn) btn.textContent = '✓ 已复制';
+    } else {
+      prompt('复制以下命令:', text);
+    }
   }
 
   async function doSoftUpgrade(){
@@ -1317,12 +1355,16 @@ poll();
       var j=await r.json();
       if(!j.ok){ body.innerHTML='<div style="color:#ff6b6b;">升级启动失败: '+esc(j.error||'未知错误')+'</div>'; return; }
       if(j.need_rebuild){
+        // v3.0.8.2 Codex P1 修: JSON.stringify 输出含 " 直接塞 onclick="" 会破坏 HTML 属性,
+        // 改成渲染后 querySelector 绑 onclick (closure 里安全引用 j.ssh_cmd 不走 HTML 字符串)
         body.innerHTML='<div style="padding:14px;background:rgba(255,107,107,0.1);border:1px solid rgba(255,107,107,0.4);border-radius:6px;color:#ffd0d0;">'+
           '<div style="font-weight:600;margin-bottom:6px;">⚠ 此版本涉及镜像重建</div>'+
           '<div style="font-size:12px;">改动文件: '+(j.rebuild_files||[]).map(esc).join(', ')+'</div>'+
           '<div style="margin-top:10px;padding:10px;background:#000;border-radius:4px;font-family:monospace;font-size:11px;color:#9ef0b8;word-break:break-all;">'+esc(j.ssh_cmd)+'</div>'+
-          '<button type="button" onclick="navigator.clipboard.writeText('+JSON.stringify(j.ssh_cmd)+');this.textContent=\'✓ 已复制\'" style="margin-top:10px;padding:8px 14px;background:rgba(42,171,238,0.15);border:1px solid rgba(42,171,238,0.5);color:#2aabee;border-radius:4px;cursor:pointer;font-size:12px;">📋 复制命令</button>'+
+          '<button type="button" id="upg-rebuild-copy" style="margin-top:10px;padding:8px 14px;background:rgba(42,171,238,0.15);border:1px solid rgba(42,171,238,0.5);color:#2aabee;border-radius:4px;cursor:pointer;font-size:12px;">📋 复制命令</button>'+
         '</div>';
+        var rb = document.getElementById('upg-rebuild-copy');
+        if (rb) rb.onclick = function(){ copyTextFallback(j.ssh_cmd, this); };
         return;
       }
       if(j.started){
