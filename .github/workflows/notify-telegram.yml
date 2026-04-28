@@ -30,10 +30,17 @@ jobs:
           ACTOR='${{ github.actor }}'
           BODY=""
 
+          # HTML escape helper — Telegram parse_mode=HTML 只允许 <b>/<i>/<u>/<s>/<a>/<code>/<pre>
+          # 用户内容里的 <,>,& 必须转义,否则 Telegram parser 会把"< xyz"当成开标签直接 400
+          # 模板里我们自己写的 <b>/<i> 不走这个 escape。
+          html_escape() {
+            sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
+          }
+
           case "$EVENT" in
             pull_request)
               PR_NUM=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
-              PR_TITLE=$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH" | cut -c1-200)
+              PR_TITLE=$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH" | cut -c1-200 | html_escape)
               PR_URL=$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")
               MERGED=$(jq -r '.pull_request.merged' "$GITHUB_EVENT_PATH")
               if [ "$ACTION" = "opened" ] || [ "$ACTION" = "reopened" ]; then
@@ -50,11 +57,11 @@ jobs:
 
             pull_request_review)
               PR_NUM=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
-              PR_TITLE=$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH" | cut -c1-150)
+              PR_TITLE=$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH" | cut -c1-150 | html_escape)
               PR_URL=$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")
               STATE=$(jq -r '.review.state' "$GITHUB_EVENT_PATH")
               REVIEWER=$(jq -r '.review.user.login' "$GITHUB_EVENT_PATH")
-              REVIEW_BODY=$(jq -r '.review.body // ""' "$GITHUB_EVENT_PATH" | cut -c1-400)
+              REVIEW_BODY=$(jq -r '.review.body // ""' "$GITHUB_EVENT_PATH" | cut -c1-400 | html_escape)
               case "$STATE" in
                 approved)          EMOJI="✅"; LABEL="通过" ;;
                 changes_requested) EMOJI="🔴"; LABEL="要求改动" ;;
@@ -75,10 +82,10 @@ jobs:
               IS_PR=$(jq -r '.issue.pull_request // empty' "$GITHUB_EVENT_PATH")
               if [ -z "$IS_PR" ]; then exit 0; fi
               PR_NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
-              PR_TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH" | cut -c1-150)
+              PR_TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH" | cut -c1-150 | html_escape)
               PR_URL=$(jq -r '.issue.html_url' "$GITHUB_EVENT_PATH")
               COMMENTER=$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")
-              COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH" | cut -c1-500)
+              COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH" | cut -c1-500 | html_escape)
               BODY=$(printf '💬 <b>%s 评论 PR #%s</b>\n<i>%s</i>\n\n%s\n👉 %s' \
                 "$COMMENTER" "$PR_NUM" "$PR_TITLE" "$COMMENT_BODY" "$PR_URL")
               ;;
