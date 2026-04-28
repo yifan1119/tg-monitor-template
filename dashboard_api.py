@@ -328,8 +328,13 @@ def accounts_matrix():
     def _q():
         today = _today_bj()
         conn = db.get_conn()
+        # v3.0.9: SELECT 加 tg_id / business_tg_id / owner_tg_id / remind_*_text
+        # 中央台需要这些字段做 stage1/stage2 @对象反查 + 提醒模板审计
         accounts = conn.execute(
-            "SELECT id, phone, name, username, sheet_tab, company, operator FROM accounts ORDER BY id"
+            "SELECT id, phone, name, username, sheet_tab, company, operator, "
+            "       tg_id, business_tg_id, owner_tg_id, "
+            "       remind_30min_text, remind_40min_text "
+            "FROM accounts ORDER BY id"
         ).fetchall()
         out = []
         for a in accounts:
@@ -388,6 +393,13 @@ def accounts_matrix():
                 "last_heartbeat": last_msg_ts,
                 "last_heartbeat_human": _human_age(last_msg_ts),
                 "heartbeat_status": _classify_heartbeat(last_msg_ts, session_status),
+                # v3.0.9: 中央台需要的额外字段(纯加,不破坏老前端)
+                "tg_id": a["tg_id"],   # int 或 None,中央台用作账号唯一识别
+                "business_tg_id": (a["business_tg_id"] or "").strip(),   # stage1 商务 @对象
+                "owner_tg_id": (a["owner_tg_id"] or "").strip(),         # stage2 负责人 @对象
+                "remind_30min_text": (a["remind_30min_text"] or "").strip(),
+                "remind_40min_text": (a["remind_40min_text"] or "").strip(),
+                "sheet_tab": (a["sheet_tab"] or "").strip(),
             })
         return out
     return _safe(_q, [])
@@ -521,10 +533,17 @@ def alerts_today_summary():
 
 
 def alerts_recent(limit=50):
-    """最近 N 条告警 (倒序),含账号 + 对方名"""
+    """最近 N 条告警 (倒序),含账号 + 对方名
+
+    v3.0.9: SELECT 加 status/stage/keyword/reviewed_at/sheet_written/claimed_at/
+    last_write_error + account_id/peer_id/msg_id 给中央台精确 join 和违规登记筛选用。
+    新字段都是纯加,老前端读老字段不受影响。"""
     def _q():
         rows = db.get_conn().execute(
             "SELECT a.id, a.type, a.message_text, a.created_at, a.bot_message_id, "
+            "       a.account_id, a.peer_id, a.msg_id, "
+            "       a.status, a.stage, a.keyword, a.reviewed_at, "
+            "       a.sheet_written, a.claimed_at, a.last_write_error, "
             "       COALESCE(p.name, '(未知)') AS peer_name, "
             "       COALESCE(ac.name, '(未知)') AS account_name "
             "FROM alerts a "
@@ -544,6 +563,17 @@ def alerts_recent(limit=50):
                 "created_at": r["created_at"],
                 "time_short": (r["created_at"] or "")[-8:],   # HH:MM:SS
                 "pushed": bool(r["bot_message_id"]),
+                # v3.0.9 中央台扩展字段
+                "account_id": r["account_id"],
+                "peer_id": r["peer_id"],
+                "msg_id": r["msg_id"],
+                "status": r["status"] or "pending",
+                "stage": r["stage"] if r["stage"] is not None else 0,
+                "keyword": r["keyword"] or "",
+                "reviewed_at": r["reviewed_at"],
+                "sheet_written": bool(r["sheet_written"]),
+                "claimed_at": r["claimed_at"],
+                "last_write_error": r["last_write_error"] or "",
             })
         return out
     return _safe(_q, [])
@@ -1110,6 +1140,399 @@ def snapshot():
         "bot": bot_health(),
         "config": config_snapshot(),
         "update": _update_info(),
+    }
+
+
+# ============================================================
+# v3.0.9 中央台扩展查询 — 4 个新接口的查询函数
+# ============================================================
+# 设计原则(v3.0.9 Codex P1 修):
+# 1. 纯只读,共用现有 db.get_conn() 连接,跟主业务 listener/sheets/bot 完全解耦
+# 2. 所有 limit 都 clamp 到硬上限(防滥用 + 防整表扫)
+# 3. 日期参数走 LIKE / >= 索引友好,不用 strftime 函数防 index 退化
+# 4. **失败大声**:非法用户输入 → ValueError(endpoint 转 400);DB 异常往上抛(endpoint 转 500)
+#    不再 _safe() 静默吞 → 防"中央台脚本拼错参数,服务端返空数组,客户端误判'今天 0 条违规'"
+# 5. messages_filtered 必填 account_id+peer_id 用 ValueError 硬失败,不静默退化
+
+import re as _re_v309
+from datetime import datetime as _dt_v309
+
+# 硬上限(防滥用)
+_MAX_ALERTS_LIMIT   = 1000
+_MAX_PEERS_LIMIT    = 5000   # 单部门 peers 上限大约 1500,5000 留 buffer
+_MAX_MESSAGES_LIMIT = 1000
+
+# 严格 YYYY-MM-DD 正则(防 '2026-99-99' / '2026-04-01junk' 之类伪日期)
+_DATE_RE_V309 = _re_v309.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# 字段白名单(集中维护,endpoint + 查询函数共用,一致性)
+_VALID_ALERT_STATUS = ("pending", "approved", "rejected", "violation_logged",
+                       "cancelled", "handled_by_reply", "silenced")
+_VALID_ALERT_TYPE   = ("no_reply", "deleted", "keyword")
+_VALID_ALERT_STAGE  = (0, 1, 2)
+
+
+def _clamp_int(val, default, hi, lo=1):
+    """把 val 转 int 并 clamp 到 [lo, hi],非法值(None / 'abc' / 空字符串)返 default。
+
+    注意:这只用在 limit/offset 这种"非法值降级"的语义合理的参数上。
+    必填参数(account_id / peer_id)走 _require_int 硬失败。
+    """
+    try:
+        n = int(val)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _require_int(val, name):
+    """必填 int 校验 — 非法直接 ValueError,不降级。
+
+    用在 messages_filtered(account_id, peer_id) 这种"防全表扫的关键过滤参数"。
+    """
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} 必须是合法 int")
+
+
+def _parse_date(d, name):
+    """严格 YYYY-MM-DD 解析。空 / None → None;非法格式 → ValueError。
+
+    用 datetime.strptime 真正解析(防 2026-99-99 之类伪日期),不只是 regex 匹配。
+    返回标准化 'YYYY-MM-DD' 字符串供 SQL 范围比较。
+    """
+    if d is None or d == "":
+        return None
+    if not isinstance(d, str):
+        raise ValueError(f"{name} 必须是 YYYY-MM-DD 字符串")
+    if not _DATE_RE_V309.match(d):
+        raise ValueError(f"{name} 格式必须是 YYYY-MM-DD")
+    try:
+        _dt_v309.strptime(d, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"{name} 不是合法日期")
+    return d
+
+
+def _validate_choice(val, choices, name, optional=True):
+    """白名单校验。optional=True 时空值返 None,非空但不在 choices 里报 ValueError。"""
+    if val is None or val == "":
+        if optional:
+            return None
+        raise ValueError(f"{name} 必填")
+    if val not in choices:
+        raise ValueError(f"{name} 必须是 {choices} 之一")
+    return val
+
+
+def violations(from_date=None, to_date=None, alert_type=None):
+    """v3.0.9: 违规登记明细 — status='violation_logged' 的 alert 列表。
+
+    给中央台日/周/月违规报表用。包含部门(dept) / 账号 / 客户 / 消息 / 类型 / stage /
+    创建 / 审核时间 / owner。
+
+    参数:
+      from_date: 'YYYY-MM-DD'(可选),默认今天
+      to_date:   'YYYY-MM-DD'(可选),默认今天
+      alert_type: 'no_reply' | 'deleted' | 'keyword'(可选过滤)
+
+    异常(v3.0.9 Codex P1 改 — 失败大声):
+      ValueError: 参数格式错误(endpoint 转 400)
+      其它异常: DB 故障(endpoint 转 500,不静默吞)
+
+    返回字段(对齐 ADR-0026 中央台报表契约):
+      id / dept / account_name / account_phone / peer_name / type / stage /
+      message_text / created_at / reviewed_at / owner_tg_id / business_tg_id /
+      keyword / status / msg_id / peer_id / account_id / peer_username
+    """
+    today = _today_bj()
+    f_clean = _parse_date(from_date, "from") or today
+    t_clean = _parse_date(to_date, "to") or today
+    a_type  = _validate_choice(alert_type, _VALID_ALERT_TYPE, "type")
+
+    f_low  = f_clean
+    t_high = t_clean + "Z"  # 'YYYY-MM-DDZ' 比 'YYYY-MM-DD 23:59:59' 字典序大
+
+    sql = (
+        "SELECT a.id, a.type, a.message_text, a.created_at, a.reviewed_at, "
+        "       a.stage, a.keyword, a.account_id, a.peer_id, a.msg_id, "
+        "       a.status, "
+        "       COALESCE(p.name, '(未知)')  AS peer_name, "
+        "       COALESCE(p.username, '')   AS peer_username, "
+        "       COALESCE(ac.name, '(未知)') AS account_name, "
+        "       COALESCE(ac.phone, '')     AS account_phone, "
+        "       COALESCE(ac.company, '')   AS account_company, "
+        "       COALESCE(ac.business_tg_id, '') AS business_tg_id, "
+        "       COALESCE(ac.owner_tg_id, '')    AS owner_tg_id "
+        "FROM alerts a "
+        "LEFT JOIN peers p   ON a.peer_id = p.id "
+        "LEFT JOIN accounts ac ON a.account_id = ac.id "
+        "WHERE a.status = 'violation_logged' "
+        "  AND a.created_at >= ? AND a.created_at < ? "
+    )
+    params = [f_low, t_high]
+    if a_type:
+        sql += " AND a.type = ? "
+        params.append(a_type)
+    sql += " ORDER BY a.id DESC LIMIT ?"
+    params.append(_MAX_ALERTS_LIMIT)
+
+    rows = db.get_conn().execute(sql, tuple(params)).fetchall()
+    out = []
+    for r in rows:
+        company = r["account_company"]
+        out.append({
+            "id": r["id"],
+            "type": r["type"] or "unknown",
+            "stage": r["stage"] if r["stage"] is not None else 0,
+            "status": r["status"],
+            "keyword": r["keyword"] or "",
+            "message_text": r["message_text"] or "",
+            "created_at": r["created_at"],
+            "reviewed_at": r["reviewed_at"],
+            "account_id": r["account_id"],
+            "account_name": r["account_name"],
+            "account_phone": r["account_phone"],
+            "account_company": company,         # 老字段名(向后兼容)
+            "dept": company,                    # ADR-0026 契约字段(中央台报表使用)
+            "peer_id": r["peer_id"],
+            "peer_name": r["peer_name"],
+            "peer_username": r["peer_username"],
+            "msg_id": r["msg_id"],
+            "business_tg_id": r["business_tg_id"],
+            "owner_tg_id": r["owner_tg_id"],
+        })
+    return out
+
+
+def alerts_filtered(from_date=None, to_date=None, status=None, stage=None,
+                    alert_type=None, limit=200, offset=0):
+    """v3.0.9: 通用 alerts 查询 — 多条件筛选 + 分页。
+
+    跟 violations() 区别:violations 只返 status='violation_logged';alerts_filtered
+    可以筛任何 status / stage / type 组合,给中央台做趋势分析 / 状态流转分析。
+
+    异常(v3.0.9 Codex P1 改):非法参数 ValueError(→400);DB 异常上抛(→500)。
+    limit/offset 用 _clamp_int 软降级是合理的(数值范围语义,不影响安全)。
+    """
+    f_clean = _parse_date(from_date, "from")
+    t_clean = _parse_date(to_date, "to")
+    s_clean = _validate_choice(status, _VALID_ALERT_STATUS, "status")
+    a_clean = _validate_choice(alert_type, _VALID_ALERT_TYPE, "type")
+
+    # stage 是数值白名单,空值放过,非空必须在 (0,1,2)
+    stage_clean = None
+    if stage is not None and stage != "":
+        try:
+            stage_int = int(stage)
+        except (TypeError, ValueError):
+            raise ValueError("stage 必须是 0 / 1 / 2")
+        if stage_int not in _VALID_ALERT_STAGE:
+            raise ValueError("stage 必须是 0 / 1 / 2")
+        stage_clean = stage_int
+
+    sql_parts = [
+        "SELECT a.id, a.type, a.message_text, a.created_at, a.reviewed_at, "
+        "       a.bot_message_id, a.account_id, a.peer_id, a.msg_id, "
+        "       a.status, a.stage, a.keyword, a.sheet_written, "
+        "       a.claimed_at, a.last_write_error, "
+        "       COALESCE(p.name, '(未知)')  AS peer_name, "
+        "       COALESCE(p.username, '')   AS peer_username, "
+        "       COALESCE(ac.name, '(未知)') AS account_name, "
+        "       COALESCE(ac.phone, '')     AS account_phone, "
+        "       COALESCE(ac.company, '')   AS account_company "
+        "FROM alerts a "
+        "LEFT JOIN peers p   ON a.peer_id = p.id "
+        "LEFT JOIN accounts ac ON a.account_id = ac.id "
+        "WHERE 1=1 "
+    ]
+    params = []
+    if f_clean:
+        sql_parts.append("AND a.created_at >= ? ")
+        params.append(f_clean)
+    if t_clean:
+        sql_parts.append("AND a.created_at < ? ")
+        params.append(t_clean + "Z")
+    if s_clean:
+        sql_parts.append("AND a.status = ? ")
+        params.append(s_clean)
+    if a_clean:
+        sql_parts.append("AND a.type = ? ")
+        params.append(a_clean)
+    if stage_clean is not None:
+        sql_parts.append("AND a.stage = ? ")
+        params.append(stage_clean)
+
+    lim = _clamp_int(limit, 200, _MAX_ALERTS_LIMIT)
+    off = _clamp_int(offset, 0, 10**6, lo=0)
+    sql_parts.append("ORDER BY a.id DESC LIMIT ? OFFSET ?")
+    params.extend([lim, off])
+
+    sql = "".join(sql_parts)
+    rows = db.get_conn().execute(sql, tuple(params)).fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "id": r["id"],
+            "type": r["type"] or "unknown",
+            "status": r["status"] or "pending",
+            "stage": r["stage"] if r["stage"] is not None else 0,
+            "keyword": r["keyword"] or "",
+            "message_text": r["message_text"] or "",
+            "created_at": r["created_at"],
+            "reviewed_at": r["reviewed_at"],
+            "claimed_at": r["claimed_at"],
+            "sheet_written": bool(r["sheet_written"]),
+            "last_write_error": r["last_write_error"] or "",
+            "bot_message_id": r["bot_message_id"],
+            "account_id": r["account_id"],
+            "account_name": r["account_name"],
+            "account_phone": r["account_phone"],
+            "account_company": r["account_company"],
+            "dept": r["account_company"],   # ADR-0026 中央台契约字段
+            "peer_id": r["peer_id"],
+            "peer_name": r["peer_name"],
+            "peer_username": r["peer_username"],
+            "msg_id": r["msg_id"],
+        })
+    return {
+        "items": out,
+        "limit": lim,
+        "offset": off,
+        "returned": len(out),
+    }
+
+
+def peers_all(account_id=None, group=None):
+    """v3.0.9: 监控聊天(peers)全表 — 中央台需要看完整聊天列表,不止 top10。
+
+    参数:
+      account_id: 可选,过滤单账号的 peers(传非法值 → ValueError 防静默退化成全表查)
+      group:      可选,过滤特定分组(col_group 整数,同上)
+
+    无分页设计:单账号 peers 一般 ≤200,全部门也最多几千,JSON 几百 KB 可接受。
+
+    异常(v3.0.9 Codex P1 改):非法 account_id/group 直接 ValueError(→400),
+    不再静默 pass — 防"中央台脚本拼错 account_id 拼成 'abc',服务端忽略过滤
+    返全部门数据"的安全风险。
+    """
+    sql_parts = [
+        "SELECT p.id, p.tg_id, p.account_id, p.name, p.username, p.col_group, "
+        "       COALESCE(ac.name, '')  AS account_name, "
+        "       COALESCE(ac.phone, '') AS account_phone "
+        "FROM peers p "
+        "LEFT JOIN accounts ac ON p.account_id = ac.id "
+        "WHERE 1=1 "
+    ]
+    params = []
+    if account_id is not None and account_id != "":
+        try:
+            aid = int(account_id)
+        except (TypeError, ValueError):
+            raise ValueError("account_id 必须是合法 int")
+        params.append(aid)
+        sql_parts.append("AND p.account_id = ? ")
+    if group is not None and group != "":
+        try:
+            grp = int(group)
+        except (TypeError, ValueError):
+            raise ValueError("group 必须是合法 int")
+        params.append(grp)
+        sql_parts.append("AND p.col_group = ? ")
+
+    sql_parts.append("ORDER BY p.account_id, p.col_group, p.id LIMIT ?")
+    params.append(_MAX_PEERS_LIMIT)
+
+    rows = db.get_conn().execute("".join(sql_parts), tuple(params)).fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "id": r["id"],
+            "tg_id": r["tg_id"],
+            "account_id": r["account_id"],
+            "account_name": r["account_name"],
+            "account_phone": r["account_phone"],
+            "name": r["name"] or "",
+            "username": r["username"] or "",
+            "col_group": r["col_group"] if r["col_group"] is not None else -1,
+        })
+    return {
+        "items": out,
+        "returned": len(out),
+        "limit": _MAX_PEERS_LIMIT,
+    }
+
+
+def messages_filtered(account_id, peer_id, from_date=None, to_date=None,
+                      deleted_only=False, limit=500, offset=0):
+    """v3.0.9: 消息明细查询 — 强制 account_id+peer_id 必填防 messages 整表扫。
+
+    单 (account_id, peer_id) 对一般几千条;加日期范围更小。SQLite 走
+    UNIQUE(msg_id, account_id) + idx_msg_peer 索引,毫秒返回。
+
+    异常(v3.0.9 Codex P1 改 — 失败大声):
+      ValueError: account_id/peer_id 缺失或非法 int(防静默退化绕过整表扫保护)
+                  或 from/to 日期格式错误
+      其它异常: DB 故障 → 上抛(endpoint 转 500)
+
+    返回字段:
+      id / msg_id / direction / text / media_type / timestamp / sheet_row /
+      sheet_written / deleted / deleted_at / delete_mark_pending /
+      media_seq / archive_msg_id
+    """
+    # 必填校验 — 走 _require_int 硬失败,不静默
+    aid = _require_int(account_id, "account_id")
+    pid = _require_int(peer_id, "peer_id")
+
+    f_clean = _parse_date(from_date, "from")
+    t_clean = _parse_date(to_date, "to")
+
+    sql_parts = [
+        "SELECT id, msg_id, direction, text, media_type, timestamp, "
+        "       sheet_row, sheet_written, deleted, deleted_at, "
+        "       delete_mark_pending, media_seq, archive_msg_id "
+        "FROM messages "
+        "WHERE account_id = ? AND peer_id = ? "
+    ]
+    params = [aid, pid]
+    if f_clean:
+        sql_parts.append("AND timestamp >= ? ")
+        params.append(f_clean)
+    if t_clean:
+        sql_parts.append("AND timestamp < ? ")
+        params.append(t_clean + "Z")
+    if deleted_only:
+        sql_parts.append("AND deleted = 1 ")
+
+    lim = _clamp_int(limit, 500, _MAX_MESSAGES_LIMIT)
+    off = _clamp_int(offset, 0, 10**6, lo=0)
+    sql_parts.append("ORDER BY id DESC LIMIT ? OFFSET ?")
+    params.extend([lim, off])
+
+    rows = db.get_conn().execute("".join(sql_parts), tuple(params)).fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "id": r["id"],
+            "msg_id": r["msg_id"],
+            "direction": r["direction"],
+            "text": r["text"] or "",
+            "media_type": r["media_type"] or "",
+            "timestamp": r["timestamp"],
+            "sheet_row": r["sheet_row"] if r["sheet_row"] is not None else 0,
+            "sheet_written": bool(r["sheet_written"]),
+            "deleted": bool(r["deleted"]),
+            "deleted_at": r["deleted_at"],
+            "delete_mark_pending": bool(r["delete_mark_pending"]) if r["delete_mark_pending"] is not None else False,
+            "media_seq": r["media_seq"] if r["media_seq"] is not None else 0,
+            "archive_msg_id": r["archive_msg_id"] if r["archive_msg_id"] is not None else 0,
+        })
+    return {
+        "items": out,
+        "limit": lim,
+        "offset": off,
+        "returned": len(out),
     }
 
 
