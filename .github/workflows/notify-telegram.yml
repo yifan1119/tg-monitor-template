@@ -1,0 +1,118 @@
+name: Notify Telegram
+
+# PR / review / merge / @claude 互动 → 推到 TG bot
+# 需要 repo Secrets:TG_BOT_TOKEN, TG_CHAT_ID
+
+on:
+  pull_request:
+    types: [opened, reopened, closed]
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    # 跳过 GitHub Actions bot 自己触发的事件,防循环
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Build message
+        id: msg
+        run: |
+          set -euo pipefail
+          EVENT='${{ github.event_name }}'
+          ACTION='${{ github.event.action }}'
+          ACTOR='${{ github.actor }}'
+          BODY=""
+
+          case "$EVENT" in
+            pull_request)
+              PR_NUM=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
+              PR_TITLE=$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH" | cut -c1-200)
+              PR_URL=$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")
+              MERGED=$(jq -r '.pull_request.merged' "$GITHUB_EVENT_PATH")
+              if [ "$ACTION" = "opened" ] || [ "$ACTION" = "reopened" ]; then
+                BODY=$(printf '🟢 <b>PR #%s 开启</b>\n<i>%s</i>\n作者: @%s\n👉 %s' \
+                  "$PR_NUM" "$PR_TITLE" "$ACTOR" "$PR_URL")
+              elif [ "$ACTION" = "closed" ] && [ "$MERGED" = "true" ]; then
+                BODY=$(printf '🟣 <b>PR #%s 已合并</b>\n<i>%s</i>\n👉 %s' \
+                  "$PR_NUM" "$PR_TITLE" "$PR_URL")
+              elif [ "$ACTION" = "closed" ]; then
+                BODY=$(printf '⚪ <b>PR #%s 关闭(未合并)</b>\n<i>%s</i>\n👉 %s' \
+                  "$PR_NUM" "$PR_TITLE" "$PR_URL")
+              fi
+              ;;
+
+            pull_request_review)
+              PR_NUM=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
+              PR_TITLE=$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH" | cut -c1-150)
+              PR_URL=$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")
+              STATE=$(jq -r '.review.state' "$GITHUB_EVENT_PATH")
+              REVIEWER=$(jq -r '.review.user.login' "$GITHUB_EVENT_PATH")
+              REVIEW_BODY=$(jq -r '.review.body // ""' "$GITHUB_EVENT_PATH" | cut -c1-400)
+              case "$STATE" in
+                approved)          EMOJI="✅"; LABEL="通过" ;;
+                changes_requested) EMOJI="🔴"; LABEL="要求改动" ;;
+                commented)         EMOJI="💬"; LABEL="评论" ;;
+                *)                 exit 0 ;;
+              esac
+              if [ -n "$REVIEW_BODY" ]; then
+                BODY=$(printf '%s <b>%s %s PR #%s</b>\n<i>%s</i>\n\n%s\n👉 %s' \
+                  "$EMOJI" "$REVIEWER" "$LABEL" "$PR_NUM" "$PR_TITLE" "$REVIEW_BODY" "$PR_URL")
+              else
+                BODY=$(printf '%s <b>%s %s PR #%s</b>\n<i>%s</i>\n👉 %s' \
+                  "$EMOJI" "$REVIEWER" "$LABEL" "$PR_NUM" "$PR_TITLE" "$PR_URL")
+              fi
+              ;;
+
+            issue_comment)
+              # issue_comment 事件包含 issue 和 PR 评论 — 只通知 PR 评论
+              IS_PR=$(jq -r '.issue.pull_request // empty' "$GITHUB_EVENT_PATH")
+              if [ -z "$IS_PR" ]; then exit 0; fi
+              PR_NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
+              PR_TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH" | cut -c1-150)
+              PR_URL=$(jq -r '.issue.html_url' "$GITHUB_EVENT_PATH")
+              COMMENTER=$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")
+              COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH" | cut -c1-500)
+              BODY=$(printf '💬 <b>%s 评论 PR #%s</b>\n<i>%s</i>\n\n%s\n👉 %s' \
+                "$COMMENTER" "$PR_NUM" "$PR_TITLE" "$COMMENT_BODY" "$PR_URL")
+              ;;
+          esac
+
+          # 没有 BODY 就跳出(action 不在我们关心列表)
+          if [ -z "$BODY" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 写入 multi-line output(GitHub Actions 标准做法)
+          {
+            echo "body<<__END__"
+            echo "$BODY"
+            echo "__END__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Send to Telegram
+        if: steps.msg.outputs.skip != 'true'
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          BODY: ${{ steps.msg.outputs.body }}
+        run: |
+          # --data-urlencode 帮我们自动 URL-encode 含中文 / 换行 / HTML 标签的 BODY
+          RESP=$(curl -s -X POST \
+            "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT_ID}" \
+            --data-urlencode "text=${BODY}" \
+            --data-urlencode "parse_mode=HTML" \
+            --data-urlencode "disable_web_page_preview=true")
+          if echo "$RESP" | grep -q '"ok":true'; then
+            echo "✓ sent"
+          else
+            echo "::warning::Telegram send failed: $RESP"
+          fi
