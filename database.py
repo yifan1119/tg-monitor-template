@@ -135,6 +135,11 @@ def _run_migrations(conn):
         conn.execute("PRAGMA user_version=5")
         conn.commit()
 
+    if version < 6:
+        _migrate_to_6(conn)
+        conn.execute("PRAGMA user_version=6")
+        conn.commit()
+
 
 def _migrate_to_1(conn):
     """v2.10.23 → user_version=1:
@@ -214,6 +219,25 @@ def _migrate_to_5(conn):
     _safe_add_column(conn, "accounts", "remind_30min_text", "TEXT DEFAULT ''")
     _safe_add_column(conn, "accounts", "remind_40min_text", "TEXT DEFAULT ''")
     _safe_add_column(conn, "alerts",   "stage",             "INTEGER DEFAULT 0")
+
+
+def _migrate_to_6(conn):
+    """v3.1 → user_version=6(ADR-0027 Sheet 后台扫描自动回填):
+    - peers 加 next_sheet_row INTEGER DEFAULT NULL
+        含义:这个 peer 下次 update 应该写到 Sheet 哪一行
+        NULL = 还没扫过(老数据 / 新 peer)→ flush 路径 fallback 走 append(零覆盖)
+        值 = 扫描后已知,update 直接命中
+    - peers 加 next_sheet_row_resynced_at TEXT DEFAULT NULL
+        含义:next_sheet_row 是哪一刻 resync loop 计算的
+        flush 路径用它判断"陈旧"程度;dashboard 显示"上次扫描:N 分钟前"
+    - 新建 idx_peers_next_row 索引,resync loop 批量 update 加速
+
+    全部 _safe_add_column 幂等。老数据 next_sheet_row=NULL → 升级后第一轮写仍走 append,
+    30 秒后 resync loop 跑首次扫描后切 update 路径,行为完全无感。
+    """
+    _safe_add_column(conn, "peers", "next_sheet_row",             "INTEGER DEFAULT NULL")
+    _safe_add_column(conn, "peers", "next_sheet_row_resynced_at", "TEXT DEFAULT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_peers_next_row ON peers(next_sheet_row)")
 
 
 def _is_feature_v2_stage_db(conn):
@@ -960,6 +984,88 @@ def rollback_stage2_to_stage1(alert_id):
     """, (alert_id,))
     conn.commit()
     return cur.rowcount == 1
+
+
+###################################################################
+# v3.1 (ADR-0027) — peers.next_sheet_row 缓存,Sheet 后台扫描自动回填
+###################################################################
+
+def get_peer_next_sheet_row(peer_id):
+    """v3.1: 返回 (next_row, resynced_at) 二元组。
+    next_row 是 None 表示还没扫过(老数据 / 新 peer / 被 invalidate),flush 路径走 append 兜底。
+    """
+    row = get_conn().execute(
+        "SELECT next_sheet_row, next_sheet_row_resynced_at FROM peers WHERE id=?",
+        (peer_id,)
+    ).fetchone()
+    if not row:
+        return None, None
+    return row["next_sheet_row"], row["next_sheet_row_resynced_at"]
+
+
+def set_peer_next_sheet_row(peer_id, next_row, resynced_at=None):
+    """v3.1: resync loop 用 — 把扫描算出的 next_row 写入 DB。
+    resynced_at 默认走 now_bj() ISO 字符串(主进程 ts 时区 BJ)。
+    """
+    if resynced_at is None:
+        resynced_at = now_bj()
+    conn = get_conn()
+    conn.execute(
+        "UPDATE peers SET next_sheet_row=?, next_sheet_row_resynced_at=? WHERE id=?",
+        (next_row, resynced_at, peer_id)
+    )
+    conn.commit()
+
+
+def bump_peer_next_sheet_row(peer_id, delta):
+    """v3.1: flush 写完后 +delta(连续多行 update 一次性 +N)。
+    走原子 UPDATE 避免 race(两条 flush 路径并发 update 同一 peer 不会丢)。
+    """
+    conn = get_conn()
+    conn.execute(
+        "UPDATE peers SET next_sheet_row = next_sheet_row + ? "
+        "WHERE id=? AND next_sheet_row IS NOT NULL",
+        (int(delta), peer_id)
+    )
+    conn.commit()
+
+
+def invalidate_peer_next_sheet_row(peer_id, reason=""):
+    """v3.1: write 失败 / row mismatch / update 异常时调用,清回 NULL。
+    下一条消息走 append 兜底(零覆盖风险),下一轮 resync 再算一次正确值。
+    reason 仅日志用,不写 DB(避免 schema 膨胀)。
+    """
+    conn = get_conn()
+    conn.execute(
+        "UPDATE peers SET next_sheet_row=NULL, next_sheet_row_resynced_at=NULL WHERE id=?",
+        (peer_id,)
+    )
+    conn.commit()
+
+
+def get_all_peers_with_col_group():
+    """v3.1: resync loop 用 — 拿全部已分配 col_group 的 peers(col_group >= 0)。
+    返回 list[Row] 含 id / account_id / col_group / next_sheet_row。
+    """
+    return get_conn().execute(
+        "SELECT id, account_id, col_group, name, next_sheet_row "
+        "FROM peers WHERE col_group >= 0 ORDER BY account_id, col_group"
+    ).fetchall()
+
+
+def get_max_resynced_at():
+    """v3.1: dashboard 用 — 跨容器读 SheetsWriter 状态走 DB 兜底(tg-web 拿不到 SheetsWriter 实例)。
+    返回 'YYYY-MM-DD HH:MM:SS' 或 None。
+    """
+    row = get_conn().execute(
+        "SELECT MAX(next_sheet_row_resynced_at) AS ts FROM peers WHERE next_sheet_row_resynced_at IS NOT NULL"
+    ).fetchone()
+    return row["ts"] if row and row["ts"] else None
+
+
+def get_all_accounts():
+    """v3.1: resync loop 用 — 拿全部 accounts 做 worksheet 索引。"""
+    return get_conn().execute("SELECT * FROM accounts ORDER BY id").fetchall()
 
 
 def has_alert_today(alert_type, peer_id):
