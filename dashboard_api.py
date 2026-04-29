@@ -506,6 +506,69 @@ def messages_today():
     return _safe(_q, {"in": 0, "out": 0, "media": 0, "deleted": 0, "total": 0})
 
 
+def messages_count_in_range(from_date: str, to_date: str) -> dict:
+    """v3.0.9.1: 区间消息吞吐 — 给中央台按选定 range 算总消息数。
+
+    Args:
+      from_date: YYYY-MM-DD(含)
+      to_date:   YYYY-MM-DD(含)
+    Returns:
+      {"in": int, "out": int, "media": int, "deleted": int, "total": int, "from": str, "to": str}
+
+    跟 messages_today() 同结构,差异在 WHERE 用 timestamp >= ? AND timestamp < ?(下界含上界不含),
+    用索引友好的范围比较而非 LIKE 防 strftime 退化。to_date 自动 +1 天作为右开区间。
+
+    Codex review v3.0.9.1: **不**用 _safe() 包装 — API 契约要求参数错抛 ValueError(endpoint 转 400)
+    DB 异常透传(endpoint 转 500)。跟 v3.0.9 violations / alerts 等 endpoint 一致,跟 messages_today
+    那种「dashboard 单卡片容错」语义不同。
+    """
+    from datetime import datetime, timedelta
+    # 校验格式 + to+1 作为右开区间(错的话抛 ValueError,endpoint 转 400)
+    try:
+        d_from = datetime.strptime(from_date, "%Y-%m-%d").date()
+        d_to = datetime.strptime(to_date, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        raise ValueError("from / to 必须是 YYYY-MM-DD 格式")
+    if d_to < d_from:
+        raise ValueError("to 不能早于 from")
+    right_open = (d_to + timedelta(days=1)).strftime("%Y-%m-%d")
+    left_inc = d_from.strftime("%Y-%m-%d")
+
+    # DB 查询失败透传 Exception,endpoint 转 500
+    conn = db.get_conn()
+    rows = conn.execute(
+        "SELECT direction, COUNT(*) AS n FROM messages "
+        "WHERE timestamp >= ? AND timestamp < ? GROUP BY direction",
+        (left_inc, right_open),
+    ).fetchall()
+    a_out = b_in = 0
+    for r in rows:
+        d = r["direction"] or ""
+        if d == "A":
+            a_out = r["n"]
+        elif d == "B":
+            b_in = r["n"]
+    media = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages "
+        "WHERE timestamp >= ? AND timestamp < ? AND media_type != ''",
+        (left_inc, right_open),
+    ).fetchone()["n"]
+    deleted = conn.execute(
+        "SELECT COUNT(*) AS n FROM messages "
+        "WHERE deleted=1 AND deleted_at >= ? AND deleted_at < ?",
+        (left_inc, right_open),
+    ).fetchone()["n"]
+    return {
+        "in": b_in,
+        "out": a_out,
+        "media": media,
+        "deleted": deleted,
+        "total": a_out + b_in,
+        "from": left_inc,
+        "to": d_to.strftime("%Y-%m-%d"),
+    }
+
+
 # ============ 告警相关 ============
 
 def alerts_today_summary():
@@ -1274,6 +1337,7 @@ def violations(from_date=None, to_date=None, alert_type=None):
         "       COALESCE(ac.name, '(未知)') AS account_name, "
         "       COALESCE(ac.phone, '')     AS account_phone, "
         "       COALESCE(ac.company, '')   AS account_company, "
+        "       COALESCE(ac.operator, '')  AS operator, "       # v3.0.9.1: 商务负责人姓名
         "       COALESCE(ac.business_tg_id, '') AS business_tg_id, "
         "       COALESCE(ac.owner_tg_id, '')    AS owner_tg_id "
         "FROM alerts a "
@@ -1307,6 +1371,7 @@ def violations(from_date=None, to_date=None, alert_type=None):
             "account_phone": r["account_phone"],
             "account_company": company,         # 老字段名(向后兼容)
             "dept": company,                    # ADR-0026 契约字段(中央台报表使用)
+            "operator": r["operator"],          # v3.0.9.1: 商务负责人姓名(中央台违规明细表展示用)
             "peer_id": r["peer_id"],
             "peer_name": r["peer_name"],
             "peer_username": r["peer_username"],

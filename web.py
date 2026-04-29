@@ -2680,6 +2680,45 @@ def api_v1_messages():
     return jsonify({"ok": True, **result})
 
 
+@app.route("/api/v1/messages/count", methods=["GET"])
+def api_v1_messages_count():
+    """v3.0.9.1: 区间消息总数 — 给中央台按选定 range 算消息吞吐。
+
+    Query params:
+      from (YYYY-MM-DD, 必填)  含
+      to   (YYYY-MM-DD, 必填)  含
+
+    返回:
+      {ok, in, out, media, deleted, total, from, to}
+
+    错误码:
+      401 鉴权失败
+      400 参数缺失 / 格式非法
+      500 内部异常
+    """
+    ok, err = _v1_check_token()
+    if not ok:
+        _metrics_log_access(False, "v1.messages.count:" + err)
+        return jsonify({"ok": False, "error": err}), 401
+    f = request.args.get("from")
+    t = request.args.get("to")
+    if not f or not t:
+        _metrics_log_access(False, "v1.messages.count:bad_request:missing")
+        return jsonify({"ok": False, "error": "from 和 to 必填(YYYY-MM-DD)"}), 400
+    try:
+        import dashboard_api
+        result = dashboard_api.messages_count_in_range(f, t)
+    except ValueError as ve:
+        _metrics_log_access(False, f"v1.messages.count:bad_request:{ve}")
+        return jsonify({"ok": False, "error": str(ve)}), 400
+    except Exception as e:
+        logger.exception("api_v1_messages_count failed")
+        _metrics_log_access(False, f"v1.messages.count:err:{e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    _metrics_log_access(True, "v1.messages.count:ok")
+    return jsonify({"ok": True, **result})
+
+
 @app.route("/api/settings/metrics_token/regenerate", methods=["POST"])
 @login_required
 def api_metrics_token_regenerate():
