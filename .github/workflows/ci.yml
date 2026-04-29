@@ -1,0 +1,43 @@
+name: CI
+
+# tg-monitor 精简版 CI(参考团队 agent-center/.github/workflows/ci.yml 结构,
+# 适配 tg-monitor 的 pip + Python 3.11 工具链;不引入 ruff/mypy/uv 避免大规模代码改动)
+#
+# 跑:
+#   - syntax 检查 (py_compile *.py)        — 防 Python 语法挂
+#   - JSON validity (release_notes.json)   — 防客户端拉到坏 JSON
+#   - v3.0.9 unit tests (tests/test_v309.py) — 21 个场景覆盖 ADR-0026 + Codex P1 修复
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  syntax-and-tests:
+    name: Syntax + JSON + Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install minimal deps for tests
+        # 测试只需 dotenv(config.py 用)+ 标准库,不装完整 requirements.txt 省 CI 时间
+        # py_compile 不需要任何 deps(只解析不导入)
+        run: pip install python-dotenv==1.0.1
+
+      - name: Python syntax check (py_compile)
+        run: python -m py_compile $(ls *.py)
+
+      - name: JSON validity (release_notes.json)
+        run: python -c "import json; json.load(open('release_notes.json'))"
+
+      - name: v3.0.9 unit tests
+        run: python tests/test_v309.py

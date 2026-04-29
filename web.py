@@ -2465,6 +2465,199 @@ def api_v1_metrics_access_log():
     })
 
 
+# ============================================================
+# v3.0.9 中央台扩展只读 API — 4 个新端点
+# ============================================================
+# 鉴权:沿用 _ensure_metrics_token() Bearer / ?token= 跟 /api/v1/metrics 同套
+# 设计:纯只读、不动主业务、出错只波及自身、所有 limit 都强制 clamp
+# 失败状态:401 unauthorized / 400 bad_request / 500 internal_error
+
+def _v1_check_token():
+    """v3.0.9: /api/v1/* 共用的 Bearer token 校验。返回 (ok: bool, error: str|None)。"""
+    env = read_env()
+    token = _ensure_metrics_token(env)
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        provided = auth[7:].strip()
+    else:
+        provided = request.args.get("token", "").strip()
+    if not provided or not _secrets.compare_digest(provided, token):
+        return False, "unauthorized"
+    return True, None
+
+
+@app.route("/api/v1/violations", methods=["GET"])
+def api_v1_violations():
+    """v3.0.9: 违规登记明细 — status='violation_logged' 的 alerts。
+
+    Query params:
+      from   (str, YYYY-MM-DD, 默认今天)
+      to     (str, YYYY-MM-DD, 默认今天)
+      type   (str, 可选: no_reply | deleted | keyword)
+
+    错误码:
+      401 鉴权失败
+      400 参数格式非法(日期格式 / type 不在白名单)
+      500 服务器内部异常(DB 故障等)
+
+    返回 ≤ 1000 条(硬上限),给中央台日/周/月违规报表用。
+    """
+    ok, err = _v1_check_token()
+    if not ok:
+        _metrics_log_access(False, "v1.violations:" + err)
+        return jsonify({"ok": False, "error": err}), 401
+    try:
+        import dashboard_api
+        items = dashboard_api.violations(
+            from_date=request.args.get("from"),
+            to_date=request.args.get("to"),
+            alert_type=request.args.get("type"),
+        )
+    except ValueError as ve:
+        _metrics_log_access(False, f"v1.violations:bad_request:{ve}")
+        return jsonify({"ok": False, "error": str(ve)}), 400
+    except Exception as e:
+        logger.exception("api_v1_violations failed")
+        _metrics_log_access(False, f"v1.violations:err:{e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    _metrics_log_access(True, "v1.violations:ok")
+    return jsonify({
+        "ok": True,
+        "count": len(items),
+        "items": items,
+        "from": request.args.get("from"),
+        "to": request.args.get("to"),
+        "type": request.args.get("type"),
+    })
+
+
+@app.route("/api/v1/alerts", methods=["GET"])
+def api_v1_alerts():
+    """v3.0.9: 通用 alerts 查询 — 多条件筛选 + 分页。
+
+    Query params:
+      from / to (YYYY-MM-DD, 可选)
+      status    (pending | approved | rejected | violation_logged | cancelled |
+                 handled_by_reply | silenced)
+      stage     (0 | 1 | 2)
+      type      (no_reply | deleted | keyword)
+      limit     (默认 200, 上限 1000, 自动 clamp)
+      offset    (默认 0)
+
+    错误码同 /api/v1/violations(401/400/500)。
+    """
+    ok, err = _v1_check_token()
+    if not ok:
+        _metrics_log_access(False, "v1.alerts:" + err)
+        return jsonify({"ok": False, "error": err}), 401
+    try:
+        import dashboard_api
+        result = dashboard_api.alerts_filtered(
+            from_date=request.args.get("from"),
+            to_date=request.args.get("to"),
+            status=request.args.get("status"),
+            stage=request.args.get("stage"),
+            alert_type=request.args.get("type"),
+            limit=request.args.get("limit", 200),
+            offset=request.args.get("offset", 0),
+        )
+    except ValueError as ve:
+        _metrics_log_access(False, f"v1.alerts:bad_request:{ve}")
+        return jsonify({"ok": False, "error": str(ve)}), 400
+    except Exception as e:
+        logger.exception("api_v1_alerts failed")
+        _metrics_log_access(False, f"v1.alerts:err:{e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    _metrics_log_access(True, "v1.alerts:ok")
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/v1/peers", methods=["GET"])
+def api_v1_peers():
+    """v3.0.9: 监控聊天明细 — peers 全表(可选按账号 / 分组过滤)。
+
+    Query params:
+      account_id (int, 可选)
+      group      (int, 可选 col_group)
+
+    错误码同 /api/v1/violations。
+
+    安全:account_id / group 拼错(传 'abc')会 400 而非静默返全部数据
+    (Codex P1 修 — 防中央台脚本拼错参数拉出整部门)。
+    """
+    ok, err = _v1_check_token()
+    if not ok:
+        _metrics_log_access(False, "v1.peers:" + err)
+        return jsonify({"ok": False, "error": err}), 401
+    try:
+        import dashboard_api
+        result = dashboard_api.peers_all(
+            account_id=request.args.get("account_id"),
+            group=request.args.get("group"),
+        )
+    except ValueError as ve:
+        _metrics_log_access(False, f"v1.peers:bad_request:{ve}")
+        return jsonify({"ok": False, "error": str(ve)}), 400
+    except Exception as e:
+        logger.exception("api_v1_peers failed")
+        _metrics_log_access(False, f"v1.peers:err:{e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    _metrics_log_access(True, "v1.peers:ok")
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/v1/messages", methods=["GET"])
+def api_v1_messages():
+    """v3.0.9: 消息明细 — 强制 account_id+peer_id 必填,防整表扫。
+
+    Query params:
+      account_id    (int, 必填)
+      peer_id       (int, 必填)
+      from / to     (YYYY-MM-DD, 可选)
+      deleted_only  (true|false, 默认 false)
+      limit         (默认 500, 上限 1000, 自动 clamp)
+      offset        (默认 0)
+
+    错误码:
+      401 鉴权失败
+      400 必填字段缺失 / 参数格式非法
+      500 内部异常
+    """
+    ok, err = _v1_check_token()
+    if not ok:
+        _metrics_log_access(False, "v1.messages:" + err)
+        return jsonify({"ok": False, "error": err}), 401
+    aid = request.args.get("account_id")
+    pid = request.args.get("peer_id")
+    if aid is None or aid == "" or pid is None or pid == "":
+        _metrics_log_access(False, "v1.messages:bad_request:missing")
+        return jsonify({
+            "ok": False,
+            "error": "account_id 和 peer_id 必填",
+        }), 400
+    try:
+        import dashboard_api
+        deleted_only = request.args.get("deleted_only", "false").lower() in ("1", "true", "yes")
+        result = dashboard_api.messages_filtered(
+            account_id=aid,
+            peer_id=pid,
+            from_date=request.args.get("from"),
+            to_date=request.args.get("to"),
+            deleted_only=deleted_only,
+            limit=request.args.get("limit", 500),
+            offset=request.args.get("offset", 0),
+        )
+    except ValueError as ve:
+        _metrics_log_access(False, f"v1.messages:bad_request:{ve}")
+        return jsonify({"ok": False, "error": str(ve)}), 400
+    except Exception as e:
+        logger.exception("api_v1_messages failed")
+        _metrics_log_access(False, f"v1.messages:err:{e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    _metrics_log_access(True, "v1.messages:ok")
+    return jsonify({"ok": True, **result})
+
+
 @app.route("/api/settings/metrics_token/regenerate", methods=["POST"])
 @login_required
 def api_metrics_token_regenerate():
