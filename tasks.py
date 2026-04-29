@@ -37,6 +37,7 @@ class TaskScheduler:
             self._sheets_backlog_loop(),      # v2.10.23: Sheets 写入积压告警
             self._alert_backfill_loop(),      # v2.10.24.2: 预警分页历史空白回填巡检
             self._alert_writeback_loop(),     # v2.10.24.3: 预警分页整行缺失无限重试(ADR-0010)
+            self._sheet_position_resync_loop(),  # v3.1 (ADR-0027): peers.next_sheet_row 后台扫描
         )
 
     async def stop(self):
@@ -163,6 +164,53 @@ class TaskScheduler:
             except Exception as e:
                 logger.error("Sheets 写入失败: %s", e)
             await asyncio.sleep(config.SHEETS_FLUSH_INTERVAL)
+
+    async def _sheet_position_resync_loop(self):
+        """v3.1 (ADR-0027): 每 N 分钟扫描整个 Spreadsheet 更新 peers.next_sheet_row。
+
+        客户手动删 Sheet 旧消息 → < N 分钟内系统自动知道 → 新消息从空位开始填(write_messages
+        update 路径命中 next_sheet_row)。
+
+        启动后等 30 秒,避免冷启动跟 listener 抢 OAuth / DB 资源。
+        SHEET_RESYNC_ENABLED=false 时整个 loop 不跑(轻量心跳确保 stop 能响应)。
+        resync 同步阻塞 IO,放进 to_thread 不阻 event loop。
+
+        On-demand 触发:tg-web 写文件 data/.sheet_resync_request → 此 loop 每 5s 检查
+        发现就立刻跑一轮 + 删文件(给客户「立刻重扫」按钮用,跨容器 IPC,无需 RPC)。
+        """
+        import os as _os
+        flag_path = _os.path.join(_os.path.dirname(__file__), "data", ".sheet_resync_request")
+
+        await asyncio.sleep(30)
+        last_full_run = 0.0   # monotonic ts of last full periodic run
+        while self._running:
+            if not getattr(config, "SHEET_RESYNC_ENABLED", True):
+                await asyncio.sleep(5)
+                continue
+
+            on_demand = _os.path.exists(flag_path)
+            interval_sec = max(60, int(getattr(config, "SHEET_RESYNC_INTERVAL_MINUTES", 15)) * 60)
+            now = time.monotonic()
+            should_run = on_demand or (now - last_full_run) >= interval_sec
+
+            if should_run:
+                if on_demand:
+                    logger.info("[sheet_resync] on-demand 触发 (admin 点了立刻重扫)")
+                    try:
+                        _os.remove(flag_path)
+                    except OSError:
+                        pass
+                try:
+                    stats = await asyncio.to_thread(self.sheets.resync_peer_positions)
+                    if stats and stats.get("errors"):
+                        logger.warning("[sheet_resync] 部分 worksheet 失败: %s",
+                                       stats["errors"][:3])
+                except Exception as e:
+                    logger.error("[sheet_resync] 整轮异常 (下一轮重试): %s", e)
+                last_full_run = time.monotonic()
+
+            # 每 5 秒检查一次 on-demand flag(同时给定时器细粒度 tick)
+            await asyncio.sleep(5)
 
     async def _patrol_loop(self):
         """每 60 秒巡检：补漏 + 删除检测 + 同步表头(节流)+ 昵称同步

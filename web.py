@@ -229,6 +229,7 @@ def write_env(updates):
         "WORK_HOUR_START", "WORK_HOUR_END",
         "PATROL_DAYS", "HISTORY_DAYS",
         "SHEETS_FLUSH_INTERVAL", "SHEETS_RATE_LIMIT_PER_MIN", "PATROL_INTERVAL",
+        "SHEET_RESYNC_INTERVAL_MINUTES", "SHEET_RESYNC_ENABLED",  # v3.1 ADR-0027
         "SETUP_COMPLETE",
     ]
     lines = []
@@ -869,6 +870,9 @@ def setup_page():
         # v3.0.8: Sheets 写入节流配置(让客户自己调,不用 SSH 改 .env)
         "sheets_flush_interval": env.get("SHEETS_FLUSH_INTERVAL", DEFAULT_SHEETS_FLUSH_INTERVAL),
         "sheets_rate_limit_per_min": env.get("SHEETS_RATE_LIMIT_PER_MIN", "50"),
+        # v3.1 (ADR-0027): Sheet 后台扫描自动回填空位
+        "sheet_resync_interval_minutes": env.get("SHEET_RESYNC_INTERVAL_MINUTES", "15"),
+        "sheet_resync_enabled": env.get("SHEET_RESYNC_ENABLED", "true"),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -912,6 +916,9 @@ def settings_page():
         # v3.0.8: Sheets 写入节流配置(让客户自己调,不用 SSH 改 .env)
         "sheets_flush_interval": env.get("SHEETS_FLUSH_INTERVAL", DEFAULT_SHEETS_FLUSH_INTERVAL),
         "sheets_rate_limit_per_min": env.get("SHEETS_RATE_LIMIT_PER_MIN", "50"),
+        # v3.1 (ADR-0027): Sheet 后台扫描自动回填空位
+        "sheet_resync_interval_minutes": env.get("SHEET_RESYNC_INTERVAL_MINUTES", "15"),
+        "sheet_resync_enabled": env.get("SHEET_RESYNC_ENABLED", "true"),
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
@@ -1524,6 +1531,21 @@ def _save_settings(is_first):
             if not _srl.isdigit() or not (5 <= int(_srl) <= 60):
                 return jsonify({"ok": False, "msg": f"Sheets 每分钟请求上限必须是 5-60 的整数(Google 配额 60/min/user),当前: {_srl}"}), 400
             updates["SHEETS_RATE_LIMIT_PER_MIN"] = _srl
+
+    # v3.1 (ADR-0027): Sheet 后台扫描自动回填空位
+    if "sheet_resync_interval_minutes" in form:
+        _sri = (form.get("sheet_resync_interval_minutes") or "").strip()
+        if _sri:
+            if not _sri.isdigit() or not (5 <= int(_sri) <= 180):
+                return jsonify({"ok": False, "msg": f"Sheet 扫描间隔必须是 5-180 的整数(分钟),当前: {_sri}"}), 400
+            updates["SHEET_RESYNC_INTERVAL_MINUTES"] = _sri
+    if "sheet_resync_enabled" in form:
+        _sre = (form.get("sheet_resync_enabled") or "").strip().lower()
+        # 允许 true/false/on/off/1/0,统一存 true/false
+        if _sre in ("true", "on", "1", "yes"):
+            updates["SHEET_RESYNC_ENABLED"] = "true"
+        elif _sre in ("false", "off", "0", "no"):
+            updates["SHEET_RESYNC_ENABLED"] = "false"
 
     write_env(updates)
 
@@ -2814,6 +2836,38 @@ def api_diag_sheets_stuck_detail():
     except Exception as e:
         logger.error("api_diag_sheets_stuck_detail 失败: %s", e)
         return jsonify({"errors": [str(e)]}), 500
+
+
+@app.route("/api/sheets/resync-now", methods=["POST"])
+@login_required
+@admin_required
+def api_sheets_resync_now():
+    """v3.1 (ADR-0027): 客户在驾驶舱点「立刻重扫 Sheet 行号」时调用。
+
+    场景:客户刚清理完 Sheet 旧数据,不想等下一轮 15 分钟自动扫,立即触发一次。
+
+    跨容器实现:tg-web 跟 tg-monitor 是独立容器,这里写一个文件标志
+      data/.sheet_resync_request
+    tg-monitor 的 _sheet_position_resync_loop 每轮检查文件存在 → 立刻跑一次 + 删文件。
+
+    返回:{"ok": True, "msg": "已请求扫描,系统将在 1-30 秒内开始"}
+    """
+    try:
+        import os as _os
+        flag_dir = _os.path.join(_os.path.dirname(__file__), "data")
+        _os.makedirs(flag_dir, exist_ok=True)
+        flag_path = _os.path.join(flag_dir, ".sheet_resync_request")
+        with open(flag_path, "w") as f:
+            f.write(str(int(_time.time())))
+        logger.info("[sheets_resync_now] admin %s 请求立刻扫描 Sheet 行号",
+                    flask_session.get("username", "?"))
+        return jsonify({
+            "ok": True,
+            "msg": "已请求扫描,系统将在 1-30 秒内开始;30 秒后刷新驾驶舱看新的「上次扫描」时间确认",
+        })
+    except Exception as e:
+        logger.exception("[sheets_resync_now] 失败")
+        return jsonify({"ok": False, "msg": f"创建标志文件失败: {e}"}), 500
 
 
 @app.route("/api/diag/sheets-fix-stuck", methods=["POST"])

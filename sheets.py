@@ -52,6 +52,9 @@ class SheetsWriter:
         self._flush_backoff_level = {}
         # v3.0.7: OAuth reload 计数器,日志可观察自愈次数
         self._oauth_reload_count = 0
+        # v3.1 (ADR-0027): 后台 resync 状态(给 dashboard 看)
+        self._last_resync_ts = None        # 'YYYY-MM-DD HH:MM:SS' or None
+        self._last_resync_stats = None     # {'worksheets_scanned': N, 'peers_updated': N, 'errors': [], 'duration_sec': X}
         logger.info("Google Sheets 连接成功 (OAuth): %s", self.spreadsheet.title)
         self.ensure_alert_tabs()
         self.ensure_account_tabs()  # v2.10.10: 启动时给 DB 里每个账号补缺失的分页
@@ -1035,14 +1038,19 @@ class SheetsWriter:
     def write_messages(self, ws, peer, messages):
         """把消息写入对话框对应的列组。
 
-        v3.0.8 关键改动: `update` → `append_rows`,**干掉每次写入前的 col_values 读 API 调用**。
-        - 旧 (v3.0.7-): 1 次 col_values 读 + 1 次 update 写 = 每个 peer 2 次 API call
-        - 新 (v3.0.8): 1 次 append_rows 写 = 每个 peer 1 次 API call (砍半,接近 Google 配额上限)
-        - 安全性: append 自动追加到 table_range 末尾, **永远不覆盖客户已有数据**
-          (用户场景: 客户在表格里手动改/插/删行 → 旧 update + 缓存 row 会覆盖客户改动;
-           新 append 自动跟随当前末尾, 客户改动安全)
-        - row 号回写 db.mark_written: 从 append 响应的 updatedRange 解析
-          (e.g. "'TabName'!A123:C145" → start_row=123)
+        v3.1 (ADR-0027): 双路径决策 — 优先用 update(显式 row,DB 缓存的 next_sheet_row)
+        以解决 v3.0.8 append 的"行号被全表推高 / 客户删了空位不回填"痛点。
+        失败 / 未知 next_sheet_row → fallback v3.0.8 append 路径(零覆盖兜底)。
+
+        路径选择(v3.1 决策):
+        1. SHEET_RESYNC_ENABLED=false → 永远走 append(等价 v3.0.9 行为)
+        2. peers.next_sheet_row IS NULL → 没扫过, fallback append(等下一轮 resync 会算出来)
+        3. 否则 → 走 update 命中 DB 缓存的行,写完 bump next_sheet_row + len(rows)
+           - update 响应里解析 updatedRange 校验真实 row,跟预期不一致 → invalidate + fallback
+           - update 异常 → invalidate + fallback
+
+        v3.0.8 历史路径(append): `update` → `append_rows`,1 次 API/peer 替代老 2 次 API。
+        v3.1 新路径(update): 1 次 API/peer 不变, 但行号精确控制, 客户删旧消息后可被回填。
         """
         if not messages:
             return
@@ -1059,10 +1067,112 @@ class SheetsWriter:
         if not rows:
             return
 
+        # v3.1 路径决策
+        next_row = None
+        flag_enabled = getattr(config, "SHEET_RESYNC_ENABLED", True)
+        if flag_enabled:
+            cached_row, _resynced_at = db.get_peer_next_sheet_row(peer["id"])
+            if cached_row is not None and cached_row >= 7:
+                next_row = cached_row
+        else:
+            # v3.1 (Codex P0-2 修): flag 关掉时, 顺手清掉这个 peer 的 next_sheet_row
+            # 防止: flag 关 → append 写到全表底部 → flag 重新开 → 用陈旧 next_row update 老行覆盖。
+            # 清空后重新开 flag 时走 NULL fallback append, 等下一轮 resync 重算才走 update 路径。
+            cached_row, _ = db.get_peer_next_sheet_row(peer["id"])
+            if cached_row is not None:
+                db.invalidate_peer_next_sheet_row(peer["id"], "flag_disabled")
+
+        if next_row is not None:
+            # v3.1 update 路径
+            try:
+                start_row = self._write_messages_via_update(
+                    ws, peer, rows, col_a, col_c, col_start, next_row, messages
+                )
+                if start_row is not None:
+                    self._post_write_finalize(ws, col_group, start_row, rows, messages)
+                    return
+            except Exception as e:
+                logger.warning(
+                    "[write update] 失败 peer=%s next_row=%s, fallback append: %s",
+                    peer["id"], next_row, e,
+                )
+                db.invalidate_peer_next_sheet_row(peer["id"], "update_exception")
+                # 继续走 append fallback
+
+        # v3.0.8 append 路径(默认 / fallback)
+        start_row = self._write_messages_via_append(ws, peer, rows, col_a, col_c, col_start)
+        self._post_write_finalize(ws, col_group, start_row, rows, messages)
+
+    def _write_messages_via_update(self, ws, peer, rows, col_a, col_c, col_start, next_row, messages):
+        """v3.1 update 路径 — 显式写到 next_row,写完原子 bump DB next_sheet_row += N。
+
+        响应 updatedRange 校验:
+          - Google update 是按指定 range 写, 不会"自动跳行" — updatedRange 里的 start_row
+            一定等于我们传的 next_row。如果不等 = gspread 返回异常 / API 行为变化, invalidate 保守。
+          - SHEET_RESYNC_VERIFY_BEFORE_WRITE=true 时, 写前再读 acell(next_row, col_a) 确认空,
+            非空就 invalidate + raise 让上层 fallback 到 append(零覆盖)。
+
+        返回 start_row (= next_row);任何异常往上抛由 write_messages 兜底走 append。
+        """
+        end_row = next_row + len(rows) - 1
+        self._ensure_cols(ws, col_start + 3)
+
+        # 强保护模式:写前 verify 那行真空(quota 翻倍)
+        if getattr(config, "SHEET_RESYNC_VERIFY_BEFORE_WRITE", False):
+            self._rate_limit()
+            try:
+                cell_val = ws.acell(f"{col_a}{next_row}").value
+            except Exception as e:
+                logger.warning("[write update verify] acell 失败 peer=%s row=%s: %s",
+                               peer["id"], next_row, e)
+                db.invalidate_peer_next_sheet_row(peer["id"], "verify_acell_failed")
+                raise
+            if cell_val:
+                logger.warning(
+                    "[write update verify] peer=%s row=%s 已有内容 (%r), 走 fallback 防覆盖",
+                    peer["id"], next_row, cell_val[:30],
+                )
+                db.invalidate_peer_next_sheet_row(peer["id"], "verify_cell_not_empty")
+                raise RuntimeError(f"verify_cell_not_empty: row {next_row}")
+
+        # 实际 update
+        self._rate_limit()
+        resp = ws.update(
+            f"{col_a}{next_row}:{col_c}{end_row}",
+            rows,
+            value_input_option="USER_ENTERED",
+        )
+
+        # 校验 updatedRange 跟预期一致(防御性)
+        import re as _re
+        updated_range = (resp or {}).get("updatedRange", "") or ""
+        m = _re.search(r"![A-Z]+(\d+):[A-Z]+(\d+)", updated_range)
+        if m:
+            actual_start = int(m.group(1))
+            if actual_start != next_row:
+                logger.warning(
+                    "[write update] updatedRange row mismatch peer=%s expected=%s got=%s, invalidate",
+                    peer["id"], next_row, actual_start,
+                )
+                db.invalidate_peer_next_sheet_row(peer["id"], "row_mismatch")
+                # 数据已经写了, 接受这次但下次走 append; 用 actual_start 回写 db 防 mark_written 错位
+                next_row = actual_start
+
+        # 原子 bump next_sheet_row += len(rows) (DB 层 UPDATE)
+        db.bump_peer_next_sheet_row(peer["id"], len(rows))
+        logger.info(
+            "写入 %d 条到 %s 列组%d (%s-%s列, row %d-%d, update API)",
+            len(rows), ws.title, peer["col_group"], col_a, col_c, next_row, next_row + len(rows) - 1,
+        )
+        return next_row
+
+    def _write_messages_via_append(self, ws, peer, rows, col_a, col_c, col_start):
+        """v3.0.8 append 路径(保留作 v3.1 fallback)— 写法跟 v3.0.8 一样, 只是抽函数。
+        返回 start_row 给上层做 mark_written / 补红。
+        """
         # v3.0.8: append_rows 替代 update + col_values
-        # table_range = "{col_a}:{col_c}" 限定本列组的 3 列, 不会跨列组打架
-        # insert_data_option="OVERWRITE" → 写到末尾, 不在中间插行打乱其他列组的对齐
-        # value_input_option="USER_ENTERED" → =IMAGE() / =HYPERLINK() 公式渲染 (媒体上传场景)
+        # table_range = "{col_a}:{col_c}" 限定本列组 3 列, **但实测 Google 自动检测整张表 boundary**,
+        # 写入仍跟全表底部对齐(ADR-0027 揭示)。这是 fallback 路径接受的副作用。
         self._rate_limit()
         try:
             resp = ws.append_rows(
@@ -1081,16 +1191,11 @@ class SheetsWriter:
                 table_range=f"{col_a}:{col_c}",
             )
 
-        # 解析 updates.updatedRange 拿 start_row, 回写 db.mark_written
-        # resp 形如: {'spreadsheetId': '...', 'tableRange': "'Tab'!A1:C6",
-        #            'updates': {'spreadsheetId':'...', 'updatedRange':"'Tab'!A7:C9",
-        #                        'updatedRows':3, ...}}
+        # 解析 updates.updatedRange 拿 start_row
         import re as _re
         updated_range = ((resp or {}).get("updates") or {}).get("updatedRange", "")
         m = _re.search(r"![A-Z]+(\d+):[A-Z]+(\d+)$", updated_range)
         if not m:
-            # 极少数情况下 gspread 没返 updatedRange (老版本/响应被截断) — 保守 fallback:
-            # 触发一次 col_values 拿真实当前末尾, 反推 start_row。这是 v3.0.8 之前的老行为兜底。
             logger.warning("[append_rows] updatedRange 解析失败 (resp=%s), 走 col_values fallback", resp)
             self._rate_limit()
             existing = ws.col_values(col_start + 1)
@@ -1098,19 +1203,20 @@ class SheetsWriter:
         else:
             start_row = int(m.group(1))
 
-        # v2.10.23: 写完立刻标 sheet_written=1,同时回头看「写入期间是否被删」
+        logger.info(
+            "写入 %d 条到 %s 列组%d (%s-%s列, row %d-%d, append API)",
+            len(rows), ws.title, peer["col_group"], col_a, col_c, start_row, start_row + len(rows) - 1,
+        )
+        return start_row
+
+    def _post_write_finalize(self, ws, col_group, start_row, rows, messages):
+        """v3.1: write 后两路径共用收尾 — mark_written + delete_mark_pending 补红。"""
         pending_delete_rows = []   # [(row, msg_db_id)]
         for i, msg in enumerate(messages):
             db.mark_written(msg["id"], start_row + i)
             if db.check_delete_mark_pending(msg["id"]):
                 pending_delete_rows.append((start_row + i, msg["id"]))
 
-        logger.info(
-            "写入 %d 条到 %s 列组%d (%s-%s列, row %d-%d, append API)",
-            len(rows), ws.title, col_group, col_a, col_c, start_row, start_row + len(rows) - 1,
-        )
-
-        # 补红(可能失败但不致命,下次 patrol 也会补)
         for row, msg_db_id in pending_delete_rows:
             try:
                 self._mark_row_red_strikethrough(ws, row, col_group)
@@ -1145,6 +1251,97 @@ class SheetsWriter:
                 "strikethrough": True,
             }
         })
+
+    def resync_peer_positions(self):
+        """v3.1 (ADR-0027 / Codex P1-1 修): 后台扫描 — 拉所有 worksheet 一次性 get_all_values,
+        找每个 peer 列第一个空行, 写入 peers.next_sheet_row。
+
+        客户场景:
+        - 客户在 Sheet 手动删了某 peer 旧消息 (e.g. row 50~100) → 下次 resync 后系统知道
+          那个 peer 的 next_sheet_row 退到 50, write_messages 走 update 路径自动填回去
+        - 客户扩展某 peer 的列内容(没删行) → next_sheet_row 顶到末尾外, append 行为不变
+
+        API 用量:
+        - 整个 spreadsheet 每个 worksheet 1 次 ws.get_all_values() = 1 read API call
+        - 100 worksheet = 100 reads / 15 min ≈ 6.7 reads/min, Google quota 远充足
+        - 进 _rate_limit 同令牌桶, 不会撞写入 quota(令牌满 → resync sleep 让位)
+
+        线程安全(Codex P1-1 修):
+        - **远端 read API 调用不再持 _write_lock** — 防长时间持锁阻塞 flush_pending
+          (旧设计在 _write_lock 里 100 worksheets × N 秒 → flush 卡死)
+        - DB 写入(set_peer_next_sheet_row)是 SQLite 原子 UPDATE, 不需要 _write_lock
+          tg-monitor 容器内单实例 + 单 _sheet_position_resync_loop coro, 无并发 race
+        - 接受短暂 staleness: scan 完后 flush 可能在锁外 bump 了 next_row, resync set 会覆盖
+          → 下轮 resync 自动修复, 不致命
+
+        异常:
+        - 个 worksheet 失败不影响整轮(try/except 隔离, 记 errors list)
+        - 整轮异常上抛由 tasks._sheet_position_resync_loop 兜底 log + 下轮重试
+        """
+        started = time.time()
+        accounts = db.get_all_accounts()
+        accounts_by_id = {a["id"]: a for a in accounts}
+        peers_by_account = {}
+        for p in db.get_all_peers_with_col_group():
+            peers_by_account.setdefault(p["account_id"], []).append(p)
+
+        stats = {
+            "worksheets_scanned": 0,
+            "peers_updated": 0,
+            "errors": [],
+            "duration_sec": 0,
+        }
+
+        # Phase 1 (无锁): 列 worksheets
+        try:
+            ws_index = {ws.title: ws for ws in self.spreadsheet.worksheets()}
+        except Exception as e:
+            logger.error("[sheet_resync] worksheets() 失败: %s", e)
+            stats["errors"].append(f"list_worksheets: {e}")
+            stats["duration_sec"] = round(time.time() - started, 2)
+            self._last_resync_stats = stats
+            return stats
+
+        # Phase 2 (无锁): 逐 worksheet 拉数据 + 解析 + 写 DB
+        # _rate_limit 进同一令牌桶 — 不撞 flush 写 quota
+        # SQLite UPDATE 是原子, 不需要 _write_lock
+        for acc_id, peers in peers_by_account.items():
+            account = accounts_by_id.get(acc_id)
+            if not account:
+                continue
+            tab_name = (account["sheet_tab"] or account["name"] or account["phone"] or "").strip()
+            if not tab_name:
+                continue
+            ws = ws_index.get(tab_name)
+            if not ws:
+                stats["errors"].append(f"{tab_name}: worksheet not found")
+                continue
+            self._rate_limit()
+            try:
+                values = ws.get_all_values()
+            except Exception as e:
+                logger.warning("[sheet_resync] %s get_all_values 失败: %s", tab_name, e)
+                stats["errors"].append(f"{tab_name}: {e}")
+                continue
+            stats["worksheets_scanned"] += 1
+            for p in peers:
+                cg = p["col_group"]
+                if cg is None or cg < 0:
+                    continue
+                col_start = cg * 3
+                next_row = _scan_first_empty(values, col_start)
+                db.set_peer_next_sheet_row(p["id"], next_row)
+                stats["peers_updated"] += 1
+
+        stats["duration_sec"] = round(time.time() - started, 2)
+        self._last_resync_ts = db.now_bj()
+        self._last_resync_stats = stats
+        logger.info(
+            "[sheet_resync] 完成: %d worksheets / %d peers / %d errors / %ss",
+            stats["worksheets_scanned"], stats["peers_updated"],
+            len(stats["errors"]), stats["duration_sec"],
+        )
+        return stats
 
     def flush_pending(self):
         """批量写入所有未写入的消息。
@@ -1301,3 +1498,26 @@ def _col_letter(index):
         if index < 0:
             break
     return result
+
+
+def _scan_first_empty(values, col_start, header_rows=6):
+    """v3.1 (ADR-0027) 纯函数 — 在 worksheet.get_all_values() 输出里找指定 col_group 第一个全空 row。
+
+    参数:
+      values:     ws.get_all_values() 返回的二维 list (0-based row,0-based col)
+                  values[r] 是 row r+1 的所有列, 长度可能短于实际列数(尾部空 cell 被 trim)
+      col_start:  col_group * 3, 这个 peer 的时间戳列(0-based)
+      header_rows: 跳过开头多少 row(默认 6,row 1-6 是 banded header)
+
+    返回:1-based row(下次 update 写到第几行), 跳过 header 后第一个 (a/b/c) 三列都空的 row。
+         若整列都满了, 返回 max(rows) + 1(等价 append 行为)。
+    """
+    rows = max(len(values), header_rows)
+    for r_idx in range(header_rows, rows):
+        row = values[r_idx]
+        a = row[col_start]     if len(row) > col_start     else ""
+        b = row[col_start + 1] if len(row) > col_start + 1 else ""
+        c = row[col_start + 2] if len(row) > col_start + 2 else ""
+        if not a and not b and not c:
+            return r_idx + 1   # 1-based
+    return rows + 1            # 全满 → 写到末尾下一行

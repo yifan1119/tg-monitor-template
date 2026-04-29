@@ -789,6 +789,32 @@
           </div>
         </div>
       </div>
+
+      {# v3.1 (ADR-0027): Sheet 后台扫描自动回填空位 #}
+      <div class="field">
+        <label>Sheet 自动扫描行号 <span style="color:#7c8a9a;font-weight:400;">(高级,客户手动删旧消息后自动填空位)</span></label>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:200px;">
+            <input type="number" name="sheet_resync_interval_minutes" id="sheet_resync_interval_minutes"
+                   value="{{ d.sheet_resync_interval_minutes or 15 }}" min="5" max="180"
+                   style="width:100%;box-sizing:border-box;">
+            <div class="hint" style="margin-top:4px;">
+              <b>每 N 分钟扫一次整张 Sheet</b>(默认 15)。客户手动清理旧消息后,系统在此间隔内自动知道哪行空了,新消息会自动填进去。100+ 外事号大客户建议改 30+ 留 quota 余量。
+            </div>
+          </div>
+          <div style="flex:1;min-width:200px;">
+            <select name="sheet_resync_enabled" id="sheet_resync_enabled"
+                    style="width:100%;box-sizing:border-box;padding:8px;">
+              <option value="true" {% if (d.sheet_resync_enabled or 'true') == 'true' %}selected{% endif %}>开启(推荐)</option>
+              <option value="false" {% if d.sheet_resync_enabled == 'false' %}selected{% endif %}>关闭(退回 v3.0.9 纯追加行为)</option>
+            </select>
+            <div class="hint" style="margin-top:4px;">
+              <b>启用后台扫描</b>。关掉则新消息永远写在 Sheet 全表底部,客户删旧消息不会被回填。
+              <br>默认开启「写前校验」(每条多读 1 个格子,确保不覆盖客户手填的内容)— 想极致省配额可在 .env 加 <code>SHEET_RESYNC_VERIFY_BEFORE_WRITE=false</code> 关闭。
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="section">
