@@ -32,6 +32,8 @@ def reload_if_env_changed():
     global TWO_STAGE_NO_REPLY_ENABLED, NO_REPLY_STAGE2_AFTER_MIN, UNREPLIED_ALERT_GROUP_ID
     global REMIND_30MIN_TEXT, REMIND_40MIN_TEXT, REMIND_DELETE_TEXT
     global TG_DEVICE_MODEL, TG_SYSTEM_VERSION, TG_APP_VERSION, TG_LANG_CODE, TG_SYSTEM_LANG
+    # v3.0.10:无意义未回复消息过滤 — 客户改 .env 立刻生效不用重启容器
+    global SKIP_NO_REPLY_MIN_LEN, SKIP_NO_REPLY_TEXTS, SKIP_NO_REPLY_PURE_EMOJI
     try:
         m = _ENV_PATH.stat().st_mtime
     except OSError:
@@ -91,6 +93,24 @@ def reload_if_env_changed():
     REMIND_40MIN_TEXT = os.environ.get("REMIND_40MIN_TEXT", "").strip()
     # v3.0.5: 删除消息预警的 @ 负责人提示文案,空=默认「请核实并做审批」
     REMIND_DELETE_TEXT = os.environ.get("REMIND_DELETE_TEXT", "").strip()
+    # v3.0.10: 无意义未回复消息过滤 — 客户在后台改 .env 立刻生效
+    try:
+        SKIP_NO_REPLY_MIN_LEN = int(os.environ.get("SKIP_NO_REPLY_MIN_LEN", "1"))
+    except ValueError:
+        pass
+    _skip_user_new = [t.strip() for t in os.environ.get("SKIP_NO_REPLY_TEXTS", "").split(",") if t.strip()]
+    if _skip_user_new:
+        SKIP_NO_REPLY_TEXTS = set(_skip_user_new)
+    else:
+        # 留空 = 用内置默认
+        SKIP_NO_REPLY_TEXTS = set([
+            "你好", "您好", "嗨", "hi", "hello", "Hi", "Hello", "HELLO",
+            "在", "在?", "在?", "在吗", "在嘛", "在么", "在不在", "在不",
+            "1", "?", "?", "??", "??", "嗯", "嗯嗯", "哦", "哦哦",
+            "好", "好的", "好滴", "ok", "OK", "okay", "Okay",
+            "哈", "哈哈", "嘿", "嘿嘿",
+        ])
+    SKIP_NO_REPLY_PURE_EMOJI = os.environ.get("SKIP_NO_REPLY_PURE_EMOJI", "true").lower() == "true"
     # v3.0.0:TG 设备身份也支持热 reload(虽然 TG server 缓存会有延迟,但至少本进程能立刻读新值)
     TG_DEVICE_MODEL   = os.environ.get("TG_DEVICE_MODEL",   "shencha")
     TG_SYSTEM_VERSION = os.environ.get("TG_SYSTEM_VERSION", "1.0")
@@ -149,6 +169,69 @@ else:
 # 业务设置
 KEYWORDS = [k.strip() for k in os.environ.get("KEYWORDS", "").split(",") if k.strip()]
 NO_REPLY_MINUTES = int(os.environ.get("NO_REPLY_MINUTES", "30"))
+
+# v3.0.10: 略过无意义客户消息的未回复告警(2026-04-29 客户反馈)
+# 客户发「你好 / 表情包 / 1 / ?」这种问候性消息,业务员看见也没必要立刻回 → 不应触发未回复预警。
+# 三层过滤:
+#   1. text 长度 <= SKIP_NO_REPLY_MIN_LEN(默认 1):略过(含纯标点 "?" "!" 这种)
+#   2. text strip 后命中 SKIP_NO_REPLY_TEXTS 列表(逗号分隔):略过
+#   3. text 是纯 emoji / 表情符号(unicode 范围检测):略过
+# 任意一条命中就 skip,不进 _no_reply_loop。三规则全空 → 行为完全 = v3.0.9.1(向后兼容)。
+SKIP_NO_REPLY_MIN_LEN = int(os.environ.get("SKIP_NO_REPLY_MIN_LEN", "1"))
+_skip_user = [t.strip() for t in os.environ.get("SKIP_NO_REPLY_TEXTS", "").split(",") if t.strip()]
+_skip_default = [
+    "你好", "您好", "嗨", "hi", "hello", "Hi", "Hello", "HELLO",
+    "在", "在?", "在?", "在吗", "在嘛", "在么", "在不在", "在不",
+    "1", "?", "?", "??", "??", "嗯", "嗯嗯", "哦", "哦哦",
+    "好", "好的", "好滴", "ok", "OK", "okay", "Okay",
+    "哈", "哈哈", "嘿", "嘿嘿",
+]
+SKIP_NO_REPLY_TEXTS = set(_skip_user) if _skip_user else set(_skip_default)
+SKIP_NO_REPLY_PURE_EMOJI = os.environ.get("SKIP_NO_REPLY_PURE_EMOJI", "true").lower() == "true"
+
+
+def is_trivial_no_reply(text) -> bool:
+    """v3.0.10: 判断该客户消息是不是「无意义问候 / 表情」,是 → 略过未回复告警。
+    text 为空或非字符串 → 保守视为不 trivial(可能是图 / 视频 / 文件,有业务含义)。"""
+    if not text or not isinstance(text, str):
+        return False
+    s = text.strip()
+    if not s:
+        return False
+    # 长度阈值
+    if len(s) <= SKIP_NO_REPLY_MIN_LEN:
+        return True
+    # 文本黑名单(命中即略)
+    if s in SKIP_NO_REPLY_TEXTS:
+        return True
+    # 纯 emoji / 标点符号
+    if SKIP_NO_REPLY_PURE_EMOJI:
+        non_emoji = False
+        for ch in s:
+            if ch.isspace() or ch in '。.,,!!??;;::、~':
+                continue
+            code = ord(ch)
+            # emoji 主要 unicode 范围 + ZWJ + VS + keycap / 国旗 / © ® ™ 等单点
+            # (Codex P1 review:补全漏的 ©️ ®️ ™️ 1️⃣ #️⃣ *️⃣ 等带 VS / keycap 的 emoji)
+            if (0x1F300 <= code <= 0x1FAFF or  # Misc symbols + emoji + extended
+                0x2600 <= code <= 0x27BF or    # Misc symbols + dingbats
+                0x1F000 <= code <= 0x1F2FF or  # mahjong / domino / playing cards
+                0x2B00 <= code <= 0x2BFF or    # arrows
+                code == 0x200D or              # ZWJ
+                0xFE00 <= code <= 0xFE0F or    # variation selectors (含 VS16 keycap 修饰)
+                0x1F1E6 <= code <= 0x1F1FF or  # regional indicators (国旗)
+                code in (0x00A9, 0x00AE, 0x2122) or  # © ® ™
+                code == 0x20E3 or              # keycap combiner (1️⃣ #️⃣ *️⃣ 0️⃣ 等)
+                0x0023 == code or 0x002A == code or  # # * 字符本体(配 keycap 用)
+                0x0030 <= code <= 0x0039 or    # 0-9 数字本体(配 keycap 用)
+                0xE0020 <= code <= 0xE007F):   # tag characters(国旗子区域)
+                continue
+            non_emoji = True
+            break
+        if not non_emoji:
+            return True
+    return False
+
 # 保留向后兼容（旧单段时段，已弃用，实际以 WORK_SCHEDULE 为准）
 WORK_HOUR_START = int(os.environ.get("WORK_HOUR_START", "11"))
 WORK_HOUR_END = int(os.environ.get("WORK_HOUR_END", "23"))

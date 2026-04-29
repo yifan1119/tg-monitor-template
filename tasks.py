@@ -288,6 +288,8 @@ class TaskScheduler:
         await asyncio.sleep(15)
         while self._running:
             try:
+                # v3.0.10: 每轮先 reload .env,客户改「无意义消息」黑名单立刻生效
+                config.reload_if_env_changed()
                 now = datetime.now(TZ_BJ)
 
                 # 当前不在工作时段 → 这一轮不发任何预警
@@ -299,6 +301,16 @@ class TaskScheduler:
                 for account in accounts:
                     candidates = db.get_unanswered_candidates(account["id"])
                     for row in candidates:
+                        # v3.0.10: 客户最新一条是「无意义问候 / 表情包」→ 略过告警
+                        # 文本规则:你好 / 在? / 1 / ?? / 纯 emoji
+                        # 媒体规则:sticker(表情包)无业务含义直接略,photo/video/file 仍触发(可能业务图)
+                        last_text = row["last_text"] or ""
+                        last_media = (row["last_media_type"] if "last_media_type" in row.keys() else "") or ""
+                        if last_media == "sticker":
+                            continue
+                        if config.is_trivial_no_reply(last_text):
+                            continue
+
                         try:
                             last_dt = datetime.strptime(row["last_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ_BJ)
                         except Exception:
