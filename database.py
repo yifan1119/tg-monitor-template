@@ -573,9 +573,11 @@ def get_unanswered_peers(account_id, minutes=30):
 
 def get_unanswered_candidates(account_id):
     """找出 "最后一条是 B 发、且尚未推过 no_reply 预警" 的所有对话。
-    不做时间过滤，由调用方按工作时段累计计算是否超时。"""
+    不做时间过滤,由调用方按工作时段累计计算是否超时。
+    v3.0.10: 多 SELECT m.media_type — 调用方用来略过 sticker / 表情包 等无业务含义类型。"""
     return get_conn().execute("""
-        SELECT p.*, m.text as last_text, m.timestamp as last_time, m.msg_id as last_msg_id
+        SELECT p.*, m.text as last_text, m.timestamp as last_time, m.msg_id as last_msg_id,
+               m.media_type as last_media_type
         FROM peers p
         JOIN messages m ON m.peer_id = p.id
         WHERE p.account_id = ?
