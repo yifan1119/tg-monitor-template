@@ -721,6 +721,10 @@ def sheets_health():
         ).fetchone()["t"]
         # v3.0.6: 诊断具体原因
         status, status_msg, action = _diagnose_sheets_stuck(pending, last)
+        # v3.1 (ADR-0027): 后台 resync 状态(跨容器走 DB MAX(next_sheet_row_resynced_at))
+        resync_enabled = bool(getattr(config, "SHEET_RESYNC_ENABLED", True))
+        resync_interval_min = int(getattr(config, "SHEET_RESYNC_INTERVAL_MINUTES", 15))
+        last_resync = db.get_max_resynced_at() if hasattr(db, "get_max_resynced_at") else None
         return {
             "today_writes": today_writes,
             "pending": pending,
@@ -730,11 +734,18 @@ def sheets_health():
             "status": status,          # "ok" / "warning" / "error"
             "status_msg": status_msg,  # 给客户看的白话说明
             "action": action,          # None / "reauth" / "wait" / "check_sheet"
+            # v3.1 后台扫描状态(给驾驶舱看 + 中央台用)
+            "resync_enabled": resync_enabled,
+            "resync_interval_min": resync_interval_min,
+            "last_resync": last_resync,
+            "last_resync_human": _human_age(last_resync) if last_resync else "—",
         }
     return _safe(_q, {
         "today_writes": 0, "pending": 0,
         "last_write": None, "last_write_human": "—", "sheet_id": "—",
         "status": "unknown", "status_msg": "—", "action": None,
+        "resync_enabled": False, "resync_interval_min": 0,
+        "last_resync": None, "last_resync_human": "—",
     })
 
 

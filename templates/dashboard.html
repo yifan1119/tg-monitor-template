@@ -645,6 +645,8 @@
           <div class="kv-row"><span class="kv-k">待写入</span><span class="kv-v" id="sh-pending">—</span></div>
           <div class="kv-row"><span class="kv-k">最近写入</span><span class="kv-v" id="sh-last">—</span></div>
           <div class="kv-row"><span class="kv-k">Sheet ID</span><span class="kv-v dim" id="sh-id">—</span></div>
+          {# v3.1 (ADR-0027): 后台扫描行号状态 #}
+          <div class="kv-row"><span class="kv-k">行号扫描</span><span class="kv-v" id="sh-resync">—</span></div>
         </div>
         {# v3.0.6: 诊断条 — 堵了才显示,给客户一眼看懂原因 + 修复按钮 #}
         <div id="sh-diag" style="display:none;margin-top:12px;padding:10px 12px;border-radius:8px;">
@@ -1036,6 +1038,22 @@ function renderSheets(s) {
   setText('sh-pending', s.pending > 0 ? s.pending + ' 条' : '0 (全部已写)');
   setText('sh-last', s.last_write_human || '—');
   setText('sh-id', '···' + (s.sheet_id || '—'));
+  // v3.1 (ADR-0027): 后台扫描状态 + 立刻重扫按钮(admin-only)
+  const resyncEl = el('sh-resync');
+  if (resyncEl) {
+    if (!s.resync_enabled) {
+      resyncEl.className = 'kv-v dim';
+      resyncEl.textContent = '已关闭';
+    } else {
+      resyncEl.className = 'kv-v';
+      const interval = s.resync_interval_min || 15;
+      const lastHuman = s.last_resync_human || '从未';
+      const btn = IS_ADMIN
+        ? ' <button onclick="resyncSheetsNow()" style="margin-left:8px;padding:2px 8px;background:rgba(126,201,255,0.15);border:1px solid rgba(126,201,255,0.4);color:#7ec9ff;border-radius:4px;cursor:pointer;font-size:10px;">立刻重扫</button>'
+        : '';
+      resyncEl.innerHTML = `${lastHuman} <span class="dim" style="font-size:11px;">(每 ${interval} 分钟)</span>${btn}`;
+    }
+  }
 
   // v3.0.6: 诊断条 — 只在异常时显示
   const diag = el('sh-diag');
@@ -1434,6 +1452,25 @@ poll();
 
 <script>
 let _sddData = null;
+
+// v3.1 (ADR-0027): 立刻请求后台重扫 Sheet 行号 (admin-only)
+async function resyncSheetsNow() {
+  if (!confirm('立刻发起一次 Sheet 行号扫描?\n\n用途:你刚清理完 Sheet 旧消息,不想等下一轮自动扫(默认 15 分钟),立即触发。\n系统将在 1-30 秒内开始扫描,完成后驾驶舱「行号扫描」时间会刷新。')) return;
+  try {
+    const r = await fetch('/api/sheets/resync-now', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+    });
+    const j = await r.json();
+    if (j.ok) {
+      alert('✓ ' + (j.msg || '已请求扫描'));
+    } else {
+      alert('✗ 失败: ' + (j.msg || j.error || '未知错误'));
+    }
+  } catch (e) {
+    alert('✗ 请求失败: ' + e);
+  }
+}
 
 function openSheetsDeepDiag() {
   const modal = document.getElementById('sheets-deep-diag-modal');

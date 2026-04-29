@@ -2,7 +2,8 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v3.0.9(2026-04-29) — 📊 **中央台数据接口扩展 — 0 客户可见 UI 改动** — `dashboard_api.accounts_matrix()` SELECT 加 `tg_id / business_tg_id / owner_tg_id / remind_*_text`;`alerts_recent()` SELECT 加 `status / stage / keyword / reviewed_at / sheet_written / claimed_at / last_write_error + account_id/peer_id/msg_id`;新增 4 个 `/api/v1/*` 只读 endpoint(`violations` / `alerts` / `peers` / `messages`)沿用 metrics token 鉴权。0 新表 0 新字段 0 数据迁移,纯只读
+> 📌 **最新版**:v3.1(2026-04-29) — 📋 **Sheet 后台扫描 + 客户删旧消息自动回填空位** — `peers` 加 `next_sheet_row` 缓存(migration V6),`write_messages` 双轨决策(update 命中 next_row / NULL 走 append fallback),`_sheet_position_resync_loop` 每 15 分钟 `ws.get_all_values` 一次性扫描整 worksheet 找首空行(1 API/ws 无视 peer 数),解决 v3.0.8 `values.append` 被 Google 自动检测全表 boundary 推高行号、客户删旧消息不回填的痛点;feature flag `SHEET_RESYNC_ENABLED` 默认 ON,关掉退回 v3.0.9 行为;tg-web → tg-monitor IPC 通过 `data/.sheet_resync_request` 文件标志(跟 ADR-0021 OAuth 同模式),admin 「立刻重扫」按钮触发
+> 之前:v3.0.9(2026-04-29) — 📊 **中央台数据接口扩展 — 0 客户可见 UI 改动** — `dashboard_api.accounts_matrix()` SELECT 加 `tg_id / business_tg_id / owner_tg_id / remind_*_text`;`alerts_recent()` SELECT 加 `status / stage / keyword / reviewed_at / sheet_written / claimed_at / last_write_error + account_id/peer_id/msg_id`;新增 4 个 `/api/v1/*` 只读 endpoint(`violations` / `alerts` / `peers` / `messages`)沿用 metrics token 鉴权。0 新表 0 新字段 0 数据迁移,纯只读
 > 之前:v3.0.8.3(2026-04-25) — 🔧 **修「立刻重启监听器」404 找不到容器** — `/api/restart` 改用 `_start_tg_monitor()` 复用现有 fallback(`.env COMPANY_NAME` 跟实际 docker 容器名对不齐时自动 fallback 到本机任意 tg-monitor-*);`dashboard_api._diagnose_sheets_stuck` 同样加 fallback。客户案例: URL `gs2` 但 `.env` 是 `gs1`(部署遗留 inconsistency)
 > 之前:v3.0.8.2(2026-04-25) — 🔧 **升级提示去掉 SSH 包装 + 复制按钮 HTTP/HTTPS 三层兜底 + 深度诊断永远可见入口** — `upgrader.build_upgrade_cmd` 不再 wrap `ssh root@<IP>`(误导客户);3 个 templates 复制按钮加 `copyTextFallback`(`navigator.clipboard` → `execCommand('copy')` → `prompt()` 三层);驾驶舱日志面板上方新增「Sheet 写入诊断 ▸ 立刻深度诊断」**永远可见按钮**(admin only),客户随时点查未写明细 + 一键修
 > 之前:v3.0.8.1(2026-04-25) — 🔧 **docker cp 漏同步根治 + 普通用户隐藏 admin 按钮** — `docker-compose.yml` `tg-web` command 从 `cp -rf templates 目录复制`(嵌套 bug,Flask 读旧版)改成 `templates/*.html` 文件级 glob,以后 templates / README / release_notes 改动 update.sh 后自动生效不用 docker exec 手动同步;`web.py::dashboard_page` 传 `is_admin` 给 template,`dashboard.html` 加 `IS_ADMIN` 全局 JS 标志,管理员才看到「立刻深度诊断」/「一键修复」/「立刻重启监听器」按钮,普通成员看到「请联系管理员」文字提示。CLAUDE.md 硬规定 #8 长期修法落地
@@ -401,7 +402,21 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v3.0.9** (2026-04-29) — 当前稳定版 📊 **(中央台数据接口扩展 — 0 客户可见 UI 改动)**
+- **v3.1** (2026-04-29) — 当前稳定版 📋 **(Sheet 后台扫描 + 客户删旧消息自动回填空位)**
+  - [NEW] **`database.py` migration V6**(ADR-0027)— `peers` 加 `next_sheet_row INTEGER DEFAULT NULL` + `next_sheet_row_resynced_at TEXT DEFAULT NULL`,`idx_peers_next_row` 索引;7 个 helpers(get/set/bump/invalidate/get_all_with_col_group/get_max_resynced_at/get_all_accounts)
+  - [NEW] **`sheets.py` 双轨写入**:`write_messages` 决策 update vs append fallback;`_write_messages_via_update` 命中 `peers.next_sheet_row`,响应 `updatedRange` 校验 row mismatch → invalidate 防御;`_write_messages_via_append` 抽 v3.0.8 老路径作 fallback;`_post_write_finalize` 共用 mark_written + 删除标红 backfill
+  - [NEW] **`sheets.py resync_peer_positions`**:每 worksheet 1 次 `ws.get_all_values()` 整张拉,本地 `_scan_first_empty(values, col_start)` 找首空行更新 DB,持 `_write_lock` 跟 flush 串行
+  - [NEW] **`tasks.py _sheet_position_resync_loop`**:启动等 30s,每 N 分钟 `asyncio.to_thread` 跑;每 5s 检查 `data/.sheet_resync_request` 文件触发 on-demand
+  - [NEW] **`web.py /api/sheets/resync-now`**(@admin_required)— 写文件标志触发跨容器 IPC
+  - [NEW] **`config.py` 3 新配置**:`SHEET_RESYNC_INTERVAL_MINUTES=15` / `SHEET_RESYNC_ENABLED=true` / `SHEET_RESYNC_VERIFY_BEFORE_WRITE=false`(强保护开关)
+  - [NEW] **`dashboard_api.sheets_health` 4 新字段**:`resync_enabled / resync_interval_min / last_resync / last_resync_human`(跨容器走 `db.get_max_resynced_at()`)
+  - [NEW] **驾驶舱 UI** Sheet 健康卡多一行「行号扫描:N 分钟前 (每 15 分钟) [立刻重扫]」(admin-only 按钮);设置页加扫描间隔 + 启用开关
+  - [SAFETY] **0 数据迁移 0 重登 0 强制行为变化** — 老 peer `next_sheet_row=NULL` 自动走 append fallback,首次 resync 完成切 update;feature flag 关掉等价 v3.0.9
+  - [SAFETY] **race 防御 3 层**:updatedRange row mismatch → invalidate / `SHEET_RESYNC_VERIFY_BEFORE_WRITE` acell 验空 / fallback append 兜底零覆盖
+  - [QUOTA] **写 quota 不变**(1 API/peer 跟 v3.0.8 持平),读 quota 极省(15 min × 1 ws = 0.07 reads/min,大客户 100 ws 也仅 6.7 reads/min,远低 300/min 上限)
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v3.0.9** (2026-04-29) 📊 **(中央台数据接口扩展 — 0 客户可见 UI 改动)**
   - [NEW] **`dashboard_api.accounts_matrix()` SELECT 扩字段**(ADR-0026)— 加 `tg_id / business_tg_id / owner_tg_id / remind_30min_text / remind_40min_text`,中央台拿得到 stage1/stage2 @对象 + 提醒模板
   - [NEW] **`dashboard_api.alerts_recent()` SELECT 扩字段** — 加 `status / stage / keyword / reviewed_at / sheet_written / claimed_at / last_write_error + account_id/peer_id/msg_id`,中央台能识别 violation_logged + 看 stage2 升级 + 关键词命中 + Sheet 写入对账
   - [NEW] **4 个新 `/api/v1/*` endpoint** — `violations`(违规登记明细)/ `alerts`(通用查 + 分页)/ `peers`(全监控聊天)/ `messages`(消息明细,强制 account_id+peer_id 必填防整表扫)
