@@ -3,7 +3,11 @@
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
 > 📌 **最新版**:v3.0.13(2026-04-30) — 🔧 **升级后 web 后台 502 自愈(共享 Caddy 模式)** — `update.sh` 末段加 network 重连自愈:检测 `tg-web` 跟它对应的共享 Caddy 不在同一 docker network → 自动 `docker network connect` + `caddy reload`。修一台 VPS 多部门 + 共享 Caddy 模式下,`docker compose up -d` recreate 容器后 `enable_https.sh` 旧 connect 丢失导致 Caddy DNS 解析失败的 502 问题。仅 shared 模式生效(`MY_CADDY != tg-caddy-${COMPANY_NAME}`),自建 Caddy 不影响;幂等 + 失败不阻断。⚠ 第一次升到 v3.0.13 仍需手工修一次,之后自动
-> 之前:v3.1(2026-04-29) — 📋 **Sheet 后台扫描 + 客户删旧消息自动回填空位** — `peers` 加 `next_sheet_row` 缓存(migration V6),`write_messages` 双轨决策(update 命中 next_row / NULL 走 append fallback),`_sheet_position_resync_loop` 每 15 分钟 `ws.get_all_values` 一次性扫描整 worksheet 找首空行(1 API/ws 无视 peer 数),解决 v3.0.8 `values.append` 被 Google 自动检测全表 boundary 推高行号、客户删旧消息不回填的痛点;feature flag `SHEET_RESYNC_ENABLED` 默认 ON,关掉退回 v3.0.9 行为;tg-web → tg-monitor IPC 通过 `data/.sheet_resync_request` 文件标志(跟 ADR-0021 OAuth 同模式),admin 「立刻重扫」按钮触发
+> 之前:v3.0.12(2026-04-30) — 📊 **商务活跃榜接口** `/api/v1/operator_active` — 给中央台拉每个商务每天的活跃广告主数(JOIN messages + accounts,GROUP BY operator,day),0 新表 0 数据迁移
+> 之前:v3.0.11(2026-04-30) — ⏰ **未回复告警工作时段调整**(周一~五晚段 20-22 / 周六 15-19 / 周日休)
+> 之前:v3.0.10(2026-04-30) — 🔇 **略过「你好/表情包/1/?」无意义消息的未回复告警**(默认 30 个常见问候词 + 长度 ≤ 1 + 纯 emoji + sticker)
+>
+> ⚠ **关于 v3.1**:`v3.1` 是 feature 分支(Sheet 后台扫描 + 客户删旧消息自动回填空位,ADR-0027),**未合 main 也未发布 tag**。当前 main 实际线上版本是 v3.0.13。
 > 之前:v3.0.9(2026-04-29) — 📊 **中央台数据接口扩展 — 0 客户可见 UI 改动** — `dashboard_api.accounts_matrix()` SELECT 加 `tg_id / business_tg_id / owner_tg_id / remind_*_text`;`alerts_recent()` SELECT 加 `status / stage / keyword / reviewed_at / sheet_written / claimed_at / last_write_error + account_id/peer_id/msg_id`;新增 4 个 `/api/v1/*` 只读 endpoint(`violations` / `alerts` / `peers` / `messages`)沿用 metrics token 鉴权。0 新表 0 新字段 0 数据迁移,纯只读
 > 之前:v3.0.8.3(2026-04-25) — 🔧 **修「立刻重启监听器」404 找不到容器** — `/api/restart` 改用 `_start_tg_monitor()` 复用现有 fallback(`.env COMPANY_NAME` 跟实际 docker 容器名对不齐时自动 fallback 到本机任意 tg-monitor-*);`dashboard_api._diagnose_sheets_stuck` 同样加 fallback。客户案例: URL `gs2` 但 `.env` 是 `gs1`(部署遗留 inconsistency)
 > 之前:v3.0.8.2(2026-04-25) — 🔧 **升级提示去掉 SSH 包装 + 复制按钮 HTTP/HTTPS 三层兜底 + 深度诊断永远可见入口** — `upgrader.build_upgrade_cmd` 不再 wrap `ssh root@<IP>`(误导客户);3 个 templates 复制按钮加 `copyTextFallback`(`navigator.clipboard` → `execCommand('copy')` → `prompt()` 三层);驾驶舱日志面板上方新增「Sheet 写入诊断 ▸ 立刻深度诊断」**永远可见按钮**(admin only),客户随时点查未写明细 + 一键修
@@ -403,7 +407,29 @@ setup 精灵有「业务参数」区直接改,或编辑 `.env` 的 `KEYWORDS=...
 
 ## 📜 版本
 
-- **v3.1** (2026-04-29) — 当前稳定版 📋 **(Sheet 后台扫描 + 客户删旧消息自动回填空位)**
+- **v3.0.13** (2026-04-30) — 当前稳定版 🔧 **(升级后 web 后台 502 自愈 — 共享 Caddy 模式)**
+  - [FIX] **`update.sh` 末段加 network 重连自愈**(ADR-0032)— 检测 `tg-web` 跟它对应的共享 Caddy 不在同一 docker network → 自动 `docker network connect` web 的 default network 到 Caddy + `caddy reload`
+  - [SAFETY] 仅 shared 外部 Caddy 模式生效(`MY_CADDY != tg-caddy-${COMPANY_NAME}`),自建 Caddy 不影响
+  - [SAFETY] 幂等(`already exists` 过滤)+ 失败不阻断升级
+  - ⚠ **第一次升到 v3.0.13 仍需手工修一次**(因为是 update.sh 自身的修复),之后自动
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v3.0.12** (2026-04-30) 📊 **(商务活跃榜接口)**
+  - [NEW] **`dashboard_api.operator_active(from, to)`**(ADR-0031)— SQL JOIN messages + accounts,GROUP BY operator/day,COUNT(DISTINCT peer_id) 拿活跃广告主数
+  - [NEW] **`/api/v1/operator_active`** endpoint — 中央台 collector 拉这个填「商务活跃榜」表格
+  - [SAFETY] 0 新表 0 新字段 0 数据迁移,纯只读
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v3.0.11** (2026-04-30) ⏰ **(未回复告警工作时段调整)**
+  - [CONFIG] WORK_SCHEDULE 周一~五晚段缩到 22 点(原 23) / 周六改成只 15-19 / 周日休
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v3.0.10** (2026-04-30) 🔇 **(略过无意义消息的未回复告警)**
+  - [NEW] 默认 30 个常见问候黑名单 + 长度 ≤ 1 + 纯 emoji + sticker 不触发未回复告警
+  - [CONFIG] `.env` 可配 `SKIP_NO_REPLY_TEXTS / SKIP_NO_REPLY_MIN_LEN / SKIP_NO_REPLY_PURE_EMOJI`
+  - 升级:`cd /root/tg-monitor-<dept> && ./update.sh`
+
+- **v3.1** (2026-04-29) — 📋 **feature 分支,未发布**(Sheet 后台扫描 + 客户删旧消息自动回填空位)
   - [NEW] **`database.py` migration V6**(ADR-0027)— `peers` 加 `next_sheet_row INTEGER DEFAULT NULL` + `next_sheet_row_resynced_at TEXT DEFAULT NULL`,`idx_peers_next_row` 索引;7 个 helpers(get/set/bump/invalidate/get_all_with_col_group/get_max_resynced_at/get_all_accounts)
   - [NEW] **`sheets.py` 双轨写入**:`write_messages` 决策 update vs append fallback;`_write_messages_via_update` 命中 `peers.next_sheet_row`,响应 `updatedRange` 校验 row mismatch → invalidate 防御;`_write_messages_via_append` 抽 v3.0.8 老路径作 fallback;`_post_write_finalize` 共用 mark_written + 删除标红 backfill
   - [NEW] **`sheets.py resync_peer_positions`**:每 worksheet 1 次 `ws.get_all_values()` 整张拉,本地 `_scan_first_empty(values, col_start)` 找首空行更新 DB,持 `_write_lock` 跟 flush 串行
