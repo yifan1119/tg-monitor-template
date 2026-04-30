@@ -159,6 +159,10 @@
     "title": "🔒 新增「TG 档案群存档」模式(设置页可选,默认关,老客户无感)",
     "body": "新增一种图片/文件存放方式,解决个别客户遇到的谷歌账号被冻结问题。\n\n**问题背景**:\n以前外事号收到的图片和文件会存在客户自己的谷歌云端硬盘里。少数情况下对方发来违规内容,谷歌扫到后会冻结客户的谷歌账号,表格也跟着不能写入。\n\n**新方式**:\n图片和文件改成由 bot 转发到一个独立的 TG 群做存档,表格里只写「图片 #编号」「文件 #编号」带超链接,点一下就跳到档案群看原图/下载。违规内容不再落到谷歌那边,谷歌账号就不会被冻结。\n\n**本版重点**:\n- 功能默认不开,所有老客户升级后一切照旧,跟今天一模一样\n- 后台设置页多了「媒体存储模式」下拉:谷歌云端(默认)/ TG 档案群 / 关闭,想切换的客户自己选\n- 选了「TG 档案群」会多出一个「档案群 ID」输入框(负数,-100 开头那种)\n- 建群拉 bot 进去,在群里发 /chatid,bot 会回一条消息告诉你这个群的 ID,复制回填即可\n\n**升级一条命令,已登录账号不用重登,没切换就没影响:**\n`cd /root/tg-monitor-<部门> && ./update.sh`"
   },
+  "v3.0.13": {
+    "title": "🔧 升级后 web 后台 502 自愈(共享 Caddy 模式)",
+    "body": "**问题背景**:\n部分客户使用「一台 VPS 多部门 + 共享 Caddy」模式部署。每次跑 `./update.sh` 升级时,docker compose 会 recreate `tg-web` 容器,新容器跟共享 Caddy 之间的 docker network 连接随旧容器一起丢失 → Caddy 反代 DNS 解析容器名失败 → web 后台 502。\n\n**这版修了什么**:\n`update.sh` 在升级末段自动检测 web 容器跟它对应的共享 Caddy 是否在同一 docker network。不在 → 自动 `docker network connect` + `caddy reload`,几秒内自愈。\n\n**对客户影响**:\n- 共享 Caddy 模式客户:升级后 502 不再出现,无需手工 SSH 修\n- 自建 Caddy(`tg-caddy-<部门>`)模式客户:不受影响(走 docker compose default network 不会断)\n- 不动数据库 / 不动 sessions / 不动监听\n- 200+ TG 账号不重登\n\n**升级动作**:\n`cd /root/tg-monitor-<部门> && ./update.sh`\n\n本版升级后再升级才生效(因为是 update.sh 本身的修复)— 第一次升级仍需手工:`docker network connect <web-net> <caddy>` + `docker exec <caddy> caddy reload`。"
+  },
   "v3.0.12": {
     "title": "📊 商务活跃榜 — 中央台新增 /api/v1/operator_active(本版无客户可见 UI 改动)",
     "body": "**客户反馈**:中央台想看每个商务人员的「日活跃广告主数」绩效统计。\n\n**这版改动**:\n新增 `/api/v1/operator_active?from=X&to=Y` 只读接口,返回该时段每个商务每天对多少不同广告主有过任意方向消息。\n\n**对客户影响**:\n- 驾驶舱 / 设置页 / 账号管理 完全没 UI 改动\n- 不动数据库 / 不动 sessions / 不动监听\n- 200+ TG 账号不重登\n- 升级后中央台「商务活跃榜」表格立刻有数\n\n**升级动作**:\n`cd /root/tg-monitor-<部门> && ./update.sh`\n\n纯 SELECT 接口,完全向后兼容,跟 v3.0.9.1 / v3.0.10 / v3.0.11 同模式。"

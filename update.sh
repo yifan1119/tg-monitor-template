@@ -291,6 +291,44 @@ if [ -n "$MY_CADDY" ]; then
     fi
 fi
 
+# ===== 5b. v3.0.13: shared Caddy 模式下,确保 web 容器跟 Caddy 在同一 docker network =====
+# 背景: docker compose up -d 可能 recreate tg-web 容器,
+#       enable_https.sh 之前加的 docker network connect 会随旧容器一起丢。
+#       新 web 容器跟 shared Caddy 不在同一 network → Caddy DNS 解析容器名失败 → 502。
+# 自愈: 检测后自动 docker network connect + caddy reload。
+if [ -n "$MY_CADDY" ] && [ "$MY_CADDY" != "tg-caddy-${COMPANY_NAME}" ]; then
+    # 仅 shared 外部 Caddy 模式才需要(自建 Caddy 走 docker compose default network 不会断)
+    WEB_CONTAINER="tg-web-${COMPANY_NAME}"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$WEB_CONTAINER"; then
+        CADDY_NETS=$(docker inspect "$MY_CADDY" \
+            --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null)
+        WEB_NETS=$(docker inspect "$WEB_CONTAINER" \
+            --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null)
+        SHARED=""
+        for net in $CADDY_NETS; do
+            [ "$net" = "bridge" ] && continue
+            if echo " $WEB_NETS " | grep -q " $net "; then
+                SHARED="$net"
+                break
+            fi
+        done
+        if [ -z "$SHARED" ]; then
+            # 优先选 web 默认 network 把 Caddy 接进去(语义更对 — 让 Caddy 进部门 net)
+            WEB_PRIMARY=$(echo "$WEB_NETS" | awk '{print $1}')
+            if [ -n "$WEB_PRIMARY" ] && [ "$WEB_PRIMARY" != "bridge" ]; then
+                echo ""
+                echo "🔧 检测到 ${WEB_CONTAINER} 跟 ${MY_CADDY} 不在同一 docker network"
+                echo "   (升级 recreate 容器后断开,会导致 502)"
+                echo "   自动把 ${MY_CADDY} 接入 ${WEB_PRIMARY}..."
+                docker network connect "$WEB_PRIMARY" "$MY_CADDY" 2>&1 \
+                    | grep -v "already exists" | grep -v "^$" || true
+                docker exec "$MY_CADDY" caddy reload --config /etc/caddy/Caddyfile 2>&1 \
+                    | grep -iE 'error|fail' || echo "   ✅ Caddy 已 reload"
+            fi
+        fi
+    fi
+fi
+
 # ===== 6. 升级成功 =====
 echo ""
 echo "╔══════════════════════════════════════════════╗"
