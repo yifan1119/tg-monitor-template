@@ -1300,6 +1300,55 @@ def _validate_choice(val, choices, name, optional=True):
     return val
 
 
+def operator_active(from_date: str, to_date: str) -> list:
+    """v3.0.12: 商务人员每日活跃广告主数 — 给中央台「商务活跃榜」用。
+
+    定义:某个商务负责的所有外事号(accounts.operator),当天跟多少个不同广告主
+    (peer_id)有过任意方向消息(收 OR 发都算)。
+
+    返回 list of dict:
+      [{operator, day, active_peers, account_count}, ...]
+    其中 account_count 是该 operator 名下外事号数(给中央台算「平均/号」用)
+    """
+    from datetime import datetime, timedelta
+    try:
+        d_from = datetime.strptime(from_date, "%Y-%m-%d").date()
+        d_to = datetime.strptime(to_date, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        raise ValueError("from / to 必须是 YYYY-MM-DD 格式")
+    if d_to < d_from:
+        raise ValueError("to 不能早于 from")
+    right_open = (d_to + timedelta(days=1)).strftime("%Y-%m-%d")
+    left_inc = d_from.strftime("%Y-%m-%d")
+
+    conn = db.get_conn()
+    rows = conn.execute(
+        """
+        SELECT a.operator AS operator,
+               substr(m.timestamp, 1, 10) AS day,
+               COUNT(DISTINCT m.peer_id) AS active_peers
+        FROM messages m
+        JOIN accounts a ON m.account_id = a.id
+        WHERE m.timestamp >= ? AND m.timestamp < ?
+          AND a.operator IS NOT NULL AND a.operator != ''
+        GROUP BY a.operator, day
+        ORDER BY day DESC, active_peers DESC
+        """,
+        (left_inc, right_open),
+    ).fetchall()
+    # 算每个 operator 名下外事号数(给中央台算"平均/号"用)
+    op_count = {r["operator"]: r["n"] for r in conn.execute(
+        "SELECT operator, COUNT(*) AS n FROM accounts "
+        "WHERE operator IS NOT NULL AND operator != '' GROUP BY operator"
+    ).fetchall()}
+    return [{
+        "operator": r["operator"],
+        "day": r["day"],
+        "active_peers": r["active_peers"],
+        "account_count": op_count.get(r["operator"], 0),
+    } for r in rows]
+
+
 def violations(from_date=None, to_date=None, alert_type=None):
     """v3.0.9: 违规登记明细 — status='violation_logged' 的 alert 列表。
 

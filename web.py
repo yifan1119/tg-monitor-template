@@ -2719,6 +2719,39 @@ def api_v1_messages_count():
     return jsonify({"ok": True, **result})
 
 
+@app.route("/api/v1/operator_active", methods=["GET"])
+def api_v1_operator_active():
+    """v3.0.12: 商务人员每日活跃广告主数 — 给中央台「商务活跃榜」用。
+
+    Query params:
+      from (YYYY-MM-DD, 必填)  含
+      to   (YYYY-MM-DD, 必填)  含
+
+    返回:
+      {ok, items: [{operator, day, active_peers, account_count}, ...]}
+
+    错误码:401 / 400 / 500
+    """
+    ok, err = _v1_check_token()
+    if not ok:
+        _metrics_log_access(False, "v1.operator_active:" + err)
+        return jsonify({"ok": False, "error": err}), 401
+    f = request.args.get("from")
+    t = request.args.get("to")
+    if not f or not t:
+        return jsonify({"ok": False, "error": "from 和 to 必填(YYYY-MM-DD)"}), 400
+    try:
+        import dashboard_api
+        items = dashboard_api.operator_active(f, t)
+    except ValueError as ve:
+        return jsonify({"ok": False, "error": str(ve)}), 400
+    except Exception as e:
+        logger.exception("api_v1_operator_active failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    _metrics_log_access(True, "v1.operator_active:ok")
+    return jsonify({"ok": True, "items": items})
+
+
 @app.route("/api/settings/metrics_token/regenerate", methods=["POST"])
 @login_required
 def api_metrics_token_regenerate():
