@@ -435,6 +435,22 @@ SHEETS_FLUSH_INTERVAL = int(os.environ.get("SHEETS_FLUSH_INTERVAL", "5"))
 # 200+ 账号大客户撞配额时可调 30-40 进一步保守
 SHEETS_RATE_LIMIT_PER_MIN = int(os.environ.get("SHEETS_RATE_LIMIT_PER_MIN", "50"))
 
+# v3.1 (ADR-0027): Sheet 后台扫描自动回填空位
+# 每 N 分钟拉一次整张 Spreadsheet, 解析每个 peer 列找第一个空行更新 DB next_sheet_row。
+# 客户手动删 Sheet 旧消息后, 新消息自动填空位(无需人工触发)。
+# 默认 15 分钟; 大客户 100+ worksheet 建议改 30+ 避免占用 quota
+# (1 次 worksheet.get_all_values 是 1 次 read API; 100 worksheet × 4/小时 = 400/小时 = 6.7/min)
+SHEET_RESYNC_INTERVAL_MINUTES = int(os.environ.get("SHEET_RESYNC_INTERVAL_MINUTES", "15"))
+
+# v3.1: 关掉退回 v3.0.9 纯 append 行为(适合不希望 update 写入的客户)
+SHEET_RESYNC_ENABLED = os.environ.get("SHEET_RESYNC_ENABLED", "true").lower() == "true"
+
+# v3.1 (Codex P0-1 修): 写前校验 — 每条消息 update 前读 1 个 cell 验证那行真空(quota +1 read/peer)
+# **默认 ON** 防止 race window 内客户在 next_row 处贴内容被覆盖。
+# 设置 false 跳过校验(quota 极致省, 但 race 时可能覆盖客户手工填的内容)。
+# 实测影响: 1 read API per write batch, 业务量 50/min × 1 read = 50 reads/min 远低 300/min 上限
+SHEET_RESYNC_VERIFY_BEFORE_WRITE = os.environ.get("SHEET_RESYNC_VERIFY_BEFORE_WRITE", "true").lower() == "true"
+
 # 巡检间隔（秒）
 PATROL_INTERVAL = int(os.environ.get("PATROL_INTERVAL", "60"))
 
