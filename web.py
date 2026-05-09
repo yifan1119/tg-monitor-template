@@ -1610,17 +1610,21 @@ def _save_settings(is_first):
 @app.route("/api/accounts/<int:account_id>/notify-config", methods=["GET", "PATCH"])
 @login_required
 def api_account_notify_config(account_id):
-    """账号级两段式预警配置 — business_tg_id / owner_tg_id / (保留)remind_*_text。
+    """账号级配置 — business_tg_id / owner_tg_id / (保留)remind_*_text + v3.0.15 加
+    operator / company / inspector_tg_id 业务字段。
 
-    GET  → 返回 {business_tg_id, owner_tg_id, remind_30min_text, remind_40min_text}
-    PATCH → body 含上述任一字段,只更新传入的字段(db.update_account_two_stage)
+    GET  → 返回所有可改字段 + operator/company/inspector_tg_id
+    PATCH → body 含上述任一字段,只更新传入的字段
+            两段式预警字段走 db.update_account_two_stage
+            业务字段(operator/company/inspector_tg_id) 走 db.update_account_business
+            写完调 audit_log 记账(actor=登录用户名 + IP + 变更前后值)
 
-    需要 TWO_STAGE_NO_REPLY_ENABLED=true 才启用;关闭时 API 仍可读写(方便预配置),
-    UI 由模板自己的 `{% if two_stage_no_reply_enabled %}` 控制可见性。
+    v3.0.15: 新增 operator/company/inspector_tg_id 三字段
+    - operator/company:之前只能在 Sheet B2/B3 手填等 60s 反向同步,现在 web 一键改 + 60s 后正向同步覆盖 Sheet
+    - inspector_tg_id:监察员 TG handle/numeric ID,账号被吊销时 @ 此人(v3.0.16 用)+ Sheet row 4 显示
 
     v2.10.26 客户反馈后文案改全域 REMIND_30/40MIN_TEXT → remind_30min_text / remind_40min_text
     字段保留(API 接受,DB 存),但 bot 推送代码实际读 config.REMIND_*_TEXT,不读账号列。
-    留着是为了 demo 错位 DB 兼容 + 万一未来要做账号级覆盖。
     """
     acc = db.get_account_by_id(account_id)
     if not acc:
@@ -1633,16 +1637,19 @@ def api_account_notify_config(account_id):
             "owner_tg_id":       acc["owner_tg_id"]    or "" if "owner_tg_id"    in acc.keys() else "",
             "remind_30min_text": acc["remind_30min_text"] or "" if "remind_30min_text" in acc.keys() else "",
             "remind_40min_text": acc["remind_40min_text"] or "" if "remind_40min_text" in acc.keys() else "",
+            # v3.0.15 新加业务字段
+            "operator":          acc["operator"] or "" if "operator" in acc.keys() else "",
+            "company":           acc["company"]  or "" if "company"  in acc.keys() else "",
+            "inspector_tg_id":   acc["inspector_tg_id"] or "" if "inspector_tg_id" in acc.keys() else "",
         })
 
     # PATCH
     data = request.get_json(silent=True) or {}
 
     # v3.0.0 Codex P1:business_tg_id / owner_tg_id 必须是 纯数字 或 合法 username
-    # 防止带 `<`、`&`、空格的非法值通过 → 下游 _format_tg_mention 裸拼 HTML → TG parser 爆
-    # TG username 规则:5-32 字符,允许 a-zA-Z0-9_,非 _ 开头
+    # v3.0.15: inspector_tg_id 也走同套验证
     TG_MENTION_RE = re.compile(r'^(\d+|@?[A-Za-z][A-Za-z0-9_]{4,31})$')
-    for key in ("business_tg_id", "owner_tg_id"):
+    for key in ("business_tg_id", "owner_tg_id", "inspector_tg_id"):
         if key in data:
             val = (data.get(key) or "").strip()
             if val and not TG_MENTION_RE.fullmatch(val):
@@ -1651,6 +1658,7 @@ def api_account_notify_config(account_id):
                     "error": f"{key} 必须是 TG 数字 ID(纯数字)或合法 username(5-32 字符字母/数字/下划线,可带 @ 前缀)。当前:{val!r}",
                 }), 400
 
+    # 1. 两段式预警字段(老路径)
     db.update_account_two_stage(
         account_id,
         business_tg_id=data.get("business_tg_id"),
@@ -1658,6 +1666,15 @@ def api_account_notify_config(account_id):
         remind_30min_text=data.get("remind_30min_text"),
         remind_40min_text=data.get("remind_40min_text"),
     )
+    # 2. v3.0.15 业务字段(operator/company/inspector_tg_id)
+    if any(k in data for k in ("operator", "company", "inspector_tg_id")):
+        db.update_account_business(
+            account_id,
+            operator=data.get("operator") if "operator" in data else None,
+            company=data.get("company") if "company" in data else None,
+            inspector_tg_id=data.get("inspector_tg_id") if "inspector_tg_id" in data else None,
+        )
+
     return jsonify({"ok": True})
 
 

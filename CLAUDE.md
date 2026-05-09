@@ -179,6 +179,7 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 | v3.0.8.2 | 升级提示去 SSH 包装 + 复制按钮 HTTP/HTTPS 三层兜底 + 深度诊断永远可见入口:`upgrader.build_upgrade_cmd` 不再 wrap `ssh root@<IP>` (客户没 root 凭据且命令本来就要在 VPS 跑); 3 个 templates 复制按钮加 `copyTextFallback` (`navigator.clipboard` → `execCommand('copy')` → `prompt()` 三层); 驾驶舱日志面板上方加 `{% if is_admin %}` 区块「Sheet 写入诊断 ▸ 立刻深度诊断」永远可见按钮 (复用 v3.0.8 modal); 升级 modal 文案 SSH → 升级命令 | [0024](docs/adr/0024-v3.0.8.2-remove-ssh-wrap-and-always-visible-deep-diag.md) |
 | v3.0.8.1 | docker cp 漏同步根治 + 普通用户隐藏 admin 按钮:`docker-compose.yml::tg-web` command 从 `cp -rf templates 目录复制`(嵌套 bug 让 Flask 读旧版,v3.0.8 客户升级看不到按钮就是这个)改成 `templates/*.html` 文件级 glob;tg-web + tg-monitor command 都加 `cp README.md` + `cp release_notes.json`(`_app_version_string` / update_checker 用最新文案);**CLAUDE.md 硬规定 #8 长期修法终于落地**。`web.py::dashboard_page` 传 `is_admin` 给 template,`dashboard.html` 加 `IS_ADMIN` 全局 JS 标志,3 个 admin-only 按钮(深度诊断 / 一键修复 / 立刻重启)前端隐藏给普通成员看「请联系管理员」文字提示。后端 `/api/restart` `@login_required` 不动(保账号管理页历史按钮兼容)| [0023](docs/adr/0023-v3.0.8.1-docker-cp-rule-fix-and-admin-button-gate.md) |
 | v3.0.14 | 同名外事号自动加 phone 后 4 位后缀建独立 Sheets 分页:`sheets.py` 加 module-level helper `dedupe_assign_sheet_tabs(conn)` — 同 name ≥ 2 个按 phone 字典序排,**第一个保留 name 不变(零数据迁移老分页不动)**,第二个起 `sheet_tab='<name>-<phone后4位>'`(例:张三-6384);已设过 sheet_tab 的不动(尊重客户/老逻辑)。`web._create_sheet_tab` 加 phone 参数(向后兼容老调用方 phone='' 行为不变),登录前先调 dedupe + 重新查 DB 拿可能加后缀的 sheet_tab;`sheets.ensure_account_tabs` 启动 + 60s patrol 第一行调 dedupe 自愈历史重名。客户 `./update.sh` 升级后所有现存重名一次性 fix,新登录无感。⚠ 升级前已混入第一号分页的第二号历史消息无法回溯分离(Sheets 行没标记是哪个号写的),从升级时刻起干净隔离 | [0033](docs/adr/0033-v3.0.14-duplicate-name-auto-suffix.md) |
+| v3.0.15 | 外事号 5 字段 web 自助 + Sheet 反向同步(客户 6 项优化诉求第 1 项,plan: hazy-floating-tiger.md;用户拍板分批发,本版只做最小核心):`accounts` migration V7 加 `inspector_tg_id` (监察员 TG handle/numeric ID,v3.0.17 用于账号吊销 @);`update_account_business` 扩 `inspector_tg_id` 参数;`/api/accounts/<id>/notify-config` PATCH 扩 `operator/company/inspector_tg_id` 三业务字段,`templates/index.html`「配置」modal 同步扩(P1 fix 加载未完成 saveBtn disabled 防误清);`tasks._sync_account_business_to_sheet` 60s loop 把 DB 业务字段单向覆盖到 Sheet B2/B3/B4(用户拍板 Web 优先,feature flag `BUSINESS_FIELD_SYNC_ENABLED=true` 默认开)。**Codex round1 P0 fix**: 改 `spreadsheet.values_batch_get` 一次拉所有 ws B2:B4(200 账号 200 次 API 砍到 2 次,sheet 名 `'name'` 单引号 escape);P0 fix `_safe_add_column` ALTER 抛 duplicate column 时 catch + recheck 视为成功(防 tg-monitor/tg-web 跨进程 race 撞 column 已存在崩溃);P1 fix B2/B3/B4 全用 `db != sheet` 比较(允许空串清空,跟 Web 优先单向覆盖语义一致)。Sheet 模板 row 4 占用为「监察员」label/value(`create_account_tab_full` + `upgrade_minimal_tab` 把老「白底白字 spacer」改可见;**保持 frozen=6 零数据迁移**)。**audit_logs / 中央台同步留单独版本**:v3.0.16 中央台按 account.company 重 bucket、v3.0.17 账号吊销 @ inspector、v3.0.18 操作审计、v3.0.19 SKIP_NO_REPLY 搬 web、v3.0.20 极简 UI | [0034](docs/adr/0034-v3.0.15-account-mgmt-sheet-sync.md) |
 
 ## 发布流程
 
@@ -195,10 +196,12 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 **真实客户 / 部门列表 / 联系人 / VPS 地址** 放在 `.claude/private-notes.md`
 (gitignored,不进 GitHub)。需要时本地查。
 
-## 当前状态(2026-05-08)
+## 当前状态(2026-05-09)
 
-- **WIP `feature/v3.0.14-dupname-auto-suffix`**:同名外事号自动加 phone 后 4 位后缀(`sheets.dedupe_assign_sheet_tabs` 单一来源,`web._create_sheet_tab` + `sheets.ensure_account_tabs` 两处调);老分页不动零数据迁移,客户 `./update.sh` 后自动 fix 所有存量重名 + 新登录无感。等 Codex review + 用户审 diff → tag `v3.0.14` push origin
-- main:`v3.0.13`(已发布 — `update.sh` 共享 Caddy 模式 web 502 自愈,docker network 重连)
+- **WIP `feature/v3.0.15-account-mgmt-audit`**(收紧版,只外事号 5 字段 + Sheet 同步,~250 行):用户要求分批发,操作审计/中央台同步等拆到 v3.0.16-20。本版准备 dev VPS 灰度测试 → 测过 OK 再 push main + tag。
+- 计划 6 版顺序:v3.0.15 外事号字段+Sheet → v3.0.16 中央台同步 → v3.0.17 账号吊销 @ inspector → v3.0.18 操作审计 → v3.0.19 闲聊词搬 web → v3.0.20 极简 UI
+- main:`v3.0.14`(已发布 — 同名外事号自动加 phone 后缀建独立 Sheets 分页)
+- 之前:`v3.0.13`(已发布 — `update.sh` 共享 Caddy 模式 web 502 自愈,docker network 重连)
 - 之前:`v3.1`(开发中 — Sheet 后台扫描 + 客户删旧消息自动回填空位 — 解决 v3.0.8 append 被 Google 自动检测全表推高行号 + 客户手删无回填的痛点;`peers` migration V6,`write_messages` 双轨,`_sheet_position_resync_loop` 每 15 min `ws.get_all_values` 整张扫;feature flag 默认 ON 可关退 v3.0.9;0 重登 0 数据迁移)
 - 之前:`v3.0.9`(已发布 — 中央台数据接口扩展:23 个 DB 业务字段全暴露给 metrics token,新增 4 个 /api/v1/* 只读 endpoint。**0 新表 0 新字段 0 数据迁移**,200+ 账号不重登)
 - 之前:`v3.0.8.3`(已发布 — 修「立刻重启监听器」404 找不到容器,`/api/restart` 复用 `_start_tg_monitor()` 现成 fallback,部署遗留 COMPANY_NAME 跟实际容器名对不齐的部门也能用;诊断卡片同样加 fallback)

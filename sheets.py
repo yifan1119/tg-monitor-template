@@ -221,8 +221,10 @@ class SheetsWriter:
         try:
             # v3.0.14: 先 dedupe — 给历史重名账号分配独立 sheet_tab
             dedupe_assign_sheet_tabs(db.get_conn())
+            # v3.0.15: SELECT 多拉 inspector_tg_id 给 row 4 用
             accounts = db.get_conn().execute(
-                "SELECT id, phone, name, sheet_tab, operator, company FROM accounts"
+                "SELECT id, phone, name, sheet_tab, operator, company, "
+                "COALESCE(inspector_tg_id, '') AS inspector_tg_id FROM accounts"
             ).fetchall()
         except Exception as e:
             logger.warning("ensure_account_tabs: 读 DB 失败 %s", e)
@@ -249,12 +251,13 @@ class SheetsWriter:
                     except Exception as e:
                         logger.warning("ensure_account_tabs: 升级「%s」失败 %s", tab_name, e)
                 continue
-            # 不存在 → 建完整版
+            # 不存在 → 建完整版 (v3.0.15: 传 inspector_tg_id 给 row 4)
             try:
                 self.create_account_tab_full(
                     name=tab_name,
                     operator=a["operator"] or "",
                     company=a["company"] or "",
+                    inspector_tg_id=a["inspector_tg_id"] or "",
                 )
                 logger.info("ensure_account_tabs: 补建分页「%s」", tab_name)
                 created += 1
@@ -332,6 +335,17 @@ class SheetsWriter:
             ["B", config.PEER_ROLE_LABEL, c6_existing],
         ])
 
+        # v3.0.15: 升级老分页时,如果 A4 还是空(老 spacer 状态),写「监察员」label。
+        # B4 不动 — 老分页可能客户已自己填了什么,或者等 _sync_account_business_to_sheet 自动覆盖。
+        try:
+            self._rate_limit()
+            a4_existing = (ws.acell("A4").value or "").strip()
+            if not a4_existing:
+                self._rate_limit()
+                ws.update_acell("A4", "监察员")
+        except Exception as _e:
+            logger.warning("upgrade_minimal_tab: 写 A4 监察员 label 失败 (不阻塞): %s", _e)
+
         # Step 2: 先清掉现有 banding(否则 addBanding 会冲突)
         banding_ids = self._fetch_banded_ranges(sheet_id)
 
@@ -365,15 +379,12 @@ class SheetsWriter:
             "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment)",
         }})
         # 2c: row 1-6 的背景色(header 区域,随便覆盖 textFormat)
+        # v3.0.15: row 4 从「白底白字 spacer」改成「白底正常字」(承载监察员 label/value)
         requests.extend([
             _repeat(0, 1, 0, TOTAL_COLS, {"backgroundColor": CYAN, **center_middle}),
             _repeat(1, 2, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}),
             _repeat(2, 3, 0, TOTAL_COLS, {"backgroundColor": LIGHT_BLUE, **center_middle}),
-            _repeat(3, 4, 0, TOTAL_COLS, {
-                "backgroundColor": WHITE,
-                "textFormat": {"bold": True, "foregroundColor": WHITE},
-                **center_middle,
-            }),
+            _repeat(3, 4, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}),
             _repeat(4, 6, 0, 3, {
                 "backgroundColor": TEAL,
                 "textFormat": {"bold": True},
@@ -408,15 +419,19 @@ class SheetsWriter:
         self._rate_limit()
         self.spreadsheet.batch_update({"requests": requests})
 
-    def create_account_tab_full(self, name, operator="", company=""):
+    def create_account_tab_full(self, name, operator="", company="", inspector_tg_id=""):
         """v2.10.16: 账号分页完整模板 — 统一登录时 web._create_sheet_tab 和
         sweep ensure_account_tabs 两路的建分页逻辑,保证格式一致。
 
         name: 外事号 TG 昵称 (会写到 row 5 col C)
         operator: 商务人员 (B2;空就留白等用户自己填)
         company: 所属中心/部门 (B3;空就默认用 .env 的 COMPANY_DISPLAY)
+        inspector_tg_id: v3.0.15 监察员 TG handle/numeric ID (B4;空就留白等 _sync_account_business_to_sheet 后填)
 
         若分页已存在 → 直接返回 existing worksheet(幂等)。
+
+        v3.0.15(ADR-0034): row 4 占用「监察员」label + value 字段(老模板原本是白字 spacer
+        留作 placeholder,现在改成正常显示)。**保持 frozenRowCount=6 不变,数据 row 7+ 不动**。
         """
         # 幂等:已存在就返回
         existing = {ws.title: ws for ws in self.spreadsheet.worksheets()}
@@ -440,11 +455,13 @@ class SheetsWriter:
         LIGHT_BLUE = {"red": 0.8784314, "green": 0.96862745, "blue": 0.98039216}
         TEAL = {"red": 0.29803923, "green": 0.69803923, "blue": 0.69803923}
 
-        # 文字内容: label A2/A3 + value B2/B3 + 对话槽标题 row5-6
+        # 文字内容: label A2/A3/A4 + value B2/B3/B4 + 对话槽标题 row5-6
+        # v3.0.15: row 4 加监察员字段(老模板原本是 spacer 白字白底)
         self._rate_limit()
-        ws.update("A2:B3", [
+        ws.update("A2:B4", [
             [config.OPERATOR_LABEL, operator],
             ["中心/部门", company],
+            ["监察员", inspector_tg_id],
         ])
         # C6 留空(第一条消息进来时 setup_dialog_columns 会填真实 peer 名)
         self._rate_limit()
@@ -480,12 +497,9 @@ class SheetsWriter:
             _repeat(1, 2, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}),
             # Row 3: 淡蓝底
             _repeat(2, 3, 0, TOTAL_COLS, {"backgroundColor": LIGHT_BLUE, **center_middle}),
-            # Row 4: 白底白字 spacer
-            _repeat(3, 4, 0, TOTAL_COLS, {
-                "backgroundColor": WHITE,
-                "textFormat": {"bold": True, "foregroundColor": WHITE},
-                **center_middle,
-            }),
+            # Row 4: 白底正常字 — v3.0.15 占用为「监察员」label/value(老模板是 spacer 白字白底,
+            # 改成可见以承载监察员信息;格式跟 row 2 一致)
+            _repeat(3, 4, 0, TOTAL_COLS, {"backgroundColor": WHITE, **center_middle}),
             # Row 5-6 第一个对话槽 A-C: 青绿 + 粗体
             _repeat(4, 6, 0, 3, {
                 "backgroundColor": TEAL,

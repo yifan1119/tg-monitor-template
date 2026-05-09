@@ -140,6 +140,11 @@ def _run_migrations(conn):
         conn.execute("PRAGMA user_version=6")
         conn.commit()
 
+    if version < 7:
+        _migrate_to_7(conn)
+        conn.execute("PRAGMA user_version=7")
+        conn.commit()
+
 
 def _migrate_to_1(conn):
     """v2.10.23 → user_version=1:
@@ -240,6 +245,17 @@ def _migrate_to_6(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_peers_next_row ON peers(next_sheet_row)")
 
 
+def _migrate_to_7(conn):
+    """v3.0.15 → user_version=7(ADR-0034 外事号 5 字段 web 自助管理 + Sheet 同步):
+    - accounts 加 inspector_tg_id TEXT DEFAULT ''
+        含义:监察员 TG handle / numeric ID(写到 Sheet B4 + 后续版本账号被吊销时 @ 此人)
+        跟 business_tg_id (stage1 商务) / owner_tg_id (stage2 负责人) 是独立维度
+        老数据 = '' → 不影响任何老逻辑(向后兼容)
+    全部 _safe_add_column 幂等,行为完全无感。
+    """
+    _safe_add_column(conn, "accounts", "inspector_tg_id", "TEXT DEFAULT ''")
+
+
 def _is_feature_v2_stage_db(conn):
     """检测是否是「早期 v3.0.0 开发分支的 V2 错位 DB」。
 
@@ -297,11 +313,28 @@ def _compat_repair_feature_v2_to_main_v4(conn):
 
 
 def _safe_add_column(conn, table, column, definition):
-    """幂等 ADD COLUMN — 列已存在则跳过,避免 migration 重复跑炸"""
+    """幂等 ADD COLUMN — 列已存在则跳过,避免 migration 重复跑炸。
+
+    v3.0.15 (Codex round1 P0 fix): 跨进程 race 容错。
+    tg-monitor / tg-web 是独立 docker 容器,启动时各自跑 init_db()。
+    两个进程同时从 user_version<7 升级,先到的进程刚 PRAGMA check 还没 ALTER,
+    后到的进程也 PRAGMA check 也没看到列 → 两个都跑 ALTER → 第二个撞
+    `OperationalError: duplicate column name`。
+
+    修法: ALTER 抛 duplicate-column 时重查 schema,如果列已在(说明对方进程刚加完)
+    视为成功;否则真出错往上抛。
+    """
     existing = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
     if column in existing:
         return
-    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except sqlite3.OperationalError as e:
+        if "duplicate column" in str(e).lower():
+            recheck = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            if column in recheck:
+                return  # 对方进程已加完,我们当成功
+        raise
 
 
 def now_bj():
@@ -327,9 +360,13 @@ def upsert_account(phone, name="", username="", tg_id=None, company="", operator
     return conn.execute("SELECT * FROM accounts WHERE phone=?", (phone,)).fetchone()
 
 
-def update_account_business(account_id, company=None, operator=None):
+def update_account_business(account_id, company=None, operator=None, inspector_tg_id=None):
     """v2.10.23:单独更新业务字段 — 只有显式传入(非 None)的字段会被更新。
-    给 Web 后台 / 配置页用,listener 启动登录路径不要调这个。"""
+    给 Web 后台 / 配置页用,listener 启动登录路径不要调这个。
+
+    v3.0.15: 加 inspector_tg_id 监察员 TG handle/numeric ID 字段
+            (账号被吊销时 @ 此人 / Sheet row 4 显示)。
+    """
     sets = []
     vals = []
     if company is not None:
@@ -338,6 +375,9 @@ def update_account_business(account_id, company=None, operator=None):
     if operator is not None:
         sets.append("operator=?")
         vals.append(operator)
+    if inspector_tg_id is not None:
+        sets.append("inspector_tg_id=?")
+        vals.append(inspector_tg_id)
     if not sets:
         return
     vals.append(account_id)
@@ -1104,3 +1144,5 @@ def get_today_alerts(alert_type):
         "WHERE a.type=? AND a.created_at LIKE ? AND a.status='approved'",
         (alert_type, f"{today}%")
     ).fetchall()
+
+

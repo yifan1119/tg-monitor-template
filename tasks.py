@@ -96,6 +96,114 @@ class TaskScheduler:
             except Exception as e:
                 logger.warning("昵称同步失败 [%s]: %s", phone, e)
 
+    def _sync_account_business_to_sheet(self):
+        """v3.0.15(ADR-0034): DB → Sheet 反向同步业务字段(operator / company / inspector_tg_id)。
+
+        Web 后台「编辑账号」改了 operator/company/inspector_tg_id 后,这个 loop 60s 内
+        把新值覆盖到 Sheet 的 B2/B3/B4。**用户拍板 Web 优先 = 单向覆盖,即客户在 Sheet
+        手改的会被 DB 值压回去**(已在 release notes 提示)。
+
+        - operator → Sheet B2(沿用现有 sync_headers 反向用的 cell)
+        - company  → Sheet B3
+        - inspector_tg_id → Sheet B4(v3.0.15 新加,模板 row 4 已留空白)
+
+        v3.0.15 (Codex round1 P0/P1 fix): 改 batch read + 允许清空。
+        - 老实现 200 账号 = 200 次 batch_get + 200 次 _rate_limit sleep ≈ 阻塞 5 分钟,
+          顶爆 Google quota 还把 patrol loop 一起拖住。
+        - 新实现:1 次 spreadsheet.values_batch_get 一次拉所有 ws 的 B2:B4,
+          只对差异 ws 单独 update_acell。200 账号无差异 = 2 次 API call ~3 秒。
+        - P1 fix: B2/B3 跟 B4 一样用 != 比较(允许清空,跟 web 优先单向覆盖语义一致)
+
+        feature flag: config.BUSINESS_FIELD_SYNC_ENABLED (默认 True),客户可关回老行为。
+        """
+        try:
+            self.sheets._rate_limit()
+            all_worksheets = {ws.title: ws for ws in self.sheets.spreadsheet.worksheets()}
+        except Exception as e:
+            logger.warning("[bus_sync] 拉 worksheets 失败,跳过本轮: %s", e)
+            return
+
+        accounts = db.get_all_accounts()
+        if not accounts:
+            return
+
+        # 准备 batch_get ranges: 每个有效 ws 一条 'tab_name'!B2:B4
+        # gspread 的 sheet 名含特殊字符要单引号 escape;名字本身的 ' 要双写
+        def _quote_sheet_name(name):
+            return "'" + name.replace("'", "''") + "'"
+
+        ranges_pending = []
+        accounts_for_ranges = []
+        for account in accounts:
+            tab_name = account["sheet_tab"] or account["name"] or account["phone"]
+            if not tab_name or tab_name not in all_worksheets:
+                continue
+            ranges_pending.append(f"{_quote_sheet_name(tab_name)}!B2:B4")
+            accounts_for_ranges.append((account, tab_name))
+
+        if not ranges_pending:
+            return
+
+        # 一次 API 拉所有 ws 的 B2:B4 (P0 fix: 200 ws = 1 read,不是 200 reads)
+        self.sheets._rate_limit()
+        try:
+            batch_result = self.sheets.spreadsheet.values_batch_get(ranges=ranges_pending)
+            value_ranges = batch_result.get("valueRanges", [])
+        except Exception as e:
+            logger.warning("[bus_sync] values_batch_get 失败 (本轮跳过): %s", e)
+            return
+
+        if len(value_ranges) != len(accounts_for_ranges):
+            logger.warning("[bus_sync] batch_get 返回数 %d != 请求数 %d,跳过",
+                          len(value_ranges), len(accounts_for_ranges))
+            return
+
+        synced = 0
+        write_count = 0
+        for (account, tab_name), vr in zip(accounts_for_ranges, value_ranges):
+            try:
+                vals = vr.get("values", [])
+                # values 形如 [[B2_val], [B3_val], [B4_val]],缺行/缺列当空
+                sheet_b2 = (vals[0][0] if len(vals) > 0 and len(vals[0]) > 0 else "").strip()
+                sheet_b3 = (vals[1][0] if len(vals) > 1 and len(vals[1]) > 0 else "").strip()
+                sheet_b4 = (vals[2][0] if len(vals) > 2 and len(vals[2]) > 0 else "").strip()
+
+                db_operator = (account["operator"] or "").strip() if "operator" in account.keys() else ""
+                db_company = (account["company"] or "").strip() if "company" in account.keys() else ""
+                db_inspector = (account["inspector_tg_id"] or "").strip() if "inspector_tg_id" in account.keys() else ""
+
+                # P1 fix: 全 3 字段都用 != 比较,允许 web 清空覆盖 Sheet
+                # (老实现 if db_xxx 跳过空串,违反单向覆盖语义,客户清空 web 后 Sheet 不更新)
+                updates = []
+                if db_operator != sheet_b2:
+                    updates.append(("B2", db_operator))
+                if db_company != sheet_b3:
+                    updates.append(("B3", db_company))
+                if db_inspector != sheet_b4:
+                    updates.append(("B4", db_inspector))
+
+                if not updates:
+                    continue
+
+                ws = all_worksheets[tab_name]
+                for cell, val in updates:
+                    self.sheets._rate_limit()
+                    try:
+                        ws.update_acell(cell, val)
+                        write_count += 1
+                    except Exception as e:
+                        logger.warning("[bus_sync] %s update %s 失败: %s", tab_name, cell, e)
+                synced += 1
+                logger.info("[bus_sync] %s 同步 %s",
+                            tab_name, ", ".join(f"{c}={v!r}" for c, v in updates))
+            except Exception as e:
+                logger.warning("[bus_sync] account=%s 同步异常 (跳过): %s",
+                               account["phone"] if "phone" in account.keys() else "?", e)
+
+        if synced:
+            logger.info("[bus_sync] 本轮共同步 %d 个账号的业务字段(write %d 次,read 1 次 batch)",
+                       synced, write_count)
+
     async def _enforce_sheet_tab_consistency(self):
         """确保 Sheets 分页名 = account.name。用户手改分页名会被自动改回 TG 名字。
 
@@ -239,6 +347,14 @@ class TaskScheduler:
 
                 # 检查账号昵称是否改变
                 await self._sync_account_names()
+
+                # v3.0.15(ADR-0034): web 改的 operator/company/inspector_tg_id → Sheet B2/B3/B4
+                # 用户拍板 Web 优先(单向覆盖 Sheet 手改),feature flag 默认 ON
+                if getattr(config, "BUSINESS_FIELD_SYNC_ENABLED", True):
+                    try:
+                        self._sync_account_business_to_sheet()
+                    except Exception as e:
+                        logger.warning("DB→Sheet 业务字段同步失败 (本轮跳过): %s", e)
 
                 # 分页名一致性检查：手改的分页名会被自动改回 TG 名字
                 await self._enforce_sheet_tab_consistency()
