@@ -23,6 +23,108 @@ TZ_BJ = timezone(timedelta(hours=8))
 logger = logging.getLogger(__name__)
 
 
+def _gen_unique_tab(base_name: str, phone: str, used: set) -> str:
+    """v3.0.14 (P0 fix Codex round1): 给 base_name 生成全局唯一的 tab_name。
+    依次尝试候选 → 后 4 位 / 后 6 位 / 全 phone(去 +) / 加序号 -2 -3 ... -99
+    全部撞光(几乎不可能)→ 返回 None 让 caller 跳过。
+    """
+    phone_clean = (phone or "").lstrip("+")
+    candidates = []
+    if len(phone_clean) >= 4:
+        candidates.append(f"{base_name}-{phone_clean[-4:]}")
+    if len(phone_clean) >= 6:
+        candidates.append(f"{base_name}-{phone_clean[-6:]}")
+    if phone_clean:
+        candidates.append(f"{base_name}-{phone_clean}")
+    base_for_seq = phone_clean[-4:] if len(phone_clean) >= 4 else (phone_clean or "x")
+    for i in range(2, 100):
+        candidates.append(f"{base_name}-{base_for_seq}-{i}")
+    for c in candidates:
+        if c and c not in used:
+            return c
+    return None
+
+
+def dedupe_assign_sheet_tabs(conn) -> int:
+    """v3.0.14: 给同名外事号自动分配独立 sheet_tab,解决 Google Sheets 标题唯一性导致
+    第二个同名账号无法建分页 + 数据混入第一号分页的历史问题。
+
+    规则:
+    - 同 name 多账号 → 按 phone 字典序排,第一个保留 name(零数据迁移,老分页不动),
+      第二个起 sheet_tab = "<name>-<phone后4位>"(冲突时升级到 6 位 / 全 phone / 序号)。
+    - 已设过 sheet_tab 的账号 → 不动(尊重客户手动设的或老逻辑设的)。
+    - name 为空或同名只 1 个 → 不动。
+    - 全局唯一性:生成时回避 已被占用的(其他 sheet_tab + 保留的 name + 同批次刚分的)
+
+    幂等:重复调用结果不变(按 phone 排序保证「第一个」永远是同一个 phone)。
+    返回新 fix 的账号数(0 = 无重名 / 都已 fix)。
+
+    并发:web.py(tg-web 容器)和 sheets.py(tg-monitor 容器)两路都会调,
+    各自拿独立 conn,WAL 模式下 SELECT 看得到对方的 commit,UPDATE 用 WHERE id=? 单行。
+    极端 race 情况两边同时 UPDATE 同一 id,后写覆盖前写,值相同(确定性算法),不出错。
+
+    P0 fix (Codex round1 2026-05-08): 后 4 位 phone 撞 / 真实 name 撞 / 已有 sheet_tab 撞
+    时循环升级后缀直到全局唯一,不再静默生成两个相同 sheet_tab。
+    """
+    rows = conn.execute(
+        "SELECT id, phone, name, sheet_tab FROM accounts "
+        "WHERE name IS NOT NULL AND TRIM(name) != ''"
+    ).fetchall()
+    if not rows:
+        return 0
+
+    # 收集"已占用名字"集合 — 全局唯一性校验用
+    # 1. 所有已设的 sheet_tab(客户/老逻辑/前次 patch 设的都算占用)
+    # 2. 所有同名分组里被保留的"第一个" name(单 name 也占用,虽然 sheet_tab 是空)
+    used_names = set()
+    for r in rows:
+        if r["sheet_tab"]:
+            used_names.add(r["sheet_tab"])
+
+    name_to_rows = {}
+    for r in rows:
+        name_to_rows.setdefault(r["name"], []).append(r)
+
+    # 单 name(不会被 fix)+ 同名第一个(被保留)→ 都占用 raw name
+    for name, rs in name_to_rows.items():
+        used_names.add(name)
+
+    fixed = 0
+    for name, rs in name_to_rows.items():
+        if len(rs) <= 1:
+            continue
+        # 按 phone 字典序排 — 保证「第一个」永远是同一个,幂等
+        rs_sorted = sorted(rs, key=lambda r: r["phone"] or "")
+        # 第一个保留 name(老分页不动);第二个起加后缀
+        for r in rs_sorted[1:]:
+            if r["sheet_tab"]:
+                continue  # 已设过(可能客户手动 / 老逻辑) → 不动
+            phone = r["phone"] or ""
+            if not phone:
+                continue  # 没 phone 也没法加后缀,跳过
+            new_tab = _gen_unique_tab(name, phone, used_names)
+            if not new_tab:
+                logger.warning(
+                    "[dedupe_sheet_tab] phone=%s name=%s 找不到唯一后缀(几乎不可能),跳过",
+                    phone, name
+                )
+                continue
+            conn.execute(
+                "UPDATE accounts SET sheet_tab=? WHERE id=?",
+                (new_tab, r["id"])
+            )
+            used_names.add(new_tab)  # 同批次后续 fix 也回避
+            logger.info(
+                "[dedupe_sheet_tab] 重名外事号自动加后缀: phone=%s name=%s → sheet_tab=%s",
+                phone, name, new_tab
+            )
+            fixed += 1
+    if fixed:
+        conn.commit()
+        logger.info("[dedupe_sheet_tab] 共 fix %d 个重名账号的 sheet_tab", fixed)
+    return fixed
+
+
 class SheetsWriter:
     def __init__(self):
         if not config.SHEET_ID:
@@ -111,8 +213,14 @@ class SheetsWriter:
         + 斑马纹),跟登录时 web._create_sheet_tab 产出一致,不再是 3 行阉割版。
 
         v2.10.17: 对已存在的账号分页也扫一遍,如果是阉割版(frozen<6)就原地升级成完整模板,
-        数据不丢(row 7+ 保留)。解决存量客户已经有阉割版分页的历史遗留问题。"""
+        数据不丢(row 7+ 保留)。解决存量客户已经有阉割版分页的历史遗留问题。
+
+        v3.0.14: 启动 + 60s patrol 第一步先调 dedupe_assign_sheet_tabs 自动给历史重名账号
+        分配独立 sheet_tab(老分页留给同名第一个,后续加 phone 后 4 位后缀新建)。
+        升级后客户无需任何 SQL 干预,所有同名分页自动 fix。"""
         try:
+            # v3.0.14: 先 dedupe — 给历史重名账号分配独立 sheet_tab
+            dedupe_assign_sheet_tabs(db.get_conn())
             accounts = db.get_conn().execute(
                 "SELECT id, phone, name, sheet_tab, operator, company FROM accounts"
             ).fetchall()

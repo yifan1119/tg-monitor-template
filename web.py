@@ -516,19 +516,48 @@ def _get_spreadsheet():
     return gc.open_by_key(config.SHEET_ID)
 
 
-def _create_sheet_tab(name, operator="", company=""):
+def _create_sheet_tab(name, phone="", operator="", company=""):
     """登录成功后自动建分页。
 
     v2.10.16: 改用 SheetsWriter.create_account_tab_full 统一模板 —
     之前 web.py 和 sheets.py ensure_account_tabs 各自有一套建分页逻辑
     (一套完整、一套阉割 3 行),sweep 补建的分页看起来跟登录建的不一样。
     现在两路都走同一个方法,格式保证一致。
+
+    v3.0.14: 加 phone 参数,登录前先调 dedupe_assign_sheet_tabs:
+    - 如果该 phone 跟现有账号 name 重名,自动设 sheet_tab='<name>-<phone后4位>'
+    - 然后用最终 sheet_tab(可能加了后缀)调 create_account_tab_full
+    - phone 为空(老调用方)行为不变 — 不 dedupe,直接用 name 建
+    向后兼容:phone 默认空,任何旧调用方继续工作。
+
+    P1 fix (Codex round1 2026-05-08): phone 非空时 dedupe / 回查失败 fail closed —
+    不再回落用裸 name 调 create_account_tab_full(那会撞名让消息混入第一号分页,
+    重现这次 patch 要修的老 bug)。失败就放弃本次建分页,延迟到 60s patrol
+    的 ensure_account_tabs 兜底自愈。
     """
     try:
-        from sheets import SheetsWriter
+        from sheets import SheetsWriter, dedupe_assign_sheet_tabs
+        # v3.0.14: 先 dedupe — 重名外事号自动加 phone 后 4 位后缀
+        final_name = name
+        if phone:
+            # P1 fix: phone 非空 → dedupe 失败必须 fail closed,不能裸 name 兜底
+            try:
+                dedupe_assign_sheet_tabs(db.get_conn())
+                row = db.get_conn().execute(
+                    "SELECT sheet_tab FROM accounts WHERE phone=?", (phone,)
+                ).fetchone()
+                if row and row["sheet_tab"]:
+                    final_name = row["sheet_tab"]
+                # row.sheet_tab 是 NULL 也 OK — 说明同名只 1 个(它就是「第一个」),
+                # 用裸 name 是安全的(没有别人占用「name」分页)
+            except Exception as dup_err:
+                # P1 fix: 不再回落老逻辑 — 60s 内 patrol 的 ensure_account_tabs
+                # 会重试 dedupe 自愈,延迟可接受
+                print(f"❌ dedupe_assign_sheet_tabs 失败,放弃本次建分页(60s patrol 会兜底): {dup_err}")
+                return
         writer = SheetsWriter()  # __init__ 顺便 sweep 一轮(幂等)
-        writer.create_account_tab_full(name=name, operator=operator, company=company)
-        print(f"✅ 自动建分页成功: {name}")
+        writer.create_account_tab_full(name=final_name, operator=operator, company=company)
+        print(f"✅ 自动建分页成功: {final_name}{'(重名加后缀)' if final_name != name else ''}")
     except Exception as e:
         # v2.10.10: 打完整 stack, 方便 docker logs tg-web 追
         import traceback
@@ -2109,8 +2138,8 @@ def verify_code():
         db.init_db()
         db.upsert_account(phone=phone, name=tg_name, username=me.username or "", tg_id=me.id)
 
-        # 自动建 Sheets 分页
-        _create_sheet_tab(tg_name)
+        # 自动建 Sheets 分页 (v3.0.14: 传 phone 给重名 dedupe 用)
+        _create_sheet_tab(tg_name, phone=phone)
 
         run_async(_disconnect(client))
         del _pending[phone]
@@ -2158,8 +2187,8 @@ def verify_password():
         db.init_db()
         db.upsert_account(phone=phone, name=tg_name, username=me.username or "", tg_id=me.id)
 
-        # 自动建 Sheets 分页
-        _create_sheet_tab(tg_name)
+        # 自动建 Sheets 分页 (v3.0.14: 传 phone 给重名 dedupe 用)
+        _create_sheet_tab(tg_name, phone=phone)
 
         run_async(_disconnect(client))
         del _pending[phone]
