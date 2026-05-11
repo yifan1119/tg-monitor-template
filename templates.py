@@ -133,23 +133,41 @@ def daily_report(report_date, record_time, chat_count,
 
 def _vps_tag(host_ip="", company_display=""):
     """v3.0.17: 拼「部门 (IP)」标签 — 监察员一眼能看到出事的是哪台 VPS。
-    company_display 留空 → 走 config.COMPANY_DISPLAY;host_ip 留空 → 不显示括号。"""
+    company_display 留空 → 走 config.COMPANY_DISPLAY;host_ip 留空 → 不显示括号。
+
+    Codex P0 fix: bot.send_session_alert 用 parse_mode='HTML' 推,部门名 / IP 含
+    & < > 会让 TG 解析报错 → 整条预警发不出去。这里 html.escape 兜底。"""
+    import html as _html
     cd = company_display or getattr(config, "COMPANY_DISPLAY", "") or getattr(config, "COMPANY_NAME", "")
+    cd_safe = _html.escape(str(cd))
     if host_ip:
-        return f"{cd} ({host_ip})"
-    return cd
+        return f"{cd_safe} ({_html.escape(str(host_ip))})"
+    return cd_safe
+
+
+def _safe_name(account_name, phone):
+    """v3.0.17 Codex P0 fix: account_name 和 phone 含 < & > 会让 TG HTML 解析报错。
+    inspector_mention 由 bot._build_tg_mention 自己 escape,这里只 escape 用户填的字段。"""
+    import html as _html
+    name = _html.escape(str(account_name)) if account_name else "—"
+    ph = _html.escape(str(phone)) if phone else ""
+    return name, ph
 
 
 def session_revoked_alert(phone, account_name, inspector_mention="", host_ip="", company_display=""):
     """v3.0.17(was v2.10.4): TG 会话被吊销(用户在 TG 官方 App 点「终止其他会话」会触发)。
-    新增:加 @ 监察员 + 部门/VPS IP 标签,出事第一时间到人。"""
+    新增:加 @ 监察员 + 部门/VPS IP 标签,出事第一时间到人。
+
+    所有用户填的字段都做 HTML escape — bot.send_session_alert 用 parse_mode='HTML' 推。"""
     tag = _vps_tag(host_ip, company_display)
+    name_safe, phone_safe = _safe_name(account_name, phone)
     head = f"【外事号离线预警 · {tag}】\n\n"
     body = (
-        f"外事号:{account_name or '—'} ({phone})\n"
+        f"外事号:{name_safe} ({phone_safe})\n"
         f"状态:❌ 登录会话已失效\n"
     )
     if inspector_mention:
+        # inspector_mention 已经在 _build_tg_mention 内部 escape 过 — 这里直接拼
         body += f"监察员:{inspector_mention}\n"
     body += (
         "\n"
@@ -169,11 +187,14 @@ def session_hijacked_alert(phone, account_name, inspector_mention="", host_ip=""
     """v3.0.17 新增:异地登录(被盗号)专用预警 — 跟普通 revoked 区分,提示客户高优先级处理。
 
     判定依据:Telethon 调 RPC 时抛 AuthKeyDuplicated → 同一账号在另一台机器登录,
-    本地 session 自动作废。这跟「自己点终止其他会话」不一样,是被盗号的强信号。"""
+    本地 session 自动作废。这跟「自己点终止其他会话」不一样,是被盗号的强信号。
+
+    所有用户填的字段都做 HTML escape — bot.send_session_alert 用 parse_mode='HTML' 推。"""
     tag = _vps_tag(host_ip, company_display)
+    name_safe, phone_safe = _safe_name(account_name, phone)
     head = f"【⚠ 外事号异地登录 · {tag}】\n\n"
     body = (
-        f"外事号:{account_name or '—'} ({phone})\n"
+        f"外事号:{name_safe} ({phone_safe})\n"
         f"状态:🔥 检测到异地登录(本地 session 已被踢)\n"
     )
     if inspector_mention:
@@ -192,10 +213,13 @@ def session_hijacked_alert(phone, account_name, inspector_mention="", host_ip=""
 
 
 def session_restored_alert(phone, account_name, host_ip="", company_display=""):
-    """v3.0.17(was v2.10.4): session 恢复正常 — 顺手把部门标签也带上,跟 revoked 头对头。"""
+    """v3.0.17(was v2.10.4): session 恢复正常 — 顺手把部门标签也带上,跟 revoked 头对头。
+
+    所有用户填的字段都做 HTML escape — bot.send_session_alert 用 parse_mode='HTML' 推。"""
     tag = _vps_tag(host_ip, company_display)
+    name_safe, phone_safe = _safe_name(account_name, phone)
     return (
         f"【外事号恢复通知 · {tag}】\n\n"
-        f"外事号:{account_name or '—'} ({phone})\n"
+        f"外事号:{name_safe} ({phone_safe})\n"
         f"状态:✅ 监听已恢复正常"
     )

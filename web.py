@@ -2175,9 +2175,10 @@ def verify_code():
         del _pending[phone]
 
         # v2.10.7: 登录成功 → session_states 立刻标 healthy(UI 不再显示吊销)+ 推恢复通知
+        # v3.0.17 Codex P1 fix: prev_status 可能是 'hijacked'(被盗号),也算需要恢复通知
         try:
             prev_status, _ = _mark_session_healthy(phone)
-            if prev_status == "revoked":
+            if prev_status in ("revoked", "hijacked"):
                 _push_session_restored(phone, tg_name)
         except Exception as e:
             print(f"[verify_code] session heal 失败: {e}")
@@ -2224,9 +2225,10 @@ def verify_password():
         del _pending[phone]
 
         # v2.10.7: 同上 — session_states 标 healthy + 推恢复通知
+        # v3.0.17 Codex P1 fix: prev_status 可能是 'hijacked',也算需要恢复通知
         try:
             prev_status, _ = _mark_session_healthy(phone)
-            if prev_status == "revoked":
+            if prev_status in ("revoked", "hijacked"):
                 _push_session_restored(phone, tg_name)
         except Exception as e:
             print(f"[verify_password] session heal 失败: {e}")

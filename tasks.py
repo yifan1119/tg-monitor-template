@@ -757,7 +757,22 @@ class TaskScheduler:
                 except Exception as e:
                     logger.warning("[session_check] %s connect 失败: %s", phone, e)
                     return "error"
-            authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=10)
+            # v3.0.17 Codex P1 fix: Telethon `is_user_authorized()` 在某些版本会把
+            # AuthKeyDuplicatedError 吞成 False(silent降级到普通未授权)→ 我们这里
+            # 单独捕异常关键字优先判 hijacked,否则按老路径返 'revoked'。
+            try:
+                authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=10)
+            except asyncio.TimeoutError:
+                logger.warning("[session_check] %s is_user_authorized 超时 (当 error)", phone)
+                return "error"
+            except Exception as e:
+                cls = type(e).__name__
+                msg = str(e)
+                if "AuthKeyDuplicated" in cls or "AuthKeyDuplicated" in msg or "auth key duplicated" in msg.lower():
+                    logger.warning("[session_check] %s 异地登录 (is_user_authorized 路径): %s: %s", phone, cls, msg)
+                    return "hijacked"
+                logger.warning("[session_check] %s is_user_authorized 异常 (当 error): %s: %s", phone, cls, msg)
+                return "error"
             if not authorized:
                 return "revoked"
 
