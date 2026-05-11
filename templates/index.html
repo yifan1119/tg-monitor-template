@@ -960,6 +960,11 @@
           <div class="account-right">
             {% if s.session_status == 'revoked' %}
               <span class="tag tag-dead" title="TG 官方 App 终止了会话 / 账号被风控,请重新登录" style="background:rgba(244,67,54,0.12);border:1px solid rgba(244,67,54,0.55);color:#f56666;">🔴 会话已吊销</span>
+              {# v3.0.17: 一键重登 — 不必先移除再加,业务字段(operator/company/inspector_tg_id)
+                 全保留 (upsert_account ADR-0004 ON CONFLICT 不覆盖业务字段) #}
+              <button class="btn-remove" onclick="reLogin('{{ s.phone }}')"
+                      style="color:#7ec9ff;border-color:rgba(126,201,255,0.45);"
+                      title="同号码重登,业务配置(商务/中心/监察员)全保留">▸ 重新登录</button>
             {% elif s.session_status == 'error' %}
               <span class="tag tag-warn" style="background:rgba(245,166,35,0.1);border:1px solid rgba(245,166,35,0.4);color:#f5a623;">⚠ 检查异常</span>
             {% else %}
@@ -1230,6 +1235,19 @@ function showMsg(text, type) {
 
 function clearMsg() {
   document.getElementById('login-msg').innerHTML = '';
+}
+
+// v3.0.17: 一键重登 — 「会话已吊销」按钮 → 自动填号 + 滚到登录区 + 发验证码
+// 走的是同一个 /api/send-code → /api/verify-code 流程,业务字段不丢
+function reLogin(phone) {
+  const input = document.getElementById('input-phone');
+  if (!input) return;
+  input.value = phone;
+  // 滚到「添加账号」段(input-phone 元素附近)+ 高亮一下让用户看到
+  input.scrollIntoView({behavior: 'smooth', block: 'center'});
+  input.focus();
+  // 略等滚动完再触发,体验更顺
+  setTimeout(() => sendCode(), 350);
 }
 
 async function sendCode() {
