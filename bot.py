@@ -3,6 +3,7 @@ import html
 import json
 import logging
 import asyncio
+import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
@@ -12,6 +13,61 @@ import database as db
 import templates
 
 logger = logging.getLogger(__name__)
+
+
+async def _try_central_route(account, alert_type: str, msg: str) -> bool:
+    """v3.0.16: 优先把预警 POST 给中央台让它按 (公司, 中心) 路由 → 对应 bot 推对应群。
+    成功返 True;失败 / 中央台未配置 / 路由 not found → 返 False,调用方 fallback 本地。
+
+    .env 必填:
+      CENTRAL_PUSH_URL  = http://13.193.143.29:5070/api/v1/push_alert
+      CENTRAL_PUSH_TOKEN = <跟中央台共享的鉴权 token>
+
+    .env 没配 → 不走中央台,直接 False(向后兼容,老 VPS 升级零感知)。
+    """
+    url = os.environ.get("CENTRAL_PUSH_URL", "").strip()
+    token = os.environ.get("CENTRAL_PUSH_TOKEN", "").strip()
+    if not url or not token:
+        return False
+    company = ""
+    if account is not None:
+        try:
+            company = (account["company"] or "").strip() if "company" in account.keys() else ""
+        except Exception:
+            company = ""
+    if not company:
+        return False  # 没 company 字段 → 没归属信息,本地推
+    payload = {
+        "company": company,
+        "alert_type": alert_type,
+        "text": msg,
+        "source_dept": getattr(config, "COMPANY_DISPLAY", "") or "",
+    }
+    try:
+        # 用 asyncio.to_thread 包 urllib(blocking I/O)
+        import urllib.request, urllib.parse, json as _json
+        def _post():
+            data = _json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=data, method="POST",
+                headers={"Content-Type": "application/json",
+                        "Authorization": f"Bearer {token}"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, r.read().decode("utf-8")
+        status, body = await asyncio.to_thread(_post)
+        if status == 200:
+            j = _json.loads(body)
+            if j.get("ok"):
+                logger.info("[central_push] OK type=%s company=%s route=%s",
+                           alert_type, company, j.get("route", "?"))
+                return True
+        logger.warning("[central_push] 中央台返 %s body=%s → fallback 本地", status, body[:200])
+        return False
+    except Exception as e:
+        logger.warning("[central_push] 中央台 HTTP 失败 (%s) → fallback 本地: %s",
+                      type(e).__name__, e)
+        return False
 
 
 class AlertBot:
@@ -592,6 +648,13 @@ class AlertBot:
             business_mention=business_mention,
             custom_text=custom_text,
         )
+        # v3.0.16: 优先走中央台路由(按 account.company → 对应公司+中心 bot 推对应群)
+        # 失败 / 未配置 → fallback 本地 bot 推 target_group
+        routed = await _try_central_route(account, "no_reply", msg)
+        if routed:
+            # 中央台推成功 → 用伪 message_id 占位(没 bot_message_id 也算「真送达」)
+            db.update_alert_bot_msg(alert_id, -1)  # -1 = 中央台推,本地无 message_id
+            return
         try:
             sent = await self.bot.send_message(
                 target_group, msg,

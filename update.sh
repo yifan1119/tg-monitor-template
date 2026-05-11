@@ -148,6 +148,19 @@ if [ -f ".env" ] && ! grep -q "^VPS_PUBLIC_IP=" .env; then
     echo "  ✅ 已补 VPS_PUBLIC_IP=${VPS_IP}"
 fi
 
+#   v3.0.16: CENTRAL_PUSH_URL + CENTRAL_PUSH_TOKEN (实时预警走中央台路由)
+#   旧 VPS 升级时自动接入,客户/IT 不用 SSH 改
+DEFAULT_CENTRAL_PUSH_URL="https://tg.13-193-143-29.nip.io/api/v1/push_alert"
+DEFAULT_CENTRAL_PUSH_TOKEN="d282d167d178d292e1098027ce911b23df13e6f0305f061bc6fa023bd3abd2d7"
+if [ -f ".env" ] && ! grep -q "^CENTRAL_PUSH_URL=" .env; then
+    [ -n "$(tail -c 1 .env)" ] && echo "" >> .env
+    echo "" >> .env
+    echo "# v3.0.16: 实时预警走中央台路由(改 company → 自动推对应公司+中心 bot 群)" >> .env
+    echo "CENTRAL_PUSH_URL=${DEFAULT_CENTRAL_PUSH_URL}" >> .env
+    echo "CENTRAL_PUSH_TOKEN=${DEFAULT_CENTRAL_PUSH_TOKEN}" >> .env
+    echo "  ✅ 已接入中央台路由(v3.0.16)— 改 company 后实时预警自动推到新公司群"
+fi
+
 # ===== 4. 重建容器 =====
 echo ""
 # v2.10.24: 放宽 orphan cleanup 逻辑,解决「label 匹配但容器异常」场景下还是撞

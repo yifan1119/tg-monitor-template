@@ -1082,6 +1082,21 @@
         <input type="text" name="keywords" value="{{ d.keywords }}" placeholder="到期,续费,暂停,下架,上架,地址,打款,欠费,返点,返利,回扣">
         <div class="hint">消息命中任一词立即推送预警</div>
       </div>
+
+      <!-- v3.0.15.1: 账号配置 modal「公司」下拉选项 -->
+      <div class="field">
+        <label>账号配置「公司」下拉选项 (逗号或换行分隔,选填)</label>
+        <textarea name="company_options" rows="2" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;box-sizing:border-box;" placeholder="瑞升,鼎丰,悦达,领航">{{ d.company_options or "" }}</textarea>
+        <div class="hint">监察员在账号管理「账号配置」modal 选公司用。留空 = 字段隐藏。配了之后跟「中心」拼接写到 Sheet B3,中央台据此跨公司聚合。</div>
+      </div>
+
+      <!-- v3.0.15.1: 账号配置 modal「中心」下拉选项 -->
+      <div class="field">
+        <label>账号配置「中心」下拉选项 (逗号或换行分隔)</label>
+        <textarea name="center_options" rows="2" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;box-sizing:border-box;" placeholder="运营中心,商务中心,渠道中心">{{ d.center_options or "运营中心,商务中心,渠道中心" }}</textarea>
+        <div class="hint">必须跟中央台的中心 display 名一致。监察员选完后,系统自动拼成「公司-中心」(例:瑞升-运营中心)写到 Sheet B3。</div>
+      </div>
+
       {# v2.6.2: settings 模式下显示预警开关 + 日报开关(setup 模式还没配 bot,不显示)
          v2.6.6: 三类预警拆成独立开关,各自 hot-toggle #}
       {% if mode == 'settings' %}
