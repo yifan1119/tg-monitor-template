@@ -226,6 +226,7 @@ def write_env(updates):
         "WEB_PORT", "WEB_PASSWORD",
         "METRICS_TOKEN",
         "KEYWORDS", "NO_REPLY_MINUTES",
+        "COMPANY_OPTIONS", "CENTER_OPTIONS",  # v3.0.15.1: 账号配置 modal 下拉选项
         "WORK_HOUR_START", "WORK_HOUR_END",
         "PATROL_DAYS", "HISTORY_DAYS",
         "SHEETS_FLUSH_INTERVAL", "SHEETS_RATE_LIMIT_PER_MIN", "PATROL_INTERVAL",
@@ -910,6 +911,9 @@ def setup_page():
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
         "api_id": env.get("API_ID", DEFAULT_API_ID),
         "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
+        # v3.0.15.1: 账号配置 modal 双下拉选项
+        "company_options": env.get("COMPANY_OPTIONS", ""),
+        "center_options": env.get("CENTER_OPTIONS", "运营中心,商务中心,渠道中心"),
     }
     return render_template("setup.html", d=defaults, mode="setup", company=config.COMPANY_DISPLAY)
 
@@ -955,6 +959,9 @@ def settings_page():
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
         "api_id": env.get("API_ID", DEFAULT_API_ID),
         "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
+        # v3.0.15.1: 账号配置 modal 双下拉选项
+        "company_options": env.get("COMPANY_OPTIONS", ""),
+        "center_options": env.get("CENTER_OPTIONS", "运营中心,商务中心,渠道中心"),
         # v2.6.2: 预警 / 日报开关(settings 页可改,dashboard 也能切换预警)
         # v2.6.6: 三个独立子开关 — 留空跟随 ALERTS_ENABLED 总开关
         "alerts_enabled": env.get("ALERTS_ENABLED", "true").lower() != "false",
@@ -1522,6 +1529,9 @@ def _save_settings(is_first):
         "GOOGLE_OAUTH_CLIENT_SECRET": form.get("oauth_client_secret", "").strip(),
         "KEYWORDS": new_keywords_str,
         "NO_REPLY_MINUTES": form.get("no_reply_minutes", DEFAULT_NO_REPLY_MINUTES),
+        # v3.0.15.1: 账号配置 modal 双下拉选项(规整成逗号分隔,去重 + 去空)
+        "COMPANY_OPTIONS": ",".join(dict.fromkeys(s.strip() for s in form.get("company_options", "").replace("\n", ",").split(",") if s.strip())),
+        "CENTER_OPTIONS": ",".join(dict.fromkeys(s.strip() for s in form.get("center_options", "").replace("\n", ",").split(",") if s.strip())),
         "API_ID": form.get("api_id", DEFAULT_API_ID),
         "API_HASH": form.get("api_hash", DEFAULT_API_HASH),
         "SETUP_COMPLETE": "true",
@@ -1976,6 +1986,9 @@ def index():
         alert_no_reply_enabled=config.ALERT_NO_REPLY_ENABLED,
         alert_delete_enabled=config.ALERT_DELETE_ENABLED,
         operator_label=config.OPERATOR_LABEL,
+        # v3.0.15.1: 账号配置 modal 「公司 + 中心」双下拉选项
+        company_options=config.COMPANY_OPTIONS,
+        center_options=config.CENTER_OPTIONS,
     )
 
 
