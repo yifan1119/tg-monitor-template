@@ -1603,6 +1603,16 @@ def _save_settings(is_first):
     except Exception:
         pass
 
+    # v3.0.18: 操作审计 — 改 .env / 关键词
+    db.audit_log(event_type="settings_save",
+                actor_username=flask_session.get("username", "?") if not is_first else "(setup)",
+                actor_ip=request.remote_addr or "",
+                target_type="setting",
+                payload={"is_first_setup": is_first,
+                        "keywords_added": kw_added[:10],
+                        "keywords_removed": kw_removed[:10],
+                        "fields_changed": list(updates.keys())[:30]})
+
     # 启动/重启 tg-monitor
     ok, msg_docker = _start_tg_monitor()
     return jsonify({
@@ -1677,13 +1687,27 @@ def api_account_notify_config(account_id):
         remind_40min_text=data.get("remind_40min_text"),
     )
     # 2. v3.0.15 业务字段(operator/company/inspector_tg_id)
+    biz_changed = {}
     if any(k in data for k in ("operator", "company", "inspector_tg_id")):
+        for k in ("operator", "company", "inspector_tg_id"):
+            if k in data:
+                biz_changed[k] = data[k]
         db.update_account_business(
             account_id,
             operator=data.get("operator") if "operator" in data else None,
             company=data.get("company") if "company" in data else None,
             inspector_tg_id=data.get("inspector_tg_id") if "inspector_tg_id" in data else None,
         )
+
+    # v3.0.18: 操作审计 — 监察员改外事号字段
+    db.audit_log(
+        event_type="account_business",
+        actor_username=flask_session.get("username", "?"),
+        actor_ip=_client_ip() if "_client_ip" in globals() else (request.remote_addr or ""),
+        target_type="account",
+        target_id=account_id,
+        payload={"changed_fields": list(data.keys()), "biz": biz_changed},
+    )
 
     return jsonify({"ok": True})
 
@@ -1743,6 +1767,12 @@ def api_users_add():
     }
     save_users(users)
     role_label = "管理员" if role_is_admin else "普通成员"
+    # v3.0.18: 操作审计
+    db.audit_log(event_type="users_add",
+                actor_username=flask_session.get("username", "?"),
+                actor_ip=request.remote_addr or "",
+                target_type="user", target_id=u,
+                payload={"role": role_label})
     return jsonify({"ok": True, "msg": f"账号「{u}」已添加({role_label})"})
 
 
@@ -1759,6 +1789,11 @@ def api_users_remove():
         return jsonify({"ok": False, "msg": "主帐号不可被移除"})
     del users[u]
     save_users(users)
+    # v3.0.18: 操作审计
+    db.audit_log(event_type="users_remove",
+                actor_username=flask_session.get("username", "?"),
+                actor_ip=request.remote_addr or "",
+                target_type="user", target_id=u)
     return jsonify({"ok": True, "msg": f"账号「{u}」已移除"})
 
 
@@ -2898,6 +2933,41 @@ def api_update_upgrade_status():
 
 
 # ============ 驾驶舱 (demo 预览,暂不 push GIT) ============
+# v3.0.18: 审计日志 web 面板(admin only)
+@app.route("/audit")
+@admin_required
+def audit_page():
+    event_type = request.args.get("event_type", "").strip()
+    actor = request.args.get("actor", "").strip()
+    target_id = request.args.get("target_id", "").strip()
+    from_date = request.args.get("from", "").strip()
+    to_date = request.args.get("to", "").strip()
+    page = max(int(request.args.get("page", "1") or "1"), 1)
+    page_size = 100
+    rows = db.query_audit_logs(
+        event_type=event_type or None,
+        actor_username=actor or None,
+        target_id=target_id or None,
+        from_date=from_date or None,
+        to_date=to_date or None,
+        limit=page_size,
+        offset=(page - 1) * page_size,
+    )
+    event_types = db.audit_log_event_types()
+    return render_template(
+        "audit.html",
+        rows=rows,
+        event_types=event_types,
+        filter_event_type=event_type,
+        filter_actor=actor,
+        filter_target_id=target_id,
+        filter_from=from_date,
+        filter_to=to_date,
+        page=page,
+        page_size=page_size,
+    )
+
+
 @app.route("/dashboard")
 @login_required
 def dashboard_page():

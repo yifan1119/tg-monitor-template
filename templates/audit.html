@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>操作审计 · TG 监控</title>
+<style>
+body { font-family: -apple-system, "PingFang SC", monospace; background: #0a0d12; color: #cfe3f5; margin: 0; padding: 20px; }
+h1 { color: #7ec9ff; font-size: 16px; letter-spacing: 2px; margin: 0 0 16px; }
+.bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(126,201,255,0.2); border-radius: 6px; align-items: end; }
+.bar label { font-size: 10px; color: #7c8a9a; display: block; margin-bottom: 4px; letter-spacing: 1px; }
+.bar input, .bar select { padding: 6px 10px; background: rgba(4,13,22,0.6); border: 1px solid rgba(126,201,255,0.3); border-radius: 4px; color: #cfe3f5; font-size: 12px; font-family: inherit; }
+.bar button { padding: 6px 16px; background: rgba(126,201,255,0.15); border: 1px solid rgba(126,201,255,0.4); border-radius: 4px; color: #7ec9ff; cursor: pointer; }
+.bar a.reset { color: #7c8a9a; padding: 6px 12px; text-decoration: none; font-size: 11px; }
+table { width: 100%; border-collapse: collapse; font-size: 11px; background: rgba(0,0,0,0.3); }
+th { padding: 8px 10px; text-align: left; color: #7ec9ff; font-weight: 600; border-bottom: 1px solid rgba(126,201,255,0.3); position: sticky; top: 0; background: #0a0d12; }
+td { padding: 6px 10px; border-bottom: 1px solid rgba(126,201,255,0.08); vertical-align: top; }
+.dim { color: #7c8a9a; }
+.tag { padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+.tag-account { background: rgba(126,201,255,0.15); color: #7ec9ff; }
+.tag-user { background: rgba(255,200,87,0.15); color: #ffc857; }
+.tag-bot { background: rgba(168,107,237,0.15); color: #a86beb; }
+.tag-setting { background: rgba(157,242,184,0.15); color: #9df2b8; }
+.tag-fail { background: rgba(255,107,107,0.15); color: #ff8d8d; }
+.payload { font-family: monospace; font-size: 10px; color: #a5c4e0; max-width: 380px; word-break: break-all; }
+.pager { margin-top: 14px; display: flex; gap: 10px; align-items: center; font-size: 11px; color: #7c8a9a; }
+.pager a { padding: 4px 12px; background: rgba(126,201,255,0.1); border: 1px solid rgba(126,201,255,0.3); border-radius: 4px; color: #7ec9ff; text-decoration: none; }
+.empty { padding: 40px; text-align: center; color: #7c8a9a; }
+</style>
+</head>
+<body>
+<a href="/" style="color:#7c8a9a;font-size:11px;text-decoration:none;letter-spacing:2px;">← 返回</a>
+<h1>📋 操作审计 · {{ rows|length }} 条 (page {{ page }})</h1>
+
+<form method="get" class="bar">
+  <div>
+    <label>事件类型</label>
+    <select name="event_type">
+      <option value="">全部</option>
+      {% for et in event_types %}
+        <option value="{{ et }}" {% if et == filter_event_type %}selected{% endif %}>{{ et }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>操作人</label>
+    <input type="text" name="actor" value="{{ filter_actor }}" placeholder="username 或 bot:tg_id">
+  </div>
+  <div>
+    <label>目标 ID</label>
+    <input type="text" name="target_id" value="{{ filter_target_id }}" placeholder="account.id / username">
+  </div>
+  <div>
+    <label>起始日期</label>
+    <input type="date" name="from" value="{{ filter_from }}">
+  </div>
+  <div>
+    <label>截止日期</label>
+    <input type="date" name="to" value="{{ filter_to }}">
+  </div>
+  <button type="submit">🔍 查</button>
+  <a href="/audit" class="reset">重置</a>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>时间</th>
+      <th>事件类型</th>
+      <th>操作人</th>
+      <th>IP</th>
+      <th>目标</th>
+      <th>详情</th>
+      <th>结果</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    {% set typ = r.event_type or '' %}
+    <tr>
+      <td class="dim">{{ r.id }}</td>
+      <td class="dim">{{ r.ts }}</td>
+      <td>
+        {% if typ == 'account_business' %}<span class="tag tag-account">改外事号</span>
+        {% elif typ in ('users_add','users_remove','users_change_password') %}<span class="tag tag-user">{{ typ }}</span>
+        {% elif typ == 'bot_callback' %}<span class="tag tag-bot">bot 审核</span>
+        {% elif typ == 'settings_save' %}<span class="tag tag-setting">改设置</span>
+        {% else %}<span class="tag dim">{{ typ }}</span>{% endif %}
+      </td>
+      <td><b>{{ r.actor_username }}</b></td>
+      <td class="dim">{{ r.actor_ip or '—' }}</td>
+      <td class="dim">{% if r.target_type %}{{ r.target_type }}#{{ r.target_id }}{% endif %}</td>
+      <td class="payload">{{ r.payload_json or '' }}</td>
+      <td>{% if r.result == 'ok' %}<span class="dim">✓</span>{% else %}<span class="tag tag-fail">{{ r.result }}</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  {% if not rows %}
+    <tr><td colspan="8" class="empty">— 没有匹配的审计 log —</td></tr>
+  {% endif %}
+  </tbody>
+</table>
+
+<div class="pager">
+  {% if page > 1 %}
+    <a href="?event_type={{ filter_event_type }}&actor={{ filter_actor }}&target_id={{ filter_target_id }}&from={{ filter_from }}&to={{ filter_to }}&page={{ page - 1 }}">← 上页</a>
+  {% endif %}
+  {% if rows|length == page_size %}
+    <a href="?event_type={{ filter_event_type }}&actor={{ filter_actor }}&target_id={{ filter_target_id }}&from={{ filter_from }}&to={{ filter_to }}&page={{ page + 1 }}">下页 →</a>
+  {% endif %}
+  <span style="margin-left:auto;">每页 {{ page_size }} 条 · 默认按时间倒序 · 90 天前自动清</span>
+</div>
+
+{% include "_lite_mode.html" ignore missing %}
+</body>
+</html>
