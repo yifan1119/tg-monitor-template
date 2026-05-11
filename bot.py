@@ -379,7 +379,10 @@ class AlertBot:
             # v2.6.6: 拆出独立子开关 ALERT_KEYWORD_ENABLED
             config.reload_if_env_changed()
             if config.ALERT_KEYWORD_ENABLED:
-                await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+                # v3.0.17: 优先中央台路由(关键词预警没 button,可直接换 bot 推)
+                routed = await _try_central_route(account, "keyword", msg)
+                if not routed:
+                    await self.bot.send_message(config.ALERT_GROUP_ID, msg)
             else:
                 logger.info("[ALERT_KEYWORD_DISABLED] 跳过关键词推送 peer=%s keyword=%s (Sheet 仍写入)", peer["id"], keyword)
         except Exception as e:
@@ -878,20 +881,47 @@ class AlertBot:
             logger.error("发送日报失败: %s", e)
 
     async def send_session_alert(self, kind: str, phone: str, account_id: int = 0, account_name: str = ""):
-        """v2.10.4: 推送 session 吊销/恢复预警。kind: 'revoked' | 'restored'
+        """v3.0.17(was v2.10.4): 推送 session 吊销/异地登录/恢复预警。kind: 'revoked' | 'hijacked' | 'restored'
         - 走主开关 ALERTS_ENABLED(任何子开关都独立;这是系统级告警)
         - DB 写 alerts 表,实时告警流会显示
-        - kind='revoked' 直接推;kind='restored' 也推一条,让客户知道已恢复"""
+        - revoked / hijacked → @ 监察员 + 部门/IP 标签;restored 仅部门/IP 标签
+        - 优先走中央台路由(按 account.company → 对应公司+中心 bot 群),失败 fallback 本地"""
         if not self.bot or not config.ALERT_GROUP_ID:
             logger.warning("[session_%s] bot 未配或未配预警群,不推送 phone=%s", kind, phone)
             return
         try:
             config.reload_if_env_changed()
+            # v3.0.17: 拿账号详细字段(inspector_tg_id 用于 @,company 用于中央台路由)
+            account = None
+            if account_id:
+                try:
+                    account = db.get_account_by_id(account_id)
+                except Exception as e:
+                    logger.warning("[session_%s] 取账号 %s 失败 (继续走老文案): %s", kind, account_id, e)
+            inspector_mention = ""
+            if account is not None and kind in ("revoked", "hijacked"):
+                try:
+                    insp = (account["inspector_tg_id"] or "").strip() if "inspector_tg_id" in account.keys() else ""
+                    if insp:
+                        inspector_mention = await self._build_tg_mention(insp, fallback_name="监察员")
+                except Exception as e:
+                    logger.warning("[session_%s] 解析监察员失败 (跳过 @): %s", kind, e)
+            host_ip = os.environ.get("VPS_PUBLIC_IP", "").strip()
+            company_display = getattr(config, "COMPANY_DISPLAY", "") or getattr(config, "COMPANY_NAME", "")
+
             if kind == "revoked":
-                msg = templates.session_revoked_alert(phone, account_name)
+                msg = templates.session_revoked_alert(
+                    phone, account_name, inspector_mention=inspector_mention,
+                    host_ip=host_ip, company_display=company_display)
                 alert_type = "session_revoked"
+            elif kind == "hijacked":
+                msg = templates.session_hijacked_alert(
+                    phone, account_name, inspector_mention=inspector_mention,
+                    host_ip=host_ip, company_display=company_display)
+                alert_type = "session_hijacked"
             elif kind == "restored":
-                msg = templates.session_restored_alert(phone, account_name)
+                msg = templates.session_restored_alert(
+                    phone, account_name, host_ip=host_ip, company_display=company_display)
                 alert_type = "session_restored"
             else:
                 return
@@ -901,9 +931,15 @@ class AlertBot:
                     db.insert_alert(alert_type, account_id, peer_id=None, message_text=f"[{phone}] {account_name}")
             except Exception as e:
                 logger.warning("[session_%s] insert_alert 失败: %s", kind, e)
+            # v3.0.17: 优先中央台路由 — 没 buttons,纯文本可直送对应公司群
+            routed = await _try_central_route(account, alert_type, msg)
+            if routed:
+                logger.info("[session_%s] 已经中央台路由 phone=%s", kind, phone)
+                return
             # v2.10.5: 运维告警,永远推 — 不受 ALERTS_ENABLED 影响
             # (ALERTS_ENABLED 只管业务告警:关键词/未回复/删除。session 吊销是系统性故障,必须让客户知道)
-            await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+            # parse_mode="HTML" 是关键:渲染 numeric tg_id 的 inline mention 必须 HTML
+            await self.bot.send_message(config.ALERT_GROUP_ID, msg, parse_mode="HTML")
             logger.info("[session_%s] 已推送 phone=%s", kind, phone)
         except Exception as e:
             logger.error("[session_%s] 推送失败 phone=%s: %s", kind, phone, e)

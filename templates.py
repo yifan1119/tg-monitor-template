@@ -131,27 +131,71 @@ def daily_report(report_date, record_time, chat_count,
         f"关键词监听数量：{keyword_count}"
     )
 
-def session_revoked_alert(phone, account_name):
-    """v2.10.4: TG 会话被吊销(用户在 TG 官方 App 点「终止其他会话」会触发)"""
-    return (
-        f"【外事号离线预警{config.COMPANY_DISPLAY}】\n\n"
+def _vps_tag(host_ip="", company_display=""):
+    """v3.0.17: 拼「部门 (IP)」标签 — 监察员一眼能看到出事的是哪台 VPS。
+    company_display 留空 → 走 config.COMPANY_DISPLAY;host_ip 留空 → 不显示括号。"""
+    cd = company_display or getattr(config, "COMPANY_DISPLAY", "") or getattr(config, "COMPANY_NAME", "")
+    if host_ip:
+        return f"{cd} ({host_ip})"
+    return cd
+
+
+def session_revoked_alert(phone, account_name, inspector_mention="", host_ip="", company_display=""):
+    """v3.0.17(was v2.10.4): TG 会话被吊销(用户在 TG 官方 App 点「终止其他会话」会触发)。
+    新增:加 @ 监察员 + 部门/VPS IP 标签,出事第一时间到人。"""
+    tag = _vps_tag(host_ip, company_display)
+    head = f"【外事号离线预警 · {tag}】\n\n"
+    body = (
         f"外事号:{account_name or '—'} ({phone})\n"
-        f"状态:❌ 登录会话已失效\n\n"
-        f"可能原因:\n"
-        f"  • 你在 TG 官方 App「设置→设备」点了「终止其他会话」\n"
-        f"  • 账号被 TG 风控封禁或限制登录\n"
-        f"  • Session 文件损坏\n\n"
-        f"处理方式:\n"
-        f"  1) 打开 Web 后台 → 账号管理 → 重新登录该账号\n"
-        f"  2) 输入验证码完成登录即可恢复监听\n\n"
-        f"提醒:会话失效期间该账号的消息不会被监听、不会写表、不会预警。"
+        f"状态:❌ 登录会话已失效\n"
     )
+    if inspector_mention:
+        body += f"监察员:{inspector_mention}\n"
+    body += (
+        "\n"
+        "可能原因:\n"
+        "  • 你在 TG 官方 App「设置→设备」点了「终止其他会话」\n"
+        "  • 账号被 TG 风控封禁或限制登录\n"
+        "  • Session 文件损坏\n\n"
+        "处理方式:\n"
+        "  1) 打开 Web 后台 → 账号管理 → 重新登录该账号\n"
+        "  2) 输入验证码完成登录即可恢复监听\n\n"
+        "提醒:会话失效期间该账号的消息不会被监听、不会写表、不会预警。"
+    )
+    return head + body
 
 
-def session_restored_alert(phone, account_name):
-    """v2.10.4: session 恢复正常"""
+def session_hijacked_alert(phone, account_name, inspector_mention="", host_ip="", company_display=""):
+    """v3.0.17 新增:异地登录(被盗号)专用预警 — 跟普通 revoked 区分,提示客户高优先级处理。
+
+    判定依据:Telethon 调 RPC 时抛 AuthKeyDuplicated → 同一账号在另一台机器登录,
+    本地 session 自动作废。这跟「自己点终止其他会话」不一样,是被盗号的强信号。"""
+    tag = _vps_tag(host_ip, company_display)
+    head = f"【⚠ 外事号异地登录 · {tag}】\n\n"
+    body = (
+        f"外事号:{account_name or '—'} ({phone})\n"
+        f"状态:🔥 检测到异地登录(本地 session 已被踢)\n"
+    )
+    if inspector_mention:
+        body += f"监察员:{inspector_mention}\n"
+    body += (
+        "\n"
+        "判定依据:Telegram 服务端返回 AuthKeyDuplicated\n"
+        "  → 同一账号在另一台设备/机器上登录,本地 session 被强制踢下线。\n\n"
+        "高风险!立刻处理(顺序很重要):\n"
+        "  1) 打开 TG 官方 App → 设置 → 设备 → 终止所有其他会话\n"
+        "  2) 改两步验证密码(设置 → 隐私和安全 → 两步验证)\n"
+        "  3) Web 后台重新登录该账号(等于把 session 抢回来)\n\n"
+        "⚠ 在你抢回前,异地那个 session 仍能看你聊天 + 发消息。"
+    )
+    return head + body
+
+
+def session_restored_alert(phone, account_name, host_ip="", company_display=""):
+    """v3.0.17(was v2.10.4): session 恢复正常 — 顺手把部门标签也带上,跟 revoked 头对头。"""
+    tag = _vps_tag(host_ip, company_display)
     return (
-        f"【外事号恢复通知{config.COMPANY_DISPLAY}】\n\n"
+        f"【外事号恢复通知 · {tag}】\n\n"
         f"外事号:{account_name or '—'} ({phone})\n"
         f"状态:✅ 监听已恢复正常"
     )
