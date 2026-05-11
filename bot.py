@@ -331,6 +331,26 @@ class AlertBot:
                         callback.message.text + "\n\n❌ 已取消 — " + (callback.from_user.full_name or ""),
                     )
                     await callback.answer("已取消")
+                # v3.0.22 Codex P1 fix: 本地 fallback 路径也写 audit_log + expected_actor 怠工识别
+                try:
+                    actor_id = f"bot:{callback.from_user.id}" if callback.from_user else "bot:unknown"
+                    actor_name = callback.from_user.full_name if callback.from_user else ""
+                    # 反查 alert 应处理人(stage2/删除 → owner_tg_id)
+                    expected_actor = ""
+                    try:
+                        account = db.get_account_by_id(alert["account_id"]) if alert and "account_id" in alert.keys() else None
+                        if account:
+                            expected_actor = (account["owner_tg_id"] or "").lstrip("@")
+                    except Exception:
+                        pass
+                    db.audit_log(event_type="bot_callback",
+                                actor_username=actor_id,
+                                target_type="alert", target_id=alert_id,
+                                payload={"action": new_status, "actor_name": actor_name,
+                                        "alert_type": alert["type"] if "type" in alert.keys() else "",
+                                        "expected_actor": expected_actor})
+                except Exception as _ae:
+                    logger.warning("audit_log 写失败 (不阻塞): %s", _ae)
             except Exception as e:
                 logger.error("stage2 callback 异常 alert_id=%s: %s", alert_id, e)
                 try:
