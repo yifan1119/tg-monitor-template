@@ -20,6 +20,13 @@ class TaskScheduler:
         self.bot = alert_bot
         self.startup_time = startup_time  # 只对启动后的消息触发预警
         self._running = False
+        # v3.0.15: 监察员 raw TG ID → display name 缓存
+        # key=raw_id (str, 'username' or '12345'), val=(display_str, ts_seconds)
+        # display_str 形如 "伊凡 (@yifan123)" 或 "李四 (908696841)" 或 raw (resolve 失败 fallback)
+        # TTL 24h 不变(监察员名字基本不变),resolve 失败短期(5min)再重试
+        self._inspector_cache = {}
+        self._INSPECTOR_CACHE_TTL_OK_SEC = 86400
+        self._INSPECTOR_CACHE_TTL_FAIL_SEC = 300
 
     async def start(self):
         self._running = True
@@ -95,6 +102,199 @@ class TaskScheduler:
 
             except Exception as e:
                 logger.warning("昵称同步失败 [%s]: %s", phone, e)
+
+    async def _resolve_inspector_display(self, raw_id: str) -> str:
+        """v3.0.15: raw TG ID/username → 友好显示串。
+
+        - "@yifan123" / "yifan123" / "908696841" → "伊凡 (@yifan123123)"  或 "伊凡 (908696841)"
+        - resolve 失败 / listener 没起 → 返 raw_id 原样(兜底,不丢字段)
+        """
+        raw = (raw_id or "").strip()
+        if not raw:
+            return ""
+        if not self.listener or not getattr(self.listener, "clients", None):
+            return raw
+        client = next(iter(self.listener.clients.values()), None)
+        if not client:
+            return raw
+        try:
+            val = raw.lstrip("@")
+            entity_id = int(val) if val.isdigit() else val
+            entity = await client.get_entity(entity_id)
+            first = (getattr(entity, "first_name", "") or "").strip()
+            last  = (getattr(entity, "last_name", "")  or "").strip()
+            uname = (getattr(entity, "username", "") or "").strip()
+            name = (first + " " + last).strip()
+            if not name:
+                name = uname or raw
+            tag = f"@{uname}" if uname else str(getattr(entity, "id", "") or raw)
+            return f"{name} ({tag})"
+        except Exception as e:
+            logger.debug("[bus_sync] resolve inspector_tg_id=%s 失败: %s", raw, e)
+            return raw  # 兜底原样
+
+    async def _refresh_inspector_cache(self):
+        """v3.0.15: 给 _sync_account_business_to_sheet 用 — 把所有 unique inspector raw
+        预先 resolve 成 display 存 cache,sync 同步时直接读。
+
+        - 只 resolve cache miss 或过期的(24h ok / 5min fail)
+        - 串行(避免突发 flood wait,N 个 unique inspector 平均 < 5)
+        """
+        now = time.time()
+        try:
+            accounts = db.get_all_accounts()
+        except Exception as e:
+            logger.warning("[bus_sync] refresh_inspector_cache 拉账号失败: %s", e)
+            return
+        unique_raws = set()
+        for a in accounts:
+            raw = (a["inspector_tg_id"] or "").strip() if "inspector_tg_id" in a.keys() else ""
+            if raw:
+                unique_raws.add(raw)
+        for raw in unique_raws:
+            cached = self._inspector_cache.get(raw)
+            if cached:
+                disp, ts = cached
+                ttl = self._INSPECTOR_CACHE_TTL_OK_SEC if disp != raw else self._INSPECTOR_CACHE_TTL_FAIL_SEC
+                if now - ts < ttl:
+                    continue
+            disp = await self._resolve_inspector_display(raw)
+            self._inspector_cache[raw] = (disp, now)
+
+    def _sync_account_business_to_sheet(self):
+        """v3.0.15(ADR-0034): DB → Sheet 反向同步业务字段(operator / company / inspector_tg_id)。
+
+        Web 后台「编辑账号」改了 operator/company/inspector_tg_id 后,这个 loop 60s 内
+        把新值覆盖到 Sheet 的 B2/B3/B4。**用户拍板 Web 优先 = 单向覆盖,即客户在 Sheet
+        手改的会被 DB 值压回去**(已在 release notes 提示)。
+
+        - operator → Sheet B2(沿用现有 sync_headers 反向用的 cell)
+        - company  → Sheet B3
+        - inspector_tg_id → Sheet B4(v3.0.15 新加,模板 row 4 已留空白)
+
+        v3.0.15 (Codex round1 P0/P1 fix): 改 batch read + 允许清空。
+        - 老实现 200 账号 = 200 次 batch_get + 200 次 _rate_limit sleep ≈ 阻塞 5 分钟,
+          顶爆 Google quota 还把 patrol loop 一起拖住。
+        - 新实现:1 次 spreadsheet.values_batch_get 一次拉所有 ws 的 A2:B4,
+          只对差异 ws 单独 update_acell。200 账号无差异 = 2 次 API call ~3 秒。
+        - P1 fix: B2/B3 跟 B4 一样用 != 比较(允许清空,跟 web 优先单向覆盖语义一致)
+        - P2 fix: 老完整版 sheet (frozen=6 走不到 upgrade_minimal_tab 路径) A4 没「监察员」
+          label,顺便在 sync loop 里补:read range 扩到 A2:B4,A4 != "监察员" → 写
+
+        feature flag: config.BUSINESS_FIELD_SYNC_ENABLED (默认 True),客户可关回老行为。
+        """
+        try:
+            self.sheets._rate_limit()
+            all_worksheets = {ws.title: ws for ws in self.sheets.spreadsheet.worksheets()}
+        except Exception as e:
+            logger.warning("[bus_sync] 拉 worksheets 失败,跳过本轮: %s", e)
+            return
+
+        accounts = db.get_all_accounts()
+        if not accounts:
+            return
+
+        # 准备 batch_get ranges: 每个有效 ws 一条 'tab_name'!A2:B4
+        # (A 列读 label 校正,B 列读 value 跟 DB 比对)
+        # gspread 的 sheet 名含特殊字符要单引号 escape;名字本身的 ' 要双写
+        def _quote_sheet_name(name):
+            return "'" + name.replace("'", "''") + "'"
+
+        ranges_pending = []
+        accounts_for_ranges = []
+        for account in accounts:
+            tab_name = account["sheet_tab"] or account["name"] or account["phone"]
+            if not tab_name or tab_name not in all_worksheets:
+                continue
+            ranges_pending.append(f"{_quote_sheet_name(tab_name)}!A2:B4")
+            accounts_for_ranges.append((account, tab_name))
+
+        if not ranges_pending:
+            return
+
+        # 一次 API 拉所有 ws 的 A2:B4 (P0 fix: 200 ws = 1 read,不是 200 reads)
+        self.sheets._rate_limit()
+        try:
+            batch_result = self.sheets.spreadsheet.values_batch_get(ranges=ranges_pending)
+            value_ranges = batch_result.get("valueRanges", [])
+        except Exception as e:
+            logger.warning("[bus_sync] values_batch_get 失败 (本轮跳过): %s", e)
+            return
+
+        if len(value_ranges) != len(accounts_for_ranges):
+            logger.warning("[bus_sync] batch_get 返回数 %d != 请求数 %d,跳过",
+                          len(value_ranges), len(accounts_for_ranges))
+            return
+
+        synced = 0
+        write_count = 0
+        for (account, tab_name), vr in zip(accounts_for_ranges, value_ranges):
+            try:
+                vals = vr.get("values", [])
+                # values 形如 [[A2,B2],[A3,B3],[A4,B4]],缺行/缺列当空
+                def _cell(row_i, col_i):
+                    return (vals[row_i][col_i] if len(vals) > row_i and len(vals[row_i]) > col_i else "").strip()
+                sheet_a4 = _cell(2, 0)
+                sheet_b2 = _cell(0, 1)
+                sheet_b3 = _cell(1, 1)
+                sheet_b4 = _cell(2, 1)
+
+                db_operator = (account["operator"] or "").strip() if "operator" in account.keys() else ""
+                db_company = (account["company"] or "").strip() if "company" in account.keys() else ""
+                db_inspector_raw = (account["inspector_tg_id"] or "").strip() if "inspector_tg_id" in account.keys() else ""
+                # v3.0.15: B4 写「真名 (@username/numeric)」而非 raw ID
+                # cache 由 _refresh_inspector_cache 预热;miss → 用 raw 兜底
+                if db_inspector_raw:
+                    cached = self._inspector_cache.get(db_inspector_raw)
+                    db_inspector = cached[0] if cached else db_inspector_raw
+                else:
+                    db_inspector = ""
+
+                # P1 fix: 全 3 字段都用 != 比较,允许 web 清空覆盖 Sheet
+                # (老实现 if db_xxx 跳过空串,违反单向覆盖语义,客户清空 web 后 Sheet 不更新)
+                updates = []
+                # P2 fix: 老完整版 sheet (frozen=6) A4 没「监察员」label,补齐
+                if sheet_a4 != "监察员":
+                    updates.append(("A4", "监察员"))
+                if db_operator != sheet_b2:
+                    updates.append(("B2", db_operator))
+                if db_company != sheet_b3:
+                    updates.append(("B3", db_company))
+                if db_inspector != sheet_b4:
+                    updates.append(("B4", db_inspector))
+
+                if not updates:
+                    continue
+
+                ws = all_worksheets[tab_name]
+                # P2 fix 续: 老完整版 sheet row 4 是「白底白字 spacer」格式,
+                # 数据写进去人眼看不见。第一次需要补 A4 label 时顺手改字色为黑。
+                # 只在补 A4 label 时跑一次,之后 A4='监察员' 不再触发 → 不重复 format。
+                need_format_row4 = sheet_a4 != "监察员"
+                for cell, val in updates:
+                    self.sheets._rate_limit()
+                    try:
+                        ws.update_acell(cell, val)
+                        write_count += 1
+                    except Exception as e:
+                        logger.warning("[bus_sync] %s update %s 失败: %s", tab_name, cell, e)
+                if need_format_row4:
+                    self.sheets._rate_limit()
+                    try:
+                        ws.format("A4:B4", {"textFormat": {"foregroundColor": {"red": 0, "green": 0, "blue": 0}}})
+                        logger.info("[bus_sync] %s row 4 字色改黑(老 spacer fix)", tab_name)
+                    except Exception as e:
+                        logger.warning("[bus_sync] %s row 4 改字色失败 (内容已写,不阻塞): %s", tab_name, e)
+                synced += 1
+                logger.info("[bus_sync] %s 同步 %s",
+                            tab_name, ", ".join(f"{c}={v!r}" for c, v in updates))
+            except Exception as e:
+                logger.warning("[bus_sync] account=%s 同步异常 (跳过): %s",
+                               account["phone"] if "phone" in account.keys() else "?", e)
+
+        if synced:
+            logger.info("[bus_sync] 本轮共同步 %d 个账号的业务字段(write %d 次,read 1 次 batch)",
+                       synced, write_count)
 
     async def _enforce_sheet_tab_consistency(self):
         """确保 Sheets 分页名 = account.name。用户手改分页名会被自动改回 TG 名字。
@@ -239,6 +439,19 @@ class TaskScheduler:
 
                 # 检查账号昵称是否改变
                 await self._sync_account_names()
+
+                # v3.0.15(ADR-0034): web 改的 operator/company/inspector_tg_id → Sheet B2/B3/B4
+                # 用户拍板 Web 优先(单向覆盖 Sheet 手改),feature flag 默认 ON
+                if getattr(config, "BUSINESS_FIELD_SYNC_ENABLED", True):
+                    # 先 async resolve inspector_tg_id 真名进 cache(B4 显示「真名 (@username)」)
+                    try:
+                        await self._refresh_inspector_cache()
+                    except Exception as e:
+                        logger.warning("[bus_sync] inspector cache 刷新失败 (用 raw 兜底): %s", e)
+                    try:
+                        self._sync_account_business_to_sheet()
+                    except Exception as e:
+                        logger.warning("DB→Sheet 业务字段同步失败 (本轮跳过): %s", e)
 
                 # 分页名一致性检查：手改的分页名会被自动改回 TG 名字
                 await self._enforce_sheet_tab_consistency()
