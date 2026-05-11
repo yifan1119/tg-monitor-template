@@ -903,7 +903,14 @@ class AlertBot:
                 try:
                     insp = (account["inspector_tg_id"] or "").strip() if "inspector_tg_id" in account.keys() else ""
                     if insp:
-                        inspector_mention = await self._build_tg_mention(insp, fallback_name="监察员")
+                        # v3.0.17 fix: fallback_name 用「原始填的字段值」而不是「监察员」字样,
+                        # Telethon 解不到真名时至少能看出是哪个 UID/handle,不会出现
+                        # 「监察员:监察员」这种没意义的显示。
+                        # 真名解析成功 → display 真名;解失败 → display 原始 UID
+                        # (蓝色可点 inline mention,点进去能看 profile)
+                        insp_clean = insp.lstrip("@")
+                        fallback = f"用户 {insp_clean}" if insp_clean.isdigit() else insp_clean
+                        inspector_mention = await self._build_tg_mention(insp, fallback_name=fallback)
                 except Exception as e:
                     logger.warning("[session_%s] 解析监察员失败 (跳过 @): %s", kind, e)
             host_ip = os.environ.get("VPS_PUBLIC_IP", "").strip()
