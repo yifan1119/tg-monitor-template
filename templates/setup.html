@@ -1097,6 +1097,32 @@
         <div class="hint">必须跟中央台的中心 display 名一致。监察员选完后,系统自动拼成「公司-中心」(例:瑞升-运营中心)写到 Sheet B3。</div>
       </div>
 
+      <!-- v3.0.19: 闲聊词白名单(怠工规避)— 命中以下条件不算「未回复」-->
+      <div class="field" style="border-top:1px dashed rgba(126,201,255,0.2);padding-top:12px;margin-top:12px;">
+        <label style="color:#9ef0b8;">⏭ 闲聊词白名单 (未回复预警跳过)</label>
+        <div class="hint" style="margin-bottom:8px;">客户发「在?」「你好」「✓」「好嘞」这种闲聊 / 表情 / 短消息时,不算「未回复」(避免误推 30/40 分钟预警)。改完 60 秒内热加载生效。</div>
+
+        <label style="font-size:11px;color:var(--text-dim);margin-top:6px;">跳过词列表 (逗号或换行分隔)</label>
+        <textarea name="skip_no_reply_texts" rows="3" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;box-sizing:border-box;" placeholder="你好,在?,在吗,在么,嗨,Hi,嗯,好嘞,谢谢,辛苦了,👍,✓">{{ d.skip_no_reply_texts or "" }}</textarea>
+        <div class="hint">留空=用系统默认 30+ 词。客户发的消息 strip 后命中其中之一就跳过。</div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px;">
+          <div>
+            <label style="font-size:11px;color:var(--text-dim);">最少字数 (≤ 这个长度的消息也跳过)</label>
+            <input type="number" name="skip_no_reply_min_len" value="{{ d.skip_no_reply_min_len or '1' }}" min="0" max="20" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-size:12px;box-sizing:border-box;">
+            <div class="hint">默认 1=单字符不跳过(如「?」「!」)。设 2=「在」「嗨」也跳过。</div>
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--text-dim);">纯表情 / 纯 emoji 跳过</label>
+            <select name="skip_no_reply_pure_emoji" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-size:12px;box-sizing:border-box;">
+              <option value="true" {% if (d.skip_no_reply_pure_emoji or 'true') == 'true' %}selected{% endif %}>跳过 (推荐)</option>
+              <option value="false" {% if (d.skip_no_reply_pure_emoji or 'true') == 'false' %}selected{% endif %}>不跳过</option>
+            </select>
+            <div class="hint">客户发「👍」「😊」「💰」也算 / 不算未回复。</div>
+          </div>
+        </div>
+      </div>
+
       {# v2.6.2: settings 模式下显示预警开关 + 日报开关(setup 模式还没配 bot,不显示)
          v2.6.6: 三类预警拆成独立开关,各自 hot-toggle #}
       {% if mode == 'settings' %}

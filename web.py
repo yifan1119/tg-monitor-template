@@ -227,6 +227,7 @@ def write_env(updates):
         "METRICS_TOKEN",
         "KEYWORDS", "NO_REPLY_MINUTES",
         "COMPANY_OPTIONS", "CENTER_OPTIONS",  # v3.0.15.1: 账号配置 modal 下拉选项
+        "SKIP_NO_REPLY_TEXTS", "SKIP_NO_REPLY_MIN_LEN", "SKIP_NO_REPLY_PURE_EMOJI",  # v3.0.19: 闲聊词白名单 web 配
         "WORK_HOUR_START", "WORK_HOUR_END",
         "PATROL_DAYS", "HISTORY_DAYS",
         "SHEETS_FLUSH_INTERVAL", "SHEETS_RATE_LIMIT_PER_MIN", "PATROL_INTERVAL",
@@ -914,6 +915,10 @@ def setup_page():
         # v3.0.15.1: 账号配置 modal 双下拉选项
         "company_options": env.get("COMPANY_OPTIONS", ""),
         "center_options": env.get("CENTER_OPTIONS", "运营中心,商务中心,渠道中心"),
+        # v3.0.19: 闲聊词白名单(怠工规避)— 监察员 web 自助维护
+        "skip_no_reply_texts": env.get("SKIP_NO_REPLY_TEXTS", ""),
+        "skip_no_reply_min_len": env.get("SKIP_NO_REPLY_MIN_LEN", "1"),
+        "skip_no_reply_pure_emoji": env.get("SKIP_NO_REPLY_PURE_EMOJI", "true"),
     }
     return render_template("setup.html", d=defaults, mode="setup", company=config.COMPANY_DISPLAY)
 
@@ -962,6 +967,10 @@ def settings_page():
         # v3.0.15.1: 账号配置 modal 双下拉选项
         "company_options": env.get("COMPANY_OPTIONS", ""),
         "center_options": env.get("CENTER_OPTIONS", "运营中心,商务中心,渠道中心"),
+        # v3.0.19: 闲聊词白名单
+        "skip_no_reply_texts": env.get("SKIP_NO_REPLY_TEXTS", ""),
+        "skip_no_reply_min_len": env.get("SKIP_NO_REPLY_MIN_LEN", "1"),
+        "skip_no_reply_pure_emoji": env.get("SKIP_NO_REPLY_PURE_EMOJI", "true"),
         # v2.6.2: 预警 / 日报开关(settings 页可改,dashboard 也能切换预警)
         # v2.6.6: 三个独立子开关 — 留空跟随 ALERTS_ENABLED 总开关
         "alerts_enabled": env.get("ALERTS_ENABLED", "true").lower() != "false",
@@ -1532,6 +1541,10 @@ def _save_settings(is_first):
         # v3.0.15.1: 账号配置 modal 双下拉选项(规整成逗号分隔,去重 + 去空)
         "COMPANY_OPTIONS": ",".join(dict.fromkeys(s.strip() for s in form.get("company_options", "").replace("\n", ",").split(",") if s.strip())),
         "CENTER_OPTIONS": ",".join(dict.fromkeys(s.strip() for s in form.get("center_options", "").replace("\n", ",").split(",") if s.strip())),
+        # v3.0.19: 闲聊词白名单(改完 60s 内 config.reload_if_env_changed 热加载)
+        "SKIP_NO_REPLY_TEXTS": ",".join(dict.fromkeys(s.strip() for s in form.get("skip_no_reply_texts", "").replace("\n", ",").split(",") if s.strip())),
+        "SKIP_NO_REPLY_MIN_LEN": (form.get("skip_no_reply_min_len", "1") or "1").strip(),
+        "SKIP_NO_REPLY_PURE_EMOJI": "true" if form.get("skip_no_reply_pure_emoji") in ("true", "on", "1") else "false",
         "API_ID": form.get("api_id", DEFAULT_API_ID),
         "API_HASH": form.get("api_hash", DEFAULT_API_HASH),
         "SETUP_COMPLETE": "true",
