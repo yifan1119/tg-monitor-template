@@ -156,6 +156,11 @@ else
 fi
 
 # 5. 生成骨架 .env（保留已有凭证字段不覆盖）
+# v3.0.16(中央台接入): 默认值,跟我们运维的 AWS 中央台对应
+# 改这两个值 = 切到不同中央台。客户 / IT 不需要改
+DEFAULT_CENTRAL_PUSH_URL="https://tg.13-193-143-29.nip.io/api/v1/push_alert"
+DEFAULT_CENTRAL_PUSH_TOKEN="d282d167d178d292e1098027ce911b23df13e6f0305f061bc6fa023bd3abd2d7"
+
 if [ ! -f ".env" ]; then
     echo "📝 生成骨架 .env..."
     # 生成随机 METRICS_TOKEN (优先 openssl, fallback /dev/urandom)
@@ -184,6 +189,11 @@ WEB_PASSWORD=tg@monitor2026
 
 # 中央台接入 Token (中央控制台用这个 token 拉本机指标; 设置页可重置)
 METRICS_TOKEN=${NEW_TOKEN}
+
+# v3.0.16: 实时预警走中央台路由(改 company → 自动推到对应公司+中心 bot 群)
+# 出厂默认接到我们运维的 AWS 中央台,客户不用改
+CENTRAL_PUSH_URL=${DEFAULT_CENTRAL_PUSH_URL}
+CENTRAL_PUSH_TOKEN=${DEFAULT_CENTRAL_PUSH_TOKEN}
 
 # 以下字段由设置精灵填写
 SHEET_ID=
@@ -217,6 +227,14 @@ else
         echo "# 中央台接入 Token (v2.8+; 设置页可重置)" >> .env
         echo "METRICS_TOKEN=${NEW_TOKEN}" >> .env
         echo "   ✅ 已为老部署生成 METRICS_TOKEN"
+    fi
+    # v3.0.16: 老部署缺 CENTRAL_PUSH_URL/TOKEN 自动补,接入中央台路由
+    if ! grep -q "^CENTRAL_PUSH_URL=" .env; then
+        echo "" >> .env
+        echo "# v3.0.16: 实时预警走中央台路由 (改 company → 自动推对应公司+中心 bot 群)" >> .env
+        echo "CENTRAL_PUSH_URL=${DEFAULT_CENTRAL_PUSH_URL}" >> .env
+        echo "CENTRAL_PUSH_TOKEN=${DEFAULT_CENTRAL_PUSH_TOKEN}" >> .env
+        echo "   ✅ 已为老部署接入中央台路由"
     fi
 fi
 
