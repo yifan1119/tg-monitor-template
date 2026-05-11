@@ -145,6 +145,11 @@ def _run_migrations(conn):
         conn.execute("PRAGMA user_version=7")
         conn.commit()
 
+    if version < 8:
+        _migrate_to_8(conn)
+        conn.execute("PRAGMA user_version=8")
+        conn.commit()
+
 
 def _migrate_to_1(conn):
     """v2.10.23 → user_version=1:
@@ -254,6 +259,32 @@ def _migrate_to_7(conn):
     全部 _safe_add_column 幂等,行为完全无感。
     """
     _safe_add_column(conn, "accounts", "inspector_tg_id", "TEXT DEFAULT ''")
+
+
+def _migrate_to_8(conn):
+    """v3.0.18 → user_version=8(ADR-0038 后台操作审计):
+    - audit_logs 表(操作人 / IP / 时间 / 类型 / 详情 / 目标 ID),给 4 个场景埋点用:
+      account_business / users_change / bot_callback / settings_save
+    - 90 天前自动清(audit_logs_purge_old helper),防表撑爆
+    """
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,                         -- ISO 时间(BJ)
+        actor_username TEXT NOT NULL,             -- 操作人 (web 用户或 'bot:tg_id')
+        actor_ip TEXT,                            -- 操作 IP(web 操作有,bot callback 没)
+        event_type TEXT NOT NULL,                 -- account_business / users_add / users_remove
+                                                  -- / bot_callback / settings_save / login_failure
+        target_type TEXT,                         -- account / user / alert / setting
+        target_id TEXT,                           -- 对应 ID(account.id / username / alert.id ...)
+        payload_json TEXT,                        -- 详情(改前/改后/参数)JSON
+        result TEXT NOT NULL DEFAULT 'ok'         -- ok / failed:reason
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_ts          ON audit_logs(ts);
+    CREATE INDEX IF NOT EXISTS idx_audit_actor       ON audit_logs(actor_username);
+    CREATE INDEX IF NOT EXISTS idx_audit_event_type  ON audit_logs(event_type);
+    CREATE INDEX IF NOT EXISTS idx_audit_target      ON audit_logs(target_type, target_id);
+    """)
 
 
 def _is_feature_v2_stage_db(conn):
@@ -1146,3 +1177,78 @@ def get_today_alerts(alert_type):
     ).fetchall()
 
 
+
+
+# ============================================================
+# v3.0.18: 操作审计 — audit_logs helpers
+# ============================================================
+
+import json as _audit_json
+from datetime import datetime as _audit_dt, timezone as _audit_tz, timedelta as _audit_td
+
+_AUDIT_TZ_BJ = _audit_tz(_audit_td(hours=8))
+
+
+def audit_log(event_type, actor_username, actor_ip="", target_type="",
+              target_id="", payload=None, result="ok"):
+    """v3.0.18: 写一条操作审计 log。失败容忍(只 log warning,不影响业务)。
+
+    event_type:
+      account_business / users_add / users_remove / users_change_password
+      bot_callback / settings_save / login_failure / login_success / oauth_revoke
+    """
+    try:
+        ts = _audit_dt.now(_AUDIT_TZ_BJ).strftime("%Y-%m-%d %H:%M:%S")
+        payload_json = _audit_json.dumps(payload, ensure_ascii=False) if payload else None
+        get_conn().execute(
+            "INSERT INTO audit_logs (ts, actor_username, actor_ip, event_type, "
+            "target_type, target_id, payload_json, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, actor_username[:64], (actor_ip or "")[:45],
+             event_type[:32], (target_type or "")[:16],
+             str(target_id)[:64] if target_id is not None else "",
+             payload_json, result[:128]),
+        )
+        get_conn().commit()
+    except Exception as _e:
+        import logging as _lg
+        _lg.getLogger(__name__).warning("[audit_log] 写失败 (不阻塞): %s", _e)
+
+
+def query_audit_logs(event_type=None, actor_username=None, target_id=None,
+                     from_date=None, to_date=None, limit=200, offset=0):
+    """查审计 log。所有过滤条件可选。"""
+    sql = "SELECT * FROM audit_logs WHERE 1=1"
+    args = []
+    if event_type:
+        sql += " AND event_type=?"
+        args.append(event_type)
+    if actor_username:
+        sql += " AND actor_username=?"
+        args.append(actor_username)
+    if target_id:
+        sql += " AND target_id=?"
+        args.append(str(target_id))
+    if from_date:
+        sql += " AND ts >= ?"
+        args.append(from_date)
+    if to_date:
+        sql += " AND ts <= ?"
+        args.append(to_date + " 23:59:59" if len(to_date) == 10 else to_date)
+    sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+    args.extend([min(int(limit), 1000), max(int(offset), 0)])
+    return get_conn().execute(sql, args).fetchall()
+
+
+def audit_log_event_types():
+    """全部 event_type distinct(给查询面板下拉用)"""
+    return [r[0] for r in get_conn().execute(
+        "SELECT DISTINCT event_type FROM audit_logs ORDER BY event_type"
+    ).fetchall()]
+
+
+def audit_log_purge_old(days=90):
+    """清 N 天前的旧 log"""
+    cutoff = (_audit_dt.now(_AUDIT_TZ_BJ) - _audit_td(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    cur = get_conn().execute("DELETE FROM audit_logs WHERE ts < ?", (cutoff,))
+    get_conn().commit()
+    return cur.rowcount
