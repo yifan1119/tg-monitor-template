@@ -1,60 +1,6 @@
-{# v3.0.20 极简模式公用 include — 所有页面 head 末尾 + body 开头 引一次即可 #}
+{# v3.0.20 关掉持续动画 — 最小改动:配色 / 布局 / 卡片 / 渐变全保留,只关 keyframes #}
 <style>
-body.lite-mode * {
-  animation: none !important;
-  transition: none !important;
-  text-shadow: none !important;
-  box-shadow: none !important;
-}
-body.lite-mode {
-  background: #1a1a1a !important;
-}
-body.lite-mode .scan-line,
-body.lite-mode .scanline,
-body.lite-mode .bg-grid,
-body.lite-mode .gradient-bg,
-body.lite-mode [class*="bg-glow"],
-body.lite-mode [class*="pulse"],
-body.lite-mode [class*="shimmer"] {
-  display: none !important;
+*, *::before, *::after {
   animation: none !important;
 }
-body.lite-mode .card,
-body.lite-mode .panel,
-body.lite-mode header {
-  background: #2a2a2a !important;
-  border: 1px solid #3a3a3a !important;
-}
-.lite-toggle {
-  position: fixed; top: 12px; right: 14px; z-index: 9999;
-  padding: 4px 10px; font-size: 11px; font-family: inherit;
-  background: rgba(0,0,0,0.6); border: 1px solid rgba(126,201,255,0.4);
-  border-radius: 4px; color: #cfe3f5; cursor: pointer;
-}
-.lite-toggle:hover { background: rgba(42,171,238,0.15); }
 </style>
-
-<button class="lite-toggle" id="lite-toggle" title="切换极简 / 华丽模式 — 多 tab 不卡">🌙 华丽</button>
-<script>
-(function() {
-  var KEY = 'tgmon-lite-mode';
-  var btn = document.getElementById('lite-toggle');
-  function apply(on) {
-    document.body.classList.toggle('lite-mode', on);
-    btn.textContent = on ? '☀ 极简' : '🌙 华丽';
-  }
-  apply(localStorage.getItem(KEY) === 'on');
-  btn.addEventListener('click', function() {
-    var on = !document.body.classList.contains('lite-mode');
-    localStorage.setItem(KEY, on ? 'on' : 'off');
-    apply(on);
-  });
-  // visibilitychange 后台 tab 暂停 setInterval(节省 CPU)
-  var pausedTimers = [];
-  document.addEventListener('visibilitychange', function() {
-    // 简单实现:后台 tab 时让浏览器自然降频(modern browser 已默认)
-    // 这里加 hint 给可能存在的轮询定时器
-    document.body.classList.toggle('tab-hidden', document.hidden);
-  });
-})();
-</script>

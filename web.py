@@ -197,6 +197,47 @@ DEFAULT_SHEETS_FLUSH_INTERVAL = "5"
 DEFAULT_PATROL_INTERVAL = "60"
 
 
+# v3.0.21: 中央台 /api/v1/options 拉公司 + 中心列表(单部门不再 .env 手填)
+# 60s TTL cache,避免每次 render 打中央台 API
+_CENTRAL_OPTIONS_CACHE = {"ts": 0, "companies": [], "centers": []}
+_CENTRAL_OPTIONS_TTL = 60
+
+def _fetch_central_options():
+    """返 (companies, centers) — 两个 list。**唯一数据源** = 中央台 /api/v1/options。
+
+    中央台未配置(没填 CENTRAL_PUSH_URL/TOKEN) → 返空 list → 「账号配置」modal 退化成 text input。
+    fetch 成功 → 缓存 60s,避免每次 render 打 API。
+    fetch 失败(超时/网络) → 返空 list 不缓存(下次重试)。"""
+    import time
+    now = time.time()
+    if _CENTRAL_OPTIONS_CACHE["ts"] and now - _CENTRAL_OPTIONS_CACHE["ts"] < _CENTRAL_OPTIONS_TTL:
+        return _CENTRAL_OPTIONS_CACHE["companies"], _CENTRAL_OPTIONS_CACHE["centers"]
+
+    url = os.environ.get("CENTRAL_PUSH_URL", "").strip()
+    token = os.environ.get("CENTRAL_PUSH_TOKEN", "").strip()
+    if not url or not token:
+        return [], []
+
+    # CENTRAL_PUSH_URL 形如 http://host:5070/api/v1/push_alert → /api/v1/options
+    options_url = url.rsplit("/", 1)[0] + "/options"
+    try:
+        import urllib.request, json as _json
+        req = urllib.request.Request(options_url, method="GET",
+                                     headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+        if data.get("ok"):
+            co = data.get("companies", [])
+            ce = data.get("centers", [])
+            _CENTRAL_OPTIONS_CACHE["ts"] = now
+            _CENTRAL_OPTIONS_CACHE["companies"] = co
+            _CENTRAL_OPTIONS_CACHE["centers"] = ce
+            return co, ce
+    except Exception:
+        pass
+    return [], []
+
+
 def read_env():
     """读 .env 到 dict，保留原顺序"""
     env = {}
@@ -226,7 +267,7 @@ def write_env(updates):
         "WEB_PORT", "WEB_PASSWORD",
         "METRICS_TOKEN",
         "KEYWORDS", "NO_REPLY_MINUTES",
-        "COMPANY_OPTIONS", "CENTER_OPTIONS",  # v3.0.15.1: 账号配置 modal 下拉选项
+        # v3.0.21: COMPANY_OPTIONS / CENTER_OPTIONS 删 — 账号配置下拉改为中央台 /api/v1/options 实时拉
         "SKIP_NO_REPLY_TEXTS", "SKIP_NO_REPLY_MIN_LEN", "SKIP_NO_REPLY_PURE_EMOJI",  # v3.0.19: 闲聊词白名单 web 配
         "WORK_HOUR_START", "WORK_HOUR_END",
         "PATROL_DAYS", "HISTORY_DAYS",
@@ -912,9 +953,7 @@ def setup_page():
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
         "api_id": env.get("API_ID", DEFAULT_API_ID),
         "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
-        # v3.0.15.1: 账号配置 modal 双下拉选项
-        "company_options": env.get("COMPANY_OPTIONS", ""),
-        "center_options": env.get("CENTER_OPTIONS", "运营中心,商务中心,渠道中心"),
+        # v3.0.21: COMPANY_OPTIONS / CENTER_OPTIONS 不再 .env 配,改为中央台同步
         # v3.0.19: 闲聊词白名单(怠工规避)— 监察员 web 自助维护
         "skip_no_reply_texts": env.get("SKIP_NO_REPLY_TEXTS", ""),
         "skip_no_reply_min_len": env.get("SKIP_NO_REPLY_MIN_LEN", "1"),
@@ -964,9 +1003,7 @@ def settings_page():
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
         "api_id": env.get("API_ID", DEFAULT_API_ID),
         "api_hash": env.get("API_HASH", DEFAULT_API_HASH),
-        # v3.0.15.1: 账号配置 modal 双下拉选项
-        "company_options": env.get("COMPANY_OPTIONS", ""),
-        "center_options": env.get("CENTER_OPTIONS", "运营中心,商务中心,渠道中心"),
+        # v3.0.21: 账号配置 modal 下拉改从中央台同步,这里不再 .env 配
         # v3.0.19: 闲聊词白名单
         "skip_no_reply_texts": env.get("SKIP_NO_REPLY_TEXTS", ""),
         "skip_no_reply_min_len": env.get("SKIP_NO_REPLY_MIN_LEN", "1"),
@@ -1538,9 +1575,7 @@ def _save_settings(is_first):
         "GOOGLE_OAUTH_CLIENT_SECRET": form.get("oauth_client_secret", "").strip(),
         "KEYWORDS": new_keywords_str,
         "NO_REPLY_MINUTES": form.get("no_reply_minutes", DEFAULT_NO_REPLY_MINUTES),
-        # v3.0.15.1: 账号配置 modal 双下拉选项(规整成逗号分隔,去重 + 去空)
-        "COMPANY_OPTIONS": ",".join(dict.fromkeys(s.strip() for s in form.get("company_options", "").replace("\n", ",").split(",") if s.strip())),
-        "CENTER_OPTIONS": ",".join(dict.fromkeys(s.strip() for s in form.get("center_options", "").replace("\n", ",").split(",") if s.strip())),
+        # v3.0.21: COMPANY_OPTIONS / CENTER_OPTIONS 已删,数据源改中央台 /api/v1/options
         # v3.0.19: 闲聊词白名单(改完 60s 内 config.reload_if_env_changed 热加载)
         "SKIP_NO_REPLY_TEXTS": ",".join(dict.fromkeys(s.strip() for s in form.get("skip_no_reply_texts", "").replace("\n", ",").split(",") if s.strip())),
         "SKIP_NO_REPLY_MIN_LEN": (form.get("skip_no_reply_min_len", "1") or "1").strip(),
@@ -2024,6 +2059,9 @@ def index():
     db.init_db()
     # v3.0.1: 模板不再条件渲染按钮,这里就不用传 flag 了(模板改成数据驱动)
     sessions = get_sessions()
+    # v3.0.21: 优先从中央台拉公司 / 中心列表(取代 .env 手填,失败 fallback .env)
+    co, ce = _fetch_central_options()
+    me = flask_session.get("username", "")
     return render_template(
         "index.html",
         sessions=sessions,
@@ -2034,9 +2072,12 @@ def index():
         alert_no_reply_enabled=config.ALERT_NO_REPLY_ENABLED,
         alert_delete_enabled=config.ALERT_DELETE_ENABLED,
         operator_label=config.OPERATOR_LABEL,
-        # v3.0.15.1: 账号配置 modal 「公司 + 中心」双下拉选项
-        company_options=config.COMPANY_OPTIONS,
-        center_options=config.CENTER_OPTIONS,
+        # v3.0.15.1 + v3.0.21: 账号配置 modal 「公司 + 中心」双下拉选项
+        # 中央台 fetch 成功 → 用中央台数据;失败 → fallback .env 手填
+        company_options=co,
+        center_options=ce,
+        # v3.0.18: navbar 加「📋 审计」入口给 admin
+        is_admin=is_admin(me),
     )
 
 
@@ -2162,10 +2203,30 @@ def _humanize_tg_error(e):
         if seconds:
             return f"请求太频繁,请等 {seconds} 秒后再试"
         return "请求太频繁,请稍后再试"
-    # 兜底: 保留原始 message 但剥掉 "(caused by XxxRequest)" 技术尾巴
+    # v3.0.22: 常见英文异常 / Telethon ConnectionError 兜底翻成中文
     import re as _re
-    msg = str(e) or type(e).__name__
-    msg = _re.sub(r"\s*\(caused by \w+\)", "", msg).strip()
+    msg_raw = str(e) or type(e).__name__
+    msg_low = msg_raw.lower()
+    if "database is locked" in msg_low or "database locked" in msg_low:
+        return ("该账号正在监听中,session 文件被监听进程占用,Web 端无法同时打开。"
+                "请先点上方「重启监听器」让监听释放 session,30 秒后再试。"
+                "或者先点该账号「移除」按钮,再重新登录(业务字段会保留)。")
+    if "cannot send requests while disconnected" in msg_low:
+        return "无法连接 Telegram 服务器,请检查 VPS 网络后重试(可能需要 30 秒重连)"
+    if "connection" in msg_low and ("reset" in msg_low or "refused" in msg_low or "closed" in msg_low):
+        return "TG 服务器连接断开,请稍后重试"
+    if "timeout" in msg_low or "timed out" in msg_low:
+        return "请求超时,TG 服务器无响应,请重试"
+    if "auth_key" in msg_low or "auth key" in msg_low:
+        return "登录会话已失效,请重新登录"
+    if "unauthorized" in msg_low:
+        return "未授权操作,请检查账号状态"
+    if "deactivated" in msg_low or "banned" in msg_low:
+        return "该手机号已被 Telegram 冻结或封禁,无法登录"
+    if "two_steps_required" in msg_low or "session_password_needed" in msg_low:
+        return "该账号开启了两步验证,请输入两步验证密码"
+    # 兜底: 保留原始 message 但剥掉 "(caused by XxxRequest)" 技术尾巴
+    msg = _re.sub(r"\s*\(caused by \w+\)", "", msg_raw).strip()
     return msg
 
 
@@ -2583,6 +2644,97 @@ def api_v1_metrics():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/v1/callback", methods=["POST"])
+def api_v1_callback():
+    """v3.0.22 (ADR-0037 webhook bridge): 中央台 callback_listener 收到按钮点击后 POST 这里
+    处理 stage2 / 删除预警的「登记违规 / 取消 / 通过 / 拒绝」。
+
+    入参 JSON: {alert_id, action: violation|cancel|approve|reject, actor: TG name}
+    鉴权:Bearer = METRICS_TOKEN(同 /api/v1/metrics)
+    返回:{ok, result_text} → 中央台 bot 用 result_text 编辑原消息
+    """
+    env = read_env()
+    expected = _ensure_metrics_token(env)
+    auth = request.headers.get("Authorization", "")
+    provided = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not expected or not _secrets.compare_digest(provided, expected):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        alert_id = int(payload.get("alert_id", 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "alert_id required"}), 400
+    action = (payload.get("action") or "").strip().lower()
+    actor = (payload.get("actor") or "中央台用户")[:80]
+    if action not in ("violation", "cancel", "approve", "reject"):
+        return jsonify({"ok": False, "error": "invalid action"}), 400
+
+    import database as db
+    alert = db.get_alert(alert_id)
+    if not alert:
+        return jsonify({"ok": False, "error": "alert not found"}), 404
+
+    # 状态转移映射
+    status_map = {
+        "violation": "violation_logged",
+        "cancel":    "cancelled",
+        "approve":   "approved",
+        "reject":    "rejected",
+    }
+    new_status = status_map[action]
+    # 原子抢占(status=pending → new_status)
+    claimed = db.claim_alert_for_review(alert_id, new_status)
+    if not claimed:
+        return jsonify({"ok": False, "error": "already_handled"}), 409
+
+    # 写 audit_log(v3.0.18 + v3.0.22 加 expected_actor 怠工识别)
+    try:
+        # 反查 alert 应该处理的人(stage2 = owner_tg_id,删除 = owner_tg_id;stage1 = business_tg_id)
+        expected_actor = ""
+        try:
+            account = db.get_account_by_id(
+                alert["account_id"] if "account_id" in alert.keys() else 0
+            )
+            if account:
+                alert_type = alert["type"] if "type" in alert.keys() else ""
+                # stage2 / 删除 → owner_tg_id;stage1 / 关键词 → business_tg_id
+                if alert_type in ("no_reply",) and "stage" in alert.keys() and alert["stage"] == 2:
+                    expected_actor = account["owner_tg_id"] or ""
+                elif alert_type == "deleted":
+                    expected_actor = account["owner_tg_id"] or ""
+                else:
+                    expected_actor = account["business_tg_id"] or ""
+                expected_actor = (expected_actor or "").lstrip("@")
+        except Exception:
+            pass
+
+        db.audit_log(event_type="bot_callback",
+                     actor_username=f"central:{actor}",
+                     target_type="alert", target_id=alert_id,
+                     payload={
+                         "action": action,
+                         "alert_type": alert["type"] if "type" in alert.keys() else "",
+                         "expected_actor": expected_actor,
+                         "actor": actor,
+                     })
+    except Exception as e:
+        logger.warning("audit_log 写失败 (不阻塞 callback): %s", e)
+
+    # 准备给中央台 bot edit message 的反馈文案
+    label_map = {
+        "violation": "✅ 已登记违规",
+        "cancel":    "❌ 已取消",
+        "approve":   "✅ 已通过",
+        "reject":    "❌ 已拒绝",
+    }
+    result_text = f"{label_map[action]} — by {actor}"
+
+    # violation/approve 类要写到 Sheet 预警分页 — claim sheet_written=0 让 _alert_writeback_loop
+    # (v2.10.24.3 ADR-0010)60s 内自动补写,这里不阻塞 callback 响应
+    return jsonify({"ok": True, "result_text": result_text, "new_status": new_status})
+
+
 @app.route("/api/v1/metrics/access_log", methods=["GET"])
 @login_required
 def api_v1_metrics_access_log():
@@ -2957,8 +3109,11 @@ def audit_page():
     to_date = request.args.get("to", "").strip()
     page = max(int(request.args.get("page", "1") or "1"), 1)
     page_size = 100
-    rows = db.query_audit_logs(
-        event_type=event_type or None,
+    # v3.0.22 客户反馈:这页给监察员看「审批历史」— 只显示 bot_callback(点登记违规/取消/通过/拒绝)
+    # 其他事件类型(改外事号 / 改系统设置 / 加删用户 / 改密码)是运维操作,不在此页面展示
+    event_type = "bot_callback"
+    raw_rows = db.query_audit_logs(
+        event_type=event_type,
         actor_username=actor or None,
         target_id=target_id or None,
         from_date=from_date or None,
@@ -2966,7 +3121,18 @@ def audit_page():
         limit=page_size,
         offset=(page - 1) * page_size,
     )
+    # v3.0.22: parse payload_json → payload_dict 让 template 能取 expected_actor 等字段
+    import json as _json
+    rows = []
+    for r in raw_rows:
+        d = dict(r)
+        try:
+            d["payload_dict"] = _json.loads(d.get("payload_json") or "{}")
+        except Exception:
+            d["payload_dict"] = {}
+        rows.append(d)
     event_types = db.audit_log_event_types()
+    me = flask_session.get("username", "")
     return render_template(
         "audit.html",
         rows=rows,
@@ -2978,6 +3144,9 @@ def audit_page():
         filter_to=to_date,
         page=page,
         page_size=page_size,
+        # v3.0.18: navbar 「📋 审计」入口需要(虽然只有 admin 进得来,但 template 共享样式)
+        is_admin=is_admin(me),
+        company=config.COMPANY_DISPLAY,
     )
 
 

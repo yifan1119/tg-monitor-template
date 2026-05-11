@@ -170,11 +170,9 @@ else:
 KEYWORDS = [k.strip() for k in os.environ.get("KEYWORDS", "").split(",") if k.strip()]
 NO_REPLY_MINUTES = int(os.environ.get("NO_REPLY_MINUTES", "30"))
 
-# v3.0.15.1: 公司 / 中心下拉选项(account 配置 modal 用,杜绝监察员手填)
-# 逗号分隔,例:COMPANY_OPTIONS="瑞升,鼎丰,悦达"  CENTER_OPTIONS="运营中心,商务中心,渠道中心"
-# 留空 → modal 退回输入框模式(向后兼容)
-COMPANY_OPTIONS = [s.strip() for s in os.environ.get("COMPANY_OPTIONS", "").split(",") if s.strip()]
-CENTER_OPTIONS = [s.strip() for s in os.environ.get("CENTER_OPTIONS", "").split(",") if s.strip()]
+# v3.0.21: COMPANY_OPTIONS / CENTER_OPTIONS 已删 — 改由 web.py::_fetch_central_options 实时
+# 拉中央台 /api/v1/options(60s TTL cache)。单部门 .env 不再保存,中央台 alert_routes 表
+# 为唯一 source of truth。中央台未配置 → 下拉为空 → modal 退回输入框(向后兼容)。
 
 # v3.0.10: 略过无意义客户消息的未回复告警(2026-04-29 客户反馈)
 # 客户发「你好 / 表情包 / 1 / ?」这种问候性消息,业务员看见也没必要立刻回 → 不应触发未回复预警。
