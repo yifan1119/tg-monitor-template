@@ -2,12 +2,14 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.0.24(2026-05-12)
+## 📌 当前版本:v3.0.26(2026-05-12)
 
-🚀 **客户 6 项优化诉求全部完成 + 中央台同步 + UI/文案完善**
+🚀 **Remote Agent — 中央台远程运维 dept VPS(健康检查 / 升级 / 重启)**
 
 | 版本 | 功能 |
 |---|---|
+| **v3.0.26** | 🛰 **Remote Agent**:新增 `agent.py` 模块 + `/api/v1/admin/cmd` 鉴权 endpoint。中央台从此可以远程 inspect / upgrade / restart_svc 单部门 VPS,客户运维 0 介入。4 层鉴权(token + HMAC + nonce + timestamp 防重放)+ rate limit(5次/分钟)+ audit_log 全程留痕。白名单 3 action,**永禁任意 shell / SQL**。配套中央台 v0.19 fleet UI 一键操控。 |
+| **v3.0.25** | 🪧 **登录外事号后自动引导业务归属配置** — `verify_code` / `verify_password` 返 `account_id`,前端 sessionStorage 在 reload 后自动 open「编辑账号配置」modal,免再点列表。 |
 | **v3.0.17** | 账号失效 @ 监察员 + AuthKeyDuplicated 异地登录单独高优先级文案 + `【外事号离线预警 · 部门 (IP)】` 标题 |
 | **v3.0.18** | 操作审计 `audit_logs` 表(V8 migration)+ `/audit` 「审批历史」管理员面板(全中文 + ⚠ 非当事人怠工识别) |
 | **v3.0.19** | 闲聊词白名单 3 字段搬 web `/settings`(`SKIP_NO_REPLY_TEXTS / MIN_LEN / PURE_EMOJI` 不再 SSH 改 .env)|
