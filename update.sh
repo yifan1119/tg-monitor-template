@@ -118,10 +118,18 @@ if [ -z "$SKIP_CODE_PULL" ]; then
     # ===== 3. 拉最新代码 =====
     echo ""
     echo "📥 拉取最新代码..."
+    # v3.0.28: 修「git 卡 feature 分支」根因 — 之前部分客户 git working tree 卡在某个
+    # feature 分支上,git pull 拉的是那个分支不是 main → README/templates 永远不更新。
+    # 强制切回 main 再 reset,保证拿到的是 origin/main 的代码。
+    CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+    if [ "$CURRENT_BRANCH" != "main" ]; then
+        echo "  ⚠ 当前分支 '${CURRENT_BRANCH}' 不是 main,强制切回 main"
+        git checkout main 2>&1 | sed 's/^/    /' || git checkout -B main origin/main
+    fi
     git reset --hard origin/main
     NEW_SHA=$(git rev-parse HEAD)
     NEW_SHORT=$(git rev-parse --short HEAD)
-    echo "  ✅ 代码已同步到 ${NEW_SHORT}"
+    echo "  ✅ 代码已同步到 ${NEW_SHORT} (branch=main)"
 fi
 
 # ===== 3.5 .env migrate — 老部署升级时自动补新字段 =====
@@ -148,17 +156,31 @@ if [ -f ".env" ] && ! grep -q "^VPS_PUBLIC_IP=" .env; then
     echo "  ✅ 已补 VPS_PUBLIC_IP=${VPS_IP}"
 fi
 
-#   v3.0.16: CENTRAL_PUSH_URL + CENTRAL_PUSH_TOKEN (实时预警走中央台路由)
+#   v3.0.16 + v3.0.28: CENTRAL_PUSH_URL + CENTRAL_PUSH_TOKEN (实时预警走中央台路由)
 #   旧 VPS 升级时自动接入,客户/IT 不用 SSH 改
+#   v3.0.28 修「空值卡住」根因:之前用 `grep -q "^CENTRAL_PUSH_URL="`,只要这行存在(哪怕是空值
+#   `CENTRAL_PUSH_URL=`)就不覆盖,导致部分 VPS 永远接不上中央台。改用 `grep -qE ".+$"` 判断
+#   等号后至少 1 字符,空值也强制覆盖。
 DEFAULT_CENTRAL_PUSH_URL="https://tg.13-193-143-29.nip.io/api/v1/push_alert"
 DEFAULT_CENTRAL_PUSH_TOKEN="d282d167d178d292e1098027ce911b23df13e6f0305f061bc6fa023bd3abd2d7"
-if [ -f ".env" ] && ! grep -q "^CENTRAL_PUSH_URL=" .env; then
+if [ -f ".env" ] && ! grep -qE "^CENTRAL_PUSH_URL=.+$" .env; then
+    # 删掉可能存在的空值行(防止再追加导致两行重复)
+    sed -i.bak '/^CENTRAL_PUSH_URL=$/d; /^CENTRAL_PUSH_TOKEN=$/d' .env 2>/dev/null
+    rm -f .env.bak
     [ -n "$(tail -c 1 .env)" ] && echo "" >> .env
     echo "" >> .env
-    echo "# v3.0.16: 实时预警走中央台路由(改 company → 自动推对应公司+中心 bot 群)" >> .env
+    echo "# v3.0.16+v3.0.28: 实时预警走中央台路由(改 company → 自动推对应公司+中心 bot 群)" >> .env
     echo "CENTRAL_PUSH_URL=${DEFAULT_CENTRAL_PUSH_URL}" >> .env
     echo "CENTRAL_PUSH_TOKEN=${DEFAULT_CENTRAL_PUSH_TOKEN}" >> .env
-    echo "  ✅ 已接入中央台路由(v3.0.16)— 改 company 后实时预警自动推到新公司群"
+    echo "  ✅ 已接入中央台路由 — 改 company 后实时预警自动推到新公司群"
+fi
+# CENTRAL_PUSH_TOKEN 单独 check(防止只有 URL 有值 / TOKEN 空)
+if [ -f ".env" ] && ! grep -qE "^CENTRAL_PUSH_TOKEN=.+$" .env; then
+    sed -i.bak '/^CENTRAL_PUSH_TOKEN=$/d' .env 2>/dev/null
+    rm -f .env.bak
+    [ -n "$(tail -c 1 .env)" ] && echo "" >> .env
+    echo "CENTRAL_PUSH_TOKEN=${DEFAULT_CENTRAL_PUSH_TOKEN}" >> .env
+    echo "  ✅ 已补 CENTRAL_PUSH_TOKEN"
 fi
 
 # ===== 4. 重建容器 =====

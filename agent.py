@@ -247,42 +247,63 @@ def action_inspect(params: dict) -> tuple[bool, dict]:
     }
 
 
+def _find_host_repo_path():
+    """通过 docker SDK 找当前 tg-web 容器 /app/repo bind-mount 对应的 host 路径。
+    需要这个路径,才能在临时容器里挂同一目录跑 git。"""
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        # 当前容器 hostname 通常就是 short container ID(docker 默认)
+        me_id = socket.gethostname()
+        c = client.containers.get(me_id)
+        for m in c.attrs.get("Mounts", []) or []:
+            if m.get("Destination") == "/app/repo":
+                return m.get("Source")
+    except Exception:
+        pass
+    return None
+
+
 def action_upgrade(params: dict) -> tuple[bool, dict]:
-    """触发 ./update.sh(同步等完成 timeout 8 min)。
+    """v3.0.28:触发完整升级。
+    优先级:
+      1. 容器内有 git(v3.0.28+ Dockerfile 已装)→ 直接跑 subprocess git
+      2. 否则起临时 alpine 容器(挂 docker socket + host_repo)→ apk add git
+         → 跑完整 update.sh(含 docker compose up --build)
+    第二条路解决 v3.0.26/27 升级到 v3.0.28 时容器内无 git 的死循环。
+
     params:
-      - target_tag (str, optional):git checkout <tag> 之前 pull。空 = main
-      - dry_run (bool, default False):不真升级,只返「will run」
+      - target_tag (str):main / vX.Y.Z(regex 校验防注入)
+      - dry_run (bool):不真升级,只返「would run」
     """
     target = (params.get("target_tag") or "main").strip()
     dry_run = bool(params.get("dry_run", False))
 
-    # 安全 check — target 必须 main 或 v 开头的 tag,防 shell injection
     import re as _re
     if not _re.match(r'^(main|v\d+\.\d+(?:\.\d+){0,2})$', target):
         return False, {"error": f"invalid target_tag: {target!r}"}
 
-    # 找仓库路径 — update.sh 通常在容器外的 host /root/tg-monitor-<dept>
-    # 容器内通过 docker.sock 调 host 路径,或者直接 cd /app/repo(bind-mount)
-    # 简单 prefer /app/repo(容器内 bind-mount 路径)
     repo = Path("/app/repo")
     if not repo.exists():
         repo = Path(__file__).parent
 
     if dry_run:
-        return True, {"target": target, "repo": str(repo), "would_run": "./update.sh"}
+        path = "container_git" if shutil.which("git") else "alpine_container"
+        return True, {"target": target, "repo": str(repo), "method": path,
+                       "would_run": "git fetch + checkout main + reset --hard + bash update.sh"}
 
-    try:
-        # git fetch + checkout target + pull + ./update.sh
-        # 用 subprocess.run 同步等
+    # ---- 路径 1:容器内有 git ----
+    if shutil.which("git"):
         env = os.environ.copy()
         env["NO_INTERACTIVE"] = "1"
         steps = []
-        for cmd in [
+        cmds = [
             ["git", "-C", str(repo), "fetch", "--tags", "--prune"],
             ["git", "-C", str(repo), "checkout", target],
-            ["git", "-C", str(repo), "pull", "--ff-only"],
+            ["git", "-C", str(repo), "reset", "--hard", f"origin/{target}"],
             ["bash", str(repo / "update.sh")],
-        ]:
+        ]
+        for cmd in cmds:
             try:
                 r = subprocess.run(cmd, capture_output=True, timeout=480, env=env,
                                    cwd=str(repo))
@@ -293,14 +314,184 @@ def action_upgrade(params: dict) -> tuple[bool, dict]:
                     "stderr_tail": r.stderr.decode("utf-8", "ignore")[-500:],
                 })
                 if r.returncode != 0:
-                    return False, {"steps": steps, "failed_at": cmd[0]}
+                    return False, {"steps": steps, "failed_at": cmd[0], "method": "container_git"}
             except subprocess.TimeoutExpired:
                 steps.append({"cmd": " ".join(cmd), "error": "timeout 8min"})
-                return False, {"steps": steps, "failed_at": cmd[0]}
-        return True, {"target": target, "steps": steps,
-                      "new_version": _read_version_string()}
+                return False, {"steps": steps, "failed_at": cmd[0], "method": "container_git"}
+        return True, {"target": target, "method": "container_git", "steps": steps,
+                       "new_version": _read_version_string()}
+
+    # ---- 路径 2:容器内无 git → 起临时 alpine 容器 ----
+    host_repo = _find_host_repo_path()
+    if not host_repo:
+        return False, {"error": "container has no git AND can't find host /app/repo bind-mount",
+                        "fix": "客户 SSH 一次跑: cd /root/tg-monitor-<dept> && git pull && ./update.sh"}
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        script = (
+            f"set -e; "
+            f"apk add --no-cache --quiet git bash docker-cli docker-cli-compose >/dev/null 2>&1; "
+            f"cd /repo; "
+            f"git fetch --tags --prune; "
+            f"git checkout {target} 2>/dev/null || git checkout -B {target} origin/{target}; "
+            f"git reset --hard origin/{target}; "
+            f"bash update.sh"
+        )
+        out_bytes = client.containers.run(
+            "alpine:3.20",
+            ["sh", "-c", script],
+            volumes={
+                host_repo: {"bind": "/repo", "mode": "rw"},
+                "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
+            },
+            environment={"NO_INTERACTIVE": "1"},
+            remove=True,
+            stdout=True, stderr=True,
+        )
+        out_text = out_bytes.decode("utf-8", "ignore") if isinstance(out_bytes, bytes) else str(out_bytes)
+        return True, {"target": target, "method": "alpine_container",
+                       "host_repo": host_repo,
+                       "log_tail": out_text[-1500:],
+                       "new_version": _read_version_string()}
     except Exception as e:
-        return False, {"error": str(e)}
+        return False, {"error": f"alpine container: {type(e).__name__}: {e}",
+                        "host_repo": host_repo}
+
+
+def action_set_env(params: dict) -> tuple[bool, dict]:
+    """v3.0.28:改 .env 白名单 key + 重启 tg-web 应用。
+    params: {key: 'KEYWORDS' | ..., value: 'xxx'} 或 {kvs: {k:v, k2:v2}}
+    白名单:KEYWORDS / SKIP_NO_REPLY_TEXTS / SKIP_NO_REPLY_MIN_LEN / SKIP_NO_REPLY_PURE_EMOJI
+           / NO_REPLY_MINUTES / WORK_HOUR_START / WORK_HOUR_END
+           / CENTRAL_PUSH_URL / CENTRAL_PUSH_TOKEN
+           / ALERT_KEYWORD_ENABLED / ALERT_NO_REPLY_ENABLED / ALERT_DELETE_ENABLED
+           / SHEET_RESYNC_ENABLED / BUSINESS_FIELD_SYNC_ENABLED
+    永禁:BOT_TOKEN / API_ID / API_HASH / WEB_PASSWORD / METRICS_TOKEN / SHEET_ID / OAUTH_* 等"""
+    ALLOWED_KEYS = {
+        "KEYWORDS", "SKIP_NO_REPLY_TEXTS", "SKIP_NO_REPLY_MIN_LEN", "SKIP_NO_REPLY_PURE_EMOJI",
+        "NO_REPLY_MINUTES", "WORK_HOUR_START", "WORK_HOUR_END",
+        "CENTRAL_PUSH_URL", "CENTRAL_PUSH_TOKEN",
+        "ALERT_KEYWORD_ENABLED", "ALERT_NO_REPLY_ENABLED", "ALERT_DELETE_ENABLED",
+        "SHEET_RESYNC_ENABLED", "BUSINESS_FIELD_SYNC_ENABLED",
+        "REMIND_30MIN_TEXT", "REMIND_40MIN_TEXT", "REMIND_DELETE_TEXT",
+    }
+    kvs = params.get("kvs") or {}
+    if not kvs and params.get("key"):
+        kvs = {params["key"]: params.get("value", "")}
+    if not isinstance(kvs, dict) or not kvs:
+        return False, {"error": "需要 kvs:{k:v} 或 key+value"}
+    bad = [k for k in kvs if k not in ALLOWED_KEYS]
+    if bad:
+        return False, {"error": f"不在白名单: {bad}", "allowed": sorted(ALLOWED_KEYS)}
+
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return False, {"error": ".env not found"}
+
+    lines = env_path.read_text(encoding="utf-8").splitlines(keepends=False)
+    seen = set()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            new_lines.append(line)
+            continue
+        k = stripped.split("=", 1)[0].strip()
+        if k in kvs:
+            new_lines.append(f"{k}={kvs[k]}")
+            seen.add(k)
+        else:
+            new_lines.append(line)
+    for k, v in kvs.items():
+        if k not in seen:
+            new_lines.append(f"{k}={v}")
+    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+    # 重启 tg-web 让新 .env 生效(config.reload_if_env_changed 也会自己热加载,
+    # 但显式 restart 兜底,确保所有变更立即可见)
+    restarted = []
+    if params.get("restart_web", True):
+        try:
+            import docker as docker_sdk
+            client = docker_sdk.from_env()
+            company = os.environ.get("COMPANY_NAME", "").strip()
+            if company:
+                c = client.containers.get(f"tg-web-{company}")
+                c.restart(timeout=15)
+                restarted.append(f"tg-web-{company}")
+        except Exception as e:
+            return True, {"updated": list(kvs.keys()), "restart_err": str(e)}
+
+    return True, {"updated": list(kvs.keys()), "restarted": restarted}
+
+
+def action_tail_logs(params: dict) -> tuple[bool, dict]:
+    """v3.0.28:docker logs 拉最近 N 行(可选 since)。
+    params:
+      - service: 'tg-monitor' | 'tg-web' | 'tg-caddy'(必填)
+      - tail (int, default 100, max 500)
+      - since (str, optional):'5m' / '1h' 等"""
+    svc = (params.get("service") or "").strip()
+    if svc not in ("tg-monitor", "tg-web", "tg-caddy"):
+        return False, {"error": f"invalid service: {svc!r}",
+                        "allowed": ["tg-monitor", "tg-web", "tg-caddy"]}
+    tail = min(max(int(params.get("tail", 100)), 1), 500)
+    since = (params.get("since") or "").strip() or None
+
+    company = os.environ.get("COMPANY_NAME", "").strip()
+    if not company:
+        return False, {"error": "COMPANY_NAME not set"}
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        c = client.containers.get(f"{svc}-{company}")
+        kw = {"tail": tail, "stdout": True, "stderr": True, "timestamps": True}
+        if since:
+            kw["since"] = since
+        out = c.logs(**kw)
+        return True, {
+            "container": f"{svc}-{company}",
+            "lines": out.decode("utf-8", "ignore").splitlines()[-tail:],
+        }
+    except Exception as e:
+        return False, {"error": f"{type(e).__name__}: {e}"}
+
+
+def action_reload_oauth(params: dict) -> tuple[bool, dict]:
+    """v3.0.28:OAuth credentials 重载(走 v3.0.7 SheetsWriter.reload_credentials 路径)。
+    复用 tg-web 容器内已存在的 reload 端点。"""
+    try:
+        import urllib.request as _req, json as _json
+        port = os.environ.get("WEB_PORT", "5001")
+        url = f"http://localhost:{port}/api/oauth/reload_credentials"
+        req = _req.Request(url, method="POST", data=b"{}")
+        with _req.urlopen(req, timeout=10) as r:
+            return True, {"http": r.status, "body": _json.loads(r.read().decode())}
+    except Exception as e:
+        # 若 endpoint 不存在,fallback 重启 tg-monitor + tg-web(触发 reload)
+        try:
+            import docker as docker_sdk
+            client = docker_sdk.from_env()
+            company = os.environ.get("COMPANY_NAME", "").strip()
+            for svc in ("tg-monitor", "tg-web"):
+                client.containers.get(f"{svc}-{company}").restart(timeout=15)
+            return True, {"method": "fallback_restart", "err": str(e)}
+        except Exception as e2:
+            return False, {"error": f"reload + restart fallback both failed: {e2}"}
+
+
+def action_fix_sheets(params: dict) -> tuple[bool, dict]:
+    """v3.0.28:调 tg-web 容器内已有的 /api/diag/sheets-fix-stuck endpoint。"""
+    try:
+        import urllib.request as _req, json as _json
+        port = os.environ.get("WEB_PORT", "5001")
+        url = f"http://localhost:{port}/api/diag/sheets-fix-stuck"
+        req = _req.Request(url, method="POST", data=b"{}")
+        with _req.urlopen(req, timeout=30) as r:
+            return True, {"http": r.status, "body": _json.loads(r.read().decode())}
+    except Exception as e:
+        return False, {"error": f"{type(e).__name__}: {e}"}
 
 
 def action_restart_svc(params: dict) -> tuple[bool, dict]:
@@ -411,6 +602,10 @@ ACTION_HANDLERS = {
     "restart_svc":         action_restart_svc,
     "verify_ui_version":   action_verify_ui_version,
     "get_web_credentials": action_get_web_credentials,
+    "set_env":             action_set_env,
+    "tail_logs":           action_tail_logs,
+    "reload_oauth":        action_reload_oauth,
+    "fix_sheets":          action_fix_sheets,
 }
 
 

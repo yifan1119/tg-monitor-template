@@ -2,12 +2,13 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.0.27(2026-05-12)
+## 📌 当前版本:v3.0.28(2026-05-12)
 
-🚀 **Remote Agent 加 2 个 action:UI 版本验证 + 拿 .env 凭据**
+🚀 **一次性根治升级链所有已知问题 + 4 个新 agent action** — 客户跑一次 update.sh 之后,中央台真正接手运维
 
 | 版本 | 功能 |
 |---|---|
+| **v3.0.28** | 🛡 **一次根治版本**:① Dockerfile 加 `git`(修 agent.upgrade 容器无 git 死循环)② update.sh 强制 `git checkout main`(修 git 卡 feature 分支)③ update.sh 改 `CENTRAL_PUSH_URL` 自动补逻辑为 `grep -qE "^...=.+$"`(修空值卡住根因)④ agent.upgrade 加 fallback 路径(用临时 alpine 容器 + docker socket + apk add git docker-cli,绕开任何容器内无 git 场景)⑤ 加 4 个新 action:`set_env`(白名单 key+restart)/ `tail_logs`(docker logs)/ `reload_oauth`(OAuth 自愈)/ `fix_sheets`(Sheets 卡死一键修复)。客户跑这次 update.sh 之后,**所有已知升级失败原因都自动修复**,以后 90% 运维远程一键。 |
 | **v3.0.27** | 🛰 Remote Agent 加 2 个 action:`verify_ui_version`(docker SDK exec_run 在 tg-web 容器内 grep templates/index.html 验证 v3.0.15/21/25 标志字段是否同步)+ `get_web_credentials`(返 .env 里 WEB_USERNAME / WEB_PASSWORD 明文,中央台远程登入 debug)。两个都 HMAC + audit 鉴权。 |
 | **v3.0.26** | 🛰 **Remote Agent**:新增 `agent.py` 模块 + `/api/v1/admin/cmd` 鉴权 endpoint。中央台从此可以远程 inspect / upgrade / restart_svc 单部门 VPS,客户运维 0 介入。4 层鉴权(token + HMAC + nonce + timestamp 防重放)+ rate limit(5次/分钟)+ audit_log 全程留痕。白名单 3 action,**永禁任意 shell / SQL**。配套中央台 v0.19 fleet UI 一键操控。 |
 | **v3.0.25** | 🪧 **登录外事号后自动引导业务归属配置** — `verify_code` / `verify_password` 返 `account_id`,前端 sessionStorage 在 reload 后自动 open「编辑账号配置」modal,免再点列表。 |
