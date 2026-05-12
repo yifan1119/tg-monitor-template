@@ -77,11 +77,34 @@ if [ "$OLD_SHA" = "$REMOTE_SHA" ]; then
         fi
     done
 
+    # v3.0.29: 即使 sha 相等 + 容器都在,也要 sanity check「容器内 image 是不是基于当前
+    # git 的内容 build 的」。检测方法:容器内 /app/web.py 跟 host /app/repo/web.py 不一致
+    # → 说明 docker compose up 没真 rebuild image,跳过 exit 走 force rebuild。
+    # 修「sha 相等但 image 没 rebuild」根因 — 之前的 v3.0.13/14/15/26/27/28 升级失败
+    # 大多卡在这里。
+    NEED_REBUILD=0
     if [ -z "$MISSING" ]; then
+        for c in "tg-web-${COMPANY_NAME}"; do
+            if ! docker exec "$c" diff /app/web.py /app/repo/web.py >/dev/null 2>&1; then
+                NEED_REBUILD=1
+                echo "  ⚠ 容器 ${c} 内 web.py 跟 host 不一致 → 需要 rebuild image"
+                break
+            fi
+        done
+    fi
+
+    if [ -z "$MISSING" ] && [ "$NEED_REBUILD" = "0" ]; then
         echo ""
-        echo "ℹ 当前已是最新版 (${OLD_SHORT}),所有容器存在,无需升级"
-        echo "  如需强制重建容器: docker compose -p tg-${COMPANY_NAME} up -d --build"
+        echo "ℹ 当前已是最新版 (${OLD_SHORT}),容器内代码也已同步,无需升级"
         exit 0
+    elif [ -z "$MISSING" ]; then
+        # NEED_REBUILD=1:sha 相等但容器代码旧
+        echo ""
+        echo "ℹ 代码最新 (${OLD_SHORT}) 但容器内代码旧,触发 image 重建..."
+        NEW_SHA="$OLD_SHA"
+        NEW_SHORT="$OLD_SHORT"
+        echo "$OLD_SHA" > .last_commit
+        SKIP_CODE_PULL=1
     else
         echo ""
         echo "ℹ 当前代码已是最新 (${OLD_SHORT}),但检测到容器缺失:${MISSING}"
@@ -202,7 +225,10 @@ if [ -n "$ORPHANS" ]; then
 fi
 
 echo "🐳 重建 Docker 镜像并重启容器..."
-docker compose -p "tg-${COMPANY_NAME}" up -d --build
+# v3.0.29: 加 --force-recreate 确保 image rebuild 后容器也 recreate
+# (之前的 bug:image 改了但 docker compose up 看容器 running 没 recreate,
+# 导致老容器仍用老 image)
+docker compose -p "tg-${COMPANY_NAME}" up -d --build --force-recreate
 
 # ===== 5. 健康检查 — 失败自动回滚 =====
 WEB_PORT=$(grep "^WEB_PORT=" .env 2>/dev/null | cut -d= -f2 | head -1)
