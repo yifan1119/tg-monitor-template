@@ -2,12 +2,13 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.0.29(2026-05-12)
+## 📌 当前版本:v3.0.30(2026-05-12)
 
-🚀 **修 update.sh 根因 bug — 「sha 相等但容器代码旧」时强制 rebuild**(配合 v3.0.28 完整方案)
+🚀 **修 reload_oauth + fix_sheets 两个 action 鉴权问题** — 改用同进程 import 调函数,绕过 HTTP cookie
 
 | 版本 | 功能 |
 |---|---|
+| **v3.0.30** | 🔧 修 v3.0.28 两个 action UX 瑕疵:① `reload_oauth` 改成异步 `threading.Thread` 触发 tg-monitor 重启,立刻返 200 不等 restart 完成(避免 HTTP client 超时)② `fix_sheets` 改成直接 `import dashboard_api` 调 `fix_orphan_messages` / `fix_peers_no_col_group`,绕过 HTTP cookie 鉴权(agent 跟 web.py 同进程,可直接 import) |
 | **v3.0.29** | 🔴 **修「客户升完容器还是旧版」最后一个根因** — `update.sh` `OLD_SHA == REMOTE_SHA` 时不再直接 exit,增加 sanity check:容器内 `/app/web.py` vs host `/app/repo/web.py` 不一致 → 强制 image rebuild + `--force-recreate`。**这是所有「客户升完 UI 还是旧版」的真根因**。+ docker compose up 永远加 `--force-recreate` 确保 image rebuild 后容器也 recreate。 |
 | **v3.0.28** | 🛡 **一次根治版本**:① Dockerfile 加 `git`(修 agent.upgrade 容器无 git 死循环)② update.sh 强制 `git checkout main`(修 git 卡 feature 分支)③ update.sh 改 `CENTRAL_PUSH_URL` 自动补逻辑为 `grep -qE "^...=.+$"`(修空值卡住根因)④ agent.upgrade 加 fallback 路径(用临时 alpine 容器 + docker socket + apk add git docker-cli,绕开任何容器内无 git 场景)⑤ 加 4 个新 action:`set_env`(白名单 key+restart)/ `tail_logs`(docker logs)/ `reload_oauth`(OAuth 自愈)/ `fix_sheets`(Sheets 卡死一键修复)。客户跑这次 update.sh 之后,**所有已知升级失败原因都自动修复**,以后 90% 运维远程一键。 |
 | **v3.0.27** | 🛰 Remote Agent 加 2 个 action:`verify_ui_version`(docker SDK exec_run 在 tg-web 容器内 grep templates/index.html 验证 v3.0.15/21/25 标志字段是否同步)+ `get_web_credentials`(返 .env 里 WEB_USERNAME / WEB_PASSWORD 明文,中央台远程登入 debug)。两个都 HMAC + audit 鉴权。 |
