@@ -225,6 +225,45 @@ if [ -n "$WEB_PORT" ]; then
     fi
 fi
 
+# ===== 5.2 v3.0.24: templates 同步性 self-check + 兜底 docker cp =====
+# 背景:`docker compose up -d --build` 在 docker-compose.yml 跟 Dockerfile 都没变时
+#       不重建容器,容器 command 的 cp templates 不重跑 → 客户跑完 update.sh 但
+#       UI 还是老 modal(v3.0.15+ 的「编辑账号配置」5 字段不出现)。
+# 修法:升级后 docker exec grep 容器里 templates 关键 string,匹配不到就主动
+#       docker cp host 文件 → 强制 restart 容器,确保新 UI 上线。
+echo ""
+echo "🔍 v3.0.24 self-check: 验证 templates 已同步进容器..."
+WEB_CONTAINER="tg-web-${COMPANY_NAME}"
+MONITOR_CONTAINER="tg-monitor-${COMPANY_NAME}"
+NEEDS_FORCE_CP=0
+# 用 v3.0.15+ 才有的字段名 + v3.0.23 才有的 reLogin function 双保险
+for KEYWORD in "nc_inspector_tg_id" "function reLogin" "🔗 打开后台"; do
+    if ! docker exec "$WEB_CONTAINER" grep -q -F -- "$KEYWORD" /app/templates/index.html /app/templates/audit.html 2>/dev/null; then
+        : # 这个 keyword 没找到不一定是 bug(audit.html 是 v3.0.18+),只检测 index.html
+    fi
+done
+# 主验证:index.html 必须含 v3.0.15 字段(老客户没升级会缺)
+if ! docker exec "$WEB_CONTAINER" grep -q "nc_inspector_tg_id" /app/templates/index.html 2>/dev/null; then
+    NEEDS_FORCE_CP=1
+    echo "  ⚠ 容器内 index.html 没含 v3.0.15 监察员字段 — templates 没同步"
+fi
+if [ $NEEDS_FORCE_CP -eq 1 ]; then
+    echo "  🔧 主动 docker cp host templates 强制同步..."
+    docker cp templates/. "${WEB_CONTAINER}:/app/templates/" 2>&1 | tail -3
+    docker cp README.md "${WEB_CONTAINER}:/app/README.md" 2>/dev/null || true
+    docker cp release_notes.json "${WEB_CONTAINER}:/app/release_notes.json" 2>/dev/null || true
+    echo "  🔄 重启 web 容器让 Flask 重读 templates..."
+    docker restart "$WEB_CONTAINER" >/dev/null 2>&1 || true
+    sleep 5
+    if docker exec "$WEB_CONTAINER" grep -q "nc_inspector_tg_id" /app/templates/index.html 2>/dev/null; then
+        echo "  ✅ templates 强制同步成功"
+    else
+        echo "  ❌ 强制同步仍失败 — 请手动 docker compose down && docker compose up -d --build"
+    fi
+else
+    echo "  ✅ templates 已同步(包含 v3.0.15+ 字段)"
+fi
+
 # ===== 5.5 HTTPS 保护 (v2.10.22) — Caddy 挂了就拉起来 =====
 # 背景: docker-compose.yml 里 caddy 挂了 profiles: ["https"],
 #       `compose up -d --build` 不带 --profile 不会动它 → 正常运行的 Caddy 不受影响,

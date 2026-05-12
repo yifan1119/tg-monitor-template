@@ -2,7 +2,7 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.0.23(2026-05-12)
+## 📌 当前版本:v3.0.24(2026-05-12)
 
 🚀 **客户 6 项优化诉求全部完成 + 中央台同步 + UI/文案完善**
 
@@ -15,6 +15,7 @@
 | **v3.0.21** | 公司/中心下拉从中央台 `/api/v1/options` 实时拉(60s TTL),删 `.env COMPANY_OPTIONS/CENTER_OPTIONS` 单部门字段 |
 | **v3.0.22** | stage2/删除走中央台 callback bridge — `/api/v1/callback` endpoint + audit `expected_actor`(怠工识别)|
 | **v3.0.23** | UI 大改 — navbar 加「📋 审批历史」、reLogin 常显 + 自动重启监听、配置精灵架构提示、`_humanize_tg_error` 加 8 类英文翻中文 |
+| **v3.0.24** | 🔴 `update.sh` self-check 修「客户跑完升级 UI 还是旧版」根因 — 升级后 docker exec grep 容器 templates 验证 `nc_inspector_tg_id` 字段,没匹配主动 docker cp host 文件兜底 + 重启容器 |
 
 **跨 repo 配套**:中央台 v0.18(`/api/v1/options` 暴露 + callback_listener daemon + Sheet 公式注入修复)
 
