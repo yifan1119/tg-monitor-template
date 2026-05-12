@@ -15,9 +15,14 @@ import templates
 logger = logging.getLogger(__name__)
 
 
-async def _try_central_route(account, alert_type: str, msg: str) -> bool:
+async def _try_central_route(account, alert_type: str, msg: str,
+                             callback_meta: dict | None = None) -> bool:
     """v3.0.16: 优先把预警 POST 给中央台让它按 (公司, 中心) 路由 → 对应 bot 推对应群。
     成功返 True;失败 / 中央台未配置 / 路由 not found → 返 False,调用方 fallback 本地。
+
+    v3.0.22: callback_meta 非 None 时,中央台会带按钮发消息 + 创建 pending_callback,
+             点按钮后中央台 polling daemon 收 callback → POST 单部门 /api/v1/callback。
+             用法见 send_no_reply_alert_stage2 / send_delete_alert。
 
     .env 必填:
       CENTRAL_PUSH_URL  = http://13.193.143.29:5070/api/v1/push_alert
@@ -43,6 +48,8 @@ async def _try_central_route(account, alert_type: str, msg: str) -> bool:
         "text": msg,
         "source_dept": getattr(config, "COMPANY_DISPLAY", "") or "",
     }
+    if callback_meta:
+        payload["callback"] = callback_meta
     try:
         # 用 asyncio.to_thread 包 urllib(blocking I/O)
         import urllib.request, urllib.parse, json as _json
@@ -59,8 +66,9 @@ async def _try_central_route(account, alert_type: str, msg: str) -> bool:
         if status == 200:
             j = _json.loads(body)
             if j.get("ok"):
-                logger.info("[central_push] OK type=%s company=%s route=%s",
-                           alert_type, company, j.get("route", "?"))
+                logger.info("[central_push] OK type=%s company=%s route=%s pending_cb=%s",
+                           alert_type, company, j.get("route", "?"),
+                           j.get("pending_callback_id"))
                 return True
         logger.warning("[central_push] 中央台返 %s body=%s → fallback 本地", status, body[:200])
         return False
@@ -68,6 +76,32 @@ async def _try_central_route(account, alert_type: str, msg: str) -> bool:
         logger.warning("[central_push] 中央台 HTTP 失败 (%s) → fallback 本地: %s",
                       type(e).__name__, e)
         return False
+
+
+def _callback_meta_for(account_id: int, alert_id: int, buttons: list) -> dict | None:
+    """v3.0.22: 给 _try_central_route 准备 callback_meta(给中央台 webhook bridge)。
+    需要 .env METRICS_TOKEN(中央台 callback 后 POST 回 /api/v1/callback 鉴权用)+ 部门外网 URL。"""
+    metrics_token = os.environ.get("METRICS_TOKEN", "").strip()
+    # 部门 URL 优先用 .env 配置(install.sh 写的),回退用 PUBLIC_HOSTNAME / VPS_PUBLIC_IP
+    dept_url = os.environ.get("DEPT_PUBLIC_URL", "").strip()
+    if not dept_url:
+        host = (os.environ.get("PUBLIC_HOSTNAME", "") or
+                os.environ.get("VPS_PUBLIC_IP", "")).strip()
+        port = os.environ.get("WEB_PORT", "5001").strip()
+        if host:
+            # 优先 https + nip.io 域名(install.sh 默认),退化 http+IP+port
+            if "nip.io" in host or "." in host and not host[0].isdigit():
+                dept_url = f"https://{host}"
+            else:
+                dept_url = f"http://{host}:{port}"
+    if not metrics_token or not dept_url:
+        return None  # 没 token / URL 配置 → 不走 callback bridge,fallback 本地
+    return {
+        "alert_id": int(alert_id),
+        "dept_url": dept_url,
+        "dept_token": metrics_token,
+        "buttons": buttons,
+    }
 
 
 class AlertBot:
@@ -220,6 +254,32 @@ class AlertBot:
                         callback.message.text + "\n\n❌ 已拒绝 — " + (callback.from_user.full_name or ""),
                     )
                     await callback.answer("已拒绝")
+                # v3.0.18 + v3.0.22: 操作审计 — bot 审核按钮(谁点的)+ 应处理人对比(怠工识别)
+                try:
+                    actor = f"bot:{callback.from_user.id}" if callback.from_user else "bot:unknown"
+                    actor_name = callback.from_user.full_name if callback.from_user else ""
+                    # 反查 alert 应处理人:stage2/删除 → owner_tg_id;stage1/关键词 → business_tg_id
+                    expected_actor = ""
+                    try:
+                        account = db.get_account_by_id(alert["account_id"]) if alert and "account_id" in alert.keys() else None
+                        if account:
+                            atype = alert["type"] if "type" in alert.keys() else ""
+                            astage = alert["stage"] if "stage" in alert.keys() else 0
+                            if atype == "deleted" or (atype == "no_reply" and astage == 2):
+                                expected_actor = account["owner_tg_id"] or ""
+                            else:
+                                expected_actor = account["business_tg_id"] or ""
+                            expected_actor = (expected_actor or "").lstrip("@")
+                    except Exception:
+                        pass
+                    db.audit_log(event_type="bot_callback",
+                                actor_username=actor,
+                                target_type="alert", target_id=alert_id,
+                                payload={"action": new_status, "actor_name": actor_name,
+                                        "alert_type": alert["type"] if "type" in alert.keys() else "",
+                                        "expected_actor": expected_actor})
+                except Exception as _ae:
+                    logger.warning("audit_log 写失败 (不阻塞): %s", _ae)
             except Exception as e:
                 logger.error("审核 callback 异常 alert_id=%s: %s", alert_id, e)
                 try:
@@ -271,6 +331,26 @@ class AlertBot:
                         callback.message.text + "\n\n❌ 已取消 — " + (callback.from_user.full_name or ""),
                     )
                     await callback.answer("已取消")
+                # v3.0.22 Codex P1 fix: 本地 fallback 路径也写 audit_log + expected_actor 怠工识别
+                try:
+                    actor_id = f"bot:{callback.from_user.id}" if callback.from_user else "bot:unknown"
+                    actor_name = callback.from_user.full_name if callback.from_user else ""
+                    # 反查 alert 应处理人(stage2/删除 → owner_tg_id)
+                    expected_actor = ""
+                    try:
+                        account = db.get_account_by_id(alert["account_id"]) if alert and "account_id" in alert.keys() else None
+                        if account:
+                            expected_actor = (account["owner_tg_id"] or "").lstrip("@")
+                    except Exception:
+                        pass
+                    db.audit_log(event_type="bot_callback",
+                                actor_username=actor_id,
+                                target_type="alert", target_id=alert_id,
+                                payload={"action": new_status, "actor_name": actor_name,
+                                        "alert_type": alert["type"] if "type" in alert.keys() else "",
+                                        "expected_actor": expected_actor})
+                except Exception as _ae:
+                    logger.warning("audit_log 写失败 (不阻塞): %s", _ae)
             except Exception as e:
                 logger.error("stage2 callback 异常 alert_id=%s: %s", alert_id, e)
                 try:
@@ -379,7 +459,10 @@ class AlertBot:
             # v2.6.6: 拆出独立子开关 ALERT_KEYWORD_ENABLED
             config.reload_if_env_changed()
             if config.ALERT_KEYWORD_ENABLED:
-                await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+                # v3.0.17: 优先中央台路由(关键词预警没 button,可直接换 bot 推)
+                routed = await _try_central_route(account, "keyword", msg)
+                if not routed:
+                    await self.bot.send_message(config.ALERT_GROUP_ID, msg)
             else:
                 logger.info("[ALERT_KEYWORD_DISABLED] 跳过关键词推送 peer=%s keyword=%s (Sheet 仍写入)", peer["id"], keyword)
         except Exception as e:
@@ -711,6 +794,21 @@ class AlertBot:
             owner_mention=owner_mention,
             custom_text=custom_text,
         )
+        # v3.0.22: 优先走中央台 callback bridge — 中央台用对应公司 bot 发消息带按钮,
+        # 监察员点按钮 → 中央台 polling daemon 接 callback → POST 回单部门 /api/v1/callback
+        cb_meta = _callback_meta_for(
+            account_id=alert["account_id"], alert_id=alert_id,
+            buttons=[
+                {"text": "登记违规", "action": "violation"},
+                {"text": "取消", "action": "cancel"},
+            ],
+        )
+        if cb_meta:
+            routed = await _try_central_route(account, "stage2_no_reply", msg, callback_meta=cb_meta)
+            if routed:
+                db.update_alert_bot_msg(alert_id, -1)  # -1 = 中央台推
+                return
+        # fallback:中央台未配 / fetch 失败 / 没 metrics_token → 本地 bot 推(老路径)
         try:
             sent = await self.bot.send_message(
                 target_group, msg,
@@ -788,6 +886,24 @@ class AlertBot:
             owner_mention=owner_mention,
             custom_text=custom_text,
         )
+        # v3.0.22: 优先走中央台 callback bridge(同 stage2)
+        if owner_mention:
+            buttons = [
+                {"text": "登记违规", "action": "violation"},
+                {"text": "取消", "action": "cancel"},
+            ]
+        else:
+            buttons = [
+                {"text": "通过", "action": "approve"},
+                {"text": "拒绝", "action": "reject"},
+            ]
+        cb_meta = _callback_meta_for(account_id=account_id, alert_id=alert_id, buttons=buttons)
+        if cb_meta:
+            routed = await _try_central_route(account, "deleted", msg, callback_meta=cb_meta)
+            if routed:
+                db.update_alert_bot_msg(alert_id, -1)  # -1 = 中央台推
+                return
+        # fallback:本地 bot 推
         try:
             if owner_mention:
                 # 新格式: HTML + stage2 风格按钮(登记违规/取消,复用 on_stage2_action handler)
@@ -878,20 +994,54 @@ class AlertBot:
             logger.error("发送日报失败: %s", e)
 
     async def send_session_alert(self, kind: str, phone: str, account_id: int = 0, account_name: str = ""):
-        """v2.10.4: 推送 session 吊销/恢复预警。kind: 'revoked' | 'restored'
+        """v3.0.17(was v2.10.4): 推送 session 吊销/异地登录/恢复预警。kind: 'revoked' | 'hijacked' | 'restored'
         - 走主开关 ALERTS_ENABLED(任何子开关都独立;这是系统级告警)
         - DB 写 alerts 表,实时告警流会显示
-        - kind='revoked' 直接推;kind='restored' 也推一条,让客户知道已恢复"""
+        - revoked / hijacked → @ 监察员 + 部门/IP 标签;restored 仅部门/IP 标签
+        - 优先走中央台路由(按 account.company → 对应公司+中心 bot 群),失败 fallback 本地"""
         if not self.bot or not config.ALERT_GROUP_ID:
             logger.warning("[session_%s] bot 未配或未配预警群,不推送 phone=%s", kind, phone)
             return
         try:
             config.reload_if_env_changed()
+            # v3.0.17: 拿账号详细字段(inspector_tg_id 用于 @,company 用于中央台路由)
+            account = None
+            if account_id:
+                try:
+                    account = db.get_account_by_id(account_id)
+                except Exception as e:
+                    logger.warning("[session_%s] 取账号 %s 失败 (继续走老文案): %s", kind, account_id, e)
+            inspector_mention = ""
+            if account is not None and kind in ("revoked", "hijacked"):
+                try:
+                    insp = (account["inspector_tg_id"] or "").strip() if "inspector_tg_id" in account.keys() else ""
+                    if insp:
+                        # v3.0.17 fix: fallback_name 用「原始填的字段值」而不是「监察员」字样,
+                        # Telethon 解不到真名时至少能看出是哪个 UID/handle,不会出现
+                        # 「监察员:监察员」这种没意义的显示。
+                        # 真名解析成功 → display 真名;解失败 → display 原始 UID
+                        # (蓝色可点 inline mention,点进去能看 profile)
+                        insp_clean = insp.lstrip("@")
+                        fallback = f"用户 {insp_clean}" if insp_clean.isdigit() else insp_clean
+                        inspector_mention = await self._build_tg_mention(insp, fallback_name=fallback)
+                except Exception as e:
+                    logger.warning("[session_%s] 解析监察员失败 (跳过 @): %s", kind, e)
+            host_ip = os.environ.get("VPS_PUBLIC_IP", "").strip()
+            company_display = getattr(config, "COMPANY_DISPLAY", "") or getattr(config, "COMPANY_NAME", "")
+
             if kind == "revoked":
-                msg = templates.session_revoked_alert(phone, account_name)
+                msg = templates.session_revoked_alert(
+                    phone, account_name, inspector_mention=inspector_mention,
+                    host_ip=host_ip, company_display=company_display)
                 alert_type = "session_revoked"
+            elif kind == "hijacked":
+                msg = templates.session_hijacked_alert(
+                    phone, account_name, inspector_mention=inspector_mention,
+                    host_ip=host_ip, company_display=company_display)
+                alert_type = "session_hijacked"
             elif kind == "restored":
-                msg = templates.session_restored_alert(phone, account_name)
+                msg = templates.session_restored_alert(
+                    phone, account_name, host_ip=host_ip, company_display=company_display)
                 alert_type = "session_restored"
             else:
                 return
@@ -901,9 +1051,15 @@ class AlertBot:
                     db.insert_alert(alert_type, account_id, peer_id=None, message_text=f"[{phone}] {account_name}")
             except Exception as e:
                 logger.warning("[session_%s] insert_alert 失败: %s", kind, e)
+            # v3.0.17: 优先中央台路由 — 没 buttons,纯文本可直送对应公司群
+            routed = await _try_central_route(account, alert_type, msg)
+            if routed:
+                logger.info("[session_%s] 已经中央台路由 phone=%s", kind, phone)
+                return
             # v2.10.5: 运维告警,永远推 — 不受 ALERTS_ENABLED 影响
             # (ALERTS_ENABLED 只管业务告警:关键词/未回复/删除。session 吊销是系统性故障,必须让客户知道)
-            await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+            # parse_mode="HTML" 是关键:渲染 numeric tg_id 的 inline mention 必须 HTML
+            await self.bot.send_message(config.ALERT_GROUP_ID, msg, parse_mode="HTML")
             logger.info("[session_%s] 已推送 phone=%s", kind, phone)
         except Exception as e:
             logger.error("[session_%s] 推送失败 phone=%s: %s", kind, phone, e)

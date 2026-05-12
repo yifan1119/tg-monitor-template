@@ -596,6 +596,7 @@
     <a href="/dashboard">📊 驾驶舱</a>
     <a href="/">账号管理</a>
     <a href="/settings" class="active">⚙ 设置</a>
+    {% if d.is_admin %}<a href="/audit" title="操作审计日志">📋 审批历史</a>{% endif %}
     <a href="#" id="upgrade-btn" title="检查并升级" style="position:relative;">🔄 升级<span id="upgrade-dot" style="display:none;position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:#ffb946;box-shadow:0 0 6px #ffb946;"></span></a>
     <a href="/logout">登出 ▸</a>
   </div>
@@ -608,6 +609,13 @@
   <p class="subtitle">
     {% if mode == 'setup' %}填完以下模块即可启动监控服务{% elif d.is_admin %}修改运行参数 — 保存后自动重启监控{% else %}个人面板 — 你只能修改自己的密码{% endif %}
   </p>
+  {% if mode == 'setup' or d.is_admin %}
+  <div class="note" style="background:rgba(126,201,255,0.06);border-left:3px solid #7ec9ff;color:#a5c4e0;font-size:12px;line-height:1.7;padding:10px 14px;margin:10px 0 20px;">
+    💡 <b>架构提示</b>:本部门 bot + 预警群是基础设施 — 处理「日报 / 账号失效告警 / 找回密码私信 / 媒体存档」+ 中央台未配置时的 fallback 兜底。<br>
+    业务预警(关键词 / 未回复 / 删除 / 异地登录)<b>优先按账号公司归属走中央台路由</b>,加新公司/中心只在中央台「预警路由」一处配。<br>
+    单部门「账号配置」的「公司 / 中心」下拉数据也实时从中央台拉,本页不再配置这些。
+  </div>
+  {% endif %}
 
   {% if mode == 'settings' and not d.is_admin %}
   <div class="note" style="background:rgba(42,171,238,0.08);border-left-color:var(--accent-red);color:var(--accent-red);">
@@ -715,6 +723,11 @@
                placeholder="-1003789623248 (通常是负数)" required>
         <button type="button" class="test-btn" id="testBotBtn">▸ 测试 Bot 连线</button>
         <span class="test-result" id="testBotResult"></span>
+        <div class="hint">
+          这是本部门 bot 自己的预警群。<b>v3.0.16 起所有预警优先按账号公司归属走中央台路由</b>,
+          只有中央台未配置 / 路由未找到 / 网络抖动时才 fallback 推到这个群兜底。<br>
+          系统运维告警(日报 / 升级通知 / 账号失效 / 找回密码私信)仍推这里。
+        </div>
       </div>
       <div class="field">
         <label>审核按钮白名单 <span style="color:#7c8a9a;font-weight:400;">(选填,留空=任何群成员都能点)</span></label>
@@ -729,16 +742,16 @@
         </div>
       </div>
 
-      {# ============ v3.0.0(ADR-0015/0016):两段式未回复预警 — 专用群 + 全域提醒文案 ============ #}
+      {# v3.0.0 加,v3.0.22 已被中央台路由覆盖,仅 fallback 用 #}
       <div class="field">
-        <label>未回复预警专用群 Chat ID <span style="color:#7c8a9a;font-weight:400;">(选填,留空=跟其他预警推同一群)</span></label>
+        <label>未回复预警专用群 Chat ID <span style="color:#7c8a9a;font-weight:400;">(选填,fallback 用)</span></label>
         <input type="text" name="unreplied_alert_group_id" id="unreplied_alert_group_id"
                value="{{ d.unreplied_alert_group_id }}"
-               placeholder="-100xxxxxxxxxx(两段式未回复预警单独推这个群,留空则推主预警群)">
+               placeholder="-100xxxxxxxxxx(可选,留空则 fallback 推主预警群)">
         <div class="hint">
-          <b>两段式未回复预警</b>(30 分钟未回复 + 40 分钟升级)会推到这个独立群,
-          <b>删除消息 / 关键词预警仍推主预警群</b>。留空则全部推主预警群(跟以前一样)。<br>
-          群 ID 取法跟「预警群 Chat ID」一样,邀请 bot 进群后发 <code>/chatid</code>。
+          v3.0.16 起未回复预警优先<b>按账号公司归属走中央台路由</b>(中央台「预警路由」里配独立未回复群),
+          这里填的群只是<b>中央台未配 / 路由未找到时的本地 fallback 兜底</b>。<br>
+          填了 → fallback 时未回复推这群,删除/关键词推主预警群。留空 → 全部推主预警群。
         </div>
       </div>
 
@@ -1083,18 +1096,34 @@
         <div class="hint">消息命中任一词立即推送预警</div>
       </div>
 
-      <!-- v3.0.15.1: 账号配置 modal「公司」下拉选项 -->
-      <div class="field">
-        <label>账号配置「公司」下拉选项 (逗号或换行分隔,选填)</label>
-        <textarea name="company_options" rows="2" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;box-sizing:border-box;" placeholder="瑞升,鼎丰,悦达,领航">{{ d.company_options or "" }}</textarea>
-        <div class="hint">监察员在账号管理「账号配置」modal 选公司用。留空 = 字段隐藏。配了之后跟「中心」拼接写到 Sheet B3,中央台据此跨公司聚合。</div>
-      </div>
+      {# v3.0.21: COMPANY_OPTIONS / CENTER_OPTIONS 单部门字段已删 — 账号配置 modal 的「公司 / 中心」
+         下拉选项改为中央台 /api/v1/options 实时拉(60s TTL cache)。监察员加新公司/中心 →
+         进中央台「预警路由」面板加 alert_route → 60s 内本部门下拉自动同步。#}
 
-      <!-- v3.0.15.1: 账号配置 modal「中心」下拉选项 -->
-      <div class="field">
-        <label>账号配置「中心」下拉选项 (逗号或换行分隔)</label>
-        <textarea name="center_options" rows="2" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;box-sizing:border-box;" placeholder="运营中心,商务中心,渠道中心">{{ d.center_options or "运营中心,商务中心,渠道中心" }}</textarea>
-        <div class="hint">必须跟中央台的中心 display 名一致。监察员选完后,系统自动拼成「公司-中心」(例:瑞升-运营中心)写到 Sheet B3。</div>
+      <!-- v3.0.19: 闲聊词白名单(怠工规避)— 命中以下条件不算「未回复」-->
+      <div class="field" style="border-top:1px dashed rgba(126,201,255,0.2);padding-top:12px;margin-top:12px;">
+        <label style="color:#9ef0b8;">⏭ 闲聊词白名单 (未回复预警跳过)</label>
+        <div class="hint" style="margin-bottom:8px;">客户发「在?」「你好」「✓」「好嘞」这种闲聊 / 表情 / 短消息时,不算「未回复」(避免误推 30/40 分钟预警)。改完 60 秒内热加载生效。</div>
+
+        <label style="font-size:11px;color:var(--text-dim);margin-top:6px;">跳过词列表 (逗号或换行分隔)</label>
+        <textarea name="skip_no_reply_texts" rows="3" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;box-sizing:border-box;" placeholder="你好,在?,在吗,在么,嗨,Hi,嗯,好嘞,谢谢,辛苦了,👍,✓">{{ d.skip_no_reply_texts or "" }}</textarea>
+        <div class="hint">留空=用系统默认 30+ 词。客户发的消息 strip 后命中其中之一就跳过。</div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px;">
+          <div>
+            <label style="font-size:11px;color:var(--text-dim);">最少字数 (≤ 这个长度的消息也跳过)</label>
+            <input type="number" name="skip_no_reply_min_len" value="{{ d.skip_no_reply_min_len or '1' }}" min="0" max="20" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-size:12px;box-sizing:border-box;">
+            <div class="hint">默认 1=单字符不跳过(如「?」「!」)。设 2=「在」「嗨」也跳过。</div>
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--text-dim);">纯表情 / 纯 emoji 跳过</label>
+            <select name="skip_no_reply_pure_emoji" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-size:12px;box-sizing:border-box;">
+              <option value="true" {% if (d.skip_no_reply_pure_emoji or 'true') == 'true' %}selected{% endif %}>跳过 (推荐)</option>
+              <option value="false" {% if (d.skip_no_reply_pure_emoji or 'true') == 'false' %}selected{% endif %}>不跳过</option>
+            </select>
+            <div class="hint">客户发「👍」「😊」「💰」也算 / 不算未回复。</div>
+          </div>
+        </div>
       </div>
 
       {# v2.6.2: settings 模式下显示预警开关 + 日报开关(setup 模式还没配 bot,不显示)
@@ -2279,5 +2308,6 @@ bindPushToggle('toggle_daily_report_enabled', 'daily_report_enabled_status', '/a
 })();
 </script>
 
+{% include "_lite_mode.html" %}
 </body>
 </html>

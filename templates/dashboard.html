@@ -344,6 +344,9 @@
   .a-type.kw       { background: rgba(42,171,238,0.15);  color: var(--accent-red);    border: 1px solid rgba(42,171,238,0.35); }
   .a-type.no_reply { background: rgba(245,166,35,0.12); color: var(--accent-warn);   border: 1px solid rgba(245,166,35,0.35); }
   .a-type.deleted  { background: rgba(255,107,107,0.12); color: var(--accent-danger); border: 1px solid rgba(255,107,107,0.35); }
+  .a-type.session_revoked  { background: rgba(255,107,107,0.12); color: #ff8d8d; border: 1px solid rgba(255,107,107,0.35); }
+  .a-type.session_hijacked { background: rgba(255,107,107,0.18); color: #ff6666; border: 1px solid rgba(255,107,107,0.55); }
+  .a-type.session_restored { background: rgba(76,175,80,0.12); color: #4fae4f;  border: 1px solid rgba(76,175,80,0.35); }
   .a-msg {
     color: var(--text-bright);
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
@@ -501,6 +504,7 @@
     <a href="/dashboard" class="active">📊 驾驶舱</a>
     <a href="/">账号管理</a>
     <a href="/settings">⚙ 设置</a>
+    {% if is_admin %}<a href="/audit" title="操作审计日志">📋 审批历史</a>{% endif %}
     <a href="#" id="upgrade-btn" title="检查并升级" style="position:relative;">🔄 升级<span id="upgrade-dot" style="display:none;position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:#ffb946;box-shadow:0 0 6px #ffb946;"></span></a>
     <a href="/logout">登出 ▸</a>
   </div>
@@ -732,7 +736,14 @@ const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
 const POLL_INTERVAL = 5000;
 let pollFails = 0;
 
-const TYPE_LABEL = {keyword: '🔑 关键词', no_reply: '⏰ 未回复', deleted: '🗑 删除'};
+const TYPE_LABEL = {
+  keyword: '🔑 关键词',
+  no_reply: '⏰ 未回复',
+  deleted: '🗑 删除',
+  session_revoked: '🔴 失效',
+  session_hijacked: '⚠ 异地登录',
+  session_restored: '✅ 恢复',
+};
 
 function el(id) { return document.getElementById(id); }
 function setText(id, val) { const e = el(id); if (e) e.textContent = val; }
@@ -1642,5 +1653,6 @@ async function diagFixStuck(action, btn) {
 }
 </script>
 
+{% include "_lite_mode.html" %}
 </body>
 </html>

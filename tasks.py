@@ -739,13 +739,17 @@ class TaskScheduler:
             logger.warning("保存 session_states 失败: %s", e)
 
     async def _check_single_session(self, phone, client):
-        """返回 'healthy' | 'revoked' | 'error'。
+        """返回 'healthy' | 'revoked' | 'hijacked' | 'error'。
 
         v2.10.23:加真 RPC 探测(get_me)—— 以前只靠 is_user_authorized() 判活,
         但 TG 冻结/封号账号的 session key 仍然「有效」,is_user_authorized 返回 True,
         只有在真正调 API 时才抛 UserDeactivatedBanError / UserDeactivatedError。
         所以必须加 get_me() 这一步才能识别冻结/封号场景。
-        FloodWait 不算死,当 healthy(限流而已)。"""
+        FloodWait 不算死,当 healthy(限流而已)。
+
+        v3.0.17:细分 hijacked(异地登录,AuthKeyDuplicated) vs revoked(自己点终止/封号)。
+        - hijacked = TG 服务端抛 AuthKeyDuplicated → 别人在另一台机登录把本地踢了(被盗号强信号)
+        - revoked = 其他失效场景(自己终止 / 封号 / session 损坏)"""
         try:
             if not client.is_connected():
                 try:
@@ -753,7 +757,22 @@ class TaskScheduler:
                 except Exception as e:
                     logger.warning("[session_check] %s connect 失败: %s", phone, e)
                     return "error"
-            authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=10)
+            # v3.0.17 Codex P1 fix: Telethon `is_user_authorized()` 在某些版本会把
+            # AuthKeyDuplicatedError 吞成 False(silent降级到普通未授权)→ 我们这里
+            # 单独捕异常关键字优先判 hijacked,否则按老路径返 'revoked'。
+            try:
+                authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=10)
+            except asyncio.TimeoutError:
+                logger.warning("[session_check] %s is_user_authorized 超时 (当 error)", phone)
+                return "error"
+            except Exception as e:
+                cls = type(e).__name__
+                msg = str(e)
+                if "AuthKeyDuplicated" in cls or "AuthKeyDuplicated" in msg or "auth key duplicated" in msg.lower():
+                    logger.warning("[session_check] %s 异地登录 (is_user_authorized 路径): %s: %s", phone, cls, msg)
+                    return "hijacked"
+                logger.warning("[session_check] %s is_user_authorized 异常 (当 error): %s: %s", phone, cls, msg)
+                return "error"
             if not authorized:
                 return "revoked"
 
@@ -771,10 +790,15 @@ class TaskScheduler:
                     # 限流 ≠ 死,账号还活着只是 TG 暂时不让查
                     logger.info("[session_check] %s get_me FloodWait (视为 healthy): %s", phone, msg)
                     return "healthy"
+                # v3.0.17: 异地登录优先判定(AuthKeyDuplicated 是被盗号强信号,跟普通 revoked 区分)
+                msg_low = msg.lower()
+                if "AuthKeyDuplicated" in cls or "AuthKeyDuplicated" in msg or "auth key duplicated" in msg_low:
+                    logger.warning("[session_check] %s 异地登录 (AuthKeyDuplicated): %s: %s", phone, cls, msg)
+                    return "hijacked"
                 # 关键判定:异常类名或消息命中以下任何关键字 = session 已失效
                 dead_kw = ("Deactivated", "AuthKey", "Revoked", "Banned", "Unauthorized", "SessionExpired")
                 if any(k in cls for k in dead_kw) or any(k in msg for k in dead_kw) or \
-                        any(k in msg for k in ("unauthorized", "deactivated", "banned", "revoked")):
+                        any(k in msg_low for k in ("unauthorized", "deactivated", "banned", "revoked")):
                     logger.warning("[session_check] %s 判定已失效: %s: %s", phone, cls, msg)
                     return "revoked"
                 # 其他异常当 error(网络抖动、TG 服务器不稳等)
@@ -783,6 +807,9 @@ class TaskScheduler:
             return "healthy"
         except Exception as e:
             msg = str(e)
+            # v3.0.17: 同样优先判异地
+            if "AuthKeyDuplicated" in msg or "auth key duplicated" in msg.lower():
+                return "hijacked"
             if any(k in msg for k in ("AuthKey", "Unauthorized", "Deactivated", "Revoked")):
                 return "revoked"
             logger.warning("[session_check] %s 检查异常: %s", phone, e)
@@ -808,11 +835,13 @@ class TaskScheduler:
                     prev_status = (prev.get(phone) or {}).get("status")
                     if first_round:
                         continue
-                    if status == "revoked" and prev_status != "revoked":
-                        logger.warning("[session] %s 吊销 (prev=%s)", phone, prev_status)
-                        await self._emit_session_alert("revoked", phone)
-                    elif status == "healthy" and prev_status == "revoked":
-                        logger.info("[session] %s 已恢复", phone)
+                    # v3.0.17: hijacked / revoked 都是「死」转场,但消息模板不同;
+                    # 同一个失效转到另一种(revoked→hijacked or 反过来)也升级一次告警(罕见但要兜)。
+                    if status in ("revoked", "hijacked") and prev_status != status:
+                        logger.warning("[session] %s 转 %s (prev=%s)", phone, status, prev_status)
+                        await self._emit_session_alert(status, phone)
+                    elif status == "healthy" and prev_status in ("revoked", "hijacked"):
+                        logger.info("[session] %s 已恢复 (prev=%s)", phone, prev_status)
                         await self._emit_session_alert("restored", phone)
                 for phone, st in prev.items():
                     if phone not in current:

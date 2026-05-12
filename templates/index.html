@@ -596,6 +596,7 @@
     <a href="/dashboard">📊 驾驶舱</a>
     <a href="/" class="active">账号管理</a>
     <a href="/settings">⚙ 设置</a>
+    {% if is_admin %}<a href="/audit" title="操作审计日志">📋 审批历史</a>{% endif %}
     <a href="#" id="upgrade-btn" title="检查并升级" style="position:relative;">🔄 升级<span id="upgrade-dot" style="display:none;position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:#ffb946;box-shadow:0 0 6px #ffb946;"></span></a>
     <a href="/logout">登出 ▸</a>
   </div>
@@ -899,13 +900,13 @@
         <div class="title">操作步骤</div>
         <div class="step-row"><span class="step-num">01</span><span>输入该账号的手机号(带国码如 <span class="highlight-bright">+855...</span>),点击发送验证码</span></div>
         <div class="step-row"><span class="step-num">02</span><span>在该手机号的 Telegram 上查看验证码,填入后确认</span></div>
-        <div class="step-row"><span class="step-num">03</span><span>登录成功后,Google Sheets 会自动建好对应分页</span></div>
-        <div class="step-row"><span class="step-num">04</span><span>在分页中填 <span class="highlight-bright">B2({{ operator_label }})</span> 和 <span class="highlight-bright">B3(中心/部门)</span></span></div>
-        <div class="step-row"><span class="step-num">05</span><span>登录成功后,系统会<span class="highlight-green">自动重启监听(约 5 秒后新账号开始工作)</span>,无需手动操作</span></div>
+        <div class="step-row"><span class="step-num">03</span><span>登录成功后,Google Sheets 会自动建好对应分页 + 系统<span class="highlight-green">自动重启监听</span>(约 5 秒后新账号开始工作)</span></div>
+        <div class="step-row"><span class="step-num">04</span><span>点该账号「<span class="highlight-bright">账号配置</span>」按钮,选 <span class="highlight-bright">{{ operator_label }}</span> / <span class="highlight-bright">公司 / 中心</span> / 监察员 TG,保存后 60 秒内自动同步到 Sheet</span></div>
         <div class="footer-note">
           ※ 添加/删除账号 4 秒内若有连续操作,会合并成一次重启(批量加号不会重启很多次)<br>
           ※ 万一自动重启失败(Docker socket 异常),可点上方 [重启监听] 手动触发<br>
-          ※ TG 昵称修改后,分页名和表头会自动同步
+          ※ TG 昵称修改后,分页名和表头会自动同步<br>
+          ※ 公司 / 中心下拉数据从中央台实时同步,加新公司在中央台「预警路由」加一条就行
         </div>
       </div>
       <div class="login-inner">
@@ -965,6 +966,11 @@
             {% else %}
               <span class="tag tag-active">● Online</span>
             {% endif %}
+            {# v3.0.17(常显版): 一键重登 — 任何状态都能点(主动迁移 / 换设备 / 失效后)。
+               业务字段(operator/company/inspector_tg_id)全保留 (ADR-0004 ON CONFLICT 不覆盖业务字段) #}
+            <button class="btn-remove" onclick="reLogin('{{ s.phone }}')"
+                    style="color:#7ec9ff;border-color:rgba(126,201,255,0.45);"
+                    title="同号码重登,业务配置(商务/中心/监察员)全保留">▸ 重新登录</button>
             {# v3.0.1:按钮无条件渲染,有 s.id 就出。数据驱动——只有 account.business_tg_id
                非空才真正启用两段式推送,没配的账号行为跟 v2.10.25 一样(单段推送)。
                data-* 属性 + addEventListener 而非 onclick,避免嵌 JSON 双引号冲突 #}
@@ -999,13 +1005,13 @@
       <div style="color:#7ec9ff;font-size:12px;letter-spacing:1px;margin-bottom:10px;">▸ 业务归属(改完 60 秒内自动同步到 Sheet)</div>
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div>
-          <label style="display:block;color:#a5c4e0;font-size:11px;letter-spacing:1px;margin-bottom:6px;">商务人员名 <span style="color:#5a7c9a;">(写到 Sheet B2)</span></label>
+          <label style="display:block;color:#a5c4e0;font-size:11px;letter-spacing:1px;margin-bottom:6px;">商务人员 <span style="color:#5a7c9a;">(自动同步到 Sheet 第 2 行)</span></label>
           <input type="text" id="nc_operator"
                  placeholder="例 张三"
                  style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;box-sizing:border-box;">
         </div>
         <div>
-          <label style="display:block;color:#a5c4e0;font-size:11px;letter-spacing:1px;margin-bottom:6px;">公司 / 中心 <span style="color:#5a7c9a;">(写到 Sheet B3,中央台据此算归属)</span></label>
+          <label style="display:block;color:#a5c4e0;font-size:11px;letter-spacing:1px;margin-bottom:6px;">公司 / 中心 <span style="color:#5a7c9a;">(中央台据此算归属 + 自动同步到 Sheet 第 3 行)</span></label>
           {% if company_options or center_options %}
             <!-- v3.0.15.1: 双下拉模式(setup 配了选项)-->
             <div style="display:grid;grid-template-columns: {% if company_options %}1fr 1fr{% else %}1fr{% endif %};gap:8px;">
@@ -1024,22 +1030,21 @@
             </div>
             <input type="hidden" id="nc_company">
             <div style="margin-top:4px;color:#7c8a9a;font-size:10px;line-height:1.5;">
-              💡 选公司 + 选中心 → 系统自动拼成「公司-中心」写到 Sheet。<br>
-              下拉选项在<a href="/settings" style="color:#7ec9ff;">系统设置 → 业务设置</a>里维护。
+              💡 选公司 + 选中心 → 系统自动拼成「公司-中心」。<br>
+              下拉数据从中央台「预警路由」实时同步,加新公司只在中央台一处加。
             </div>
           {% else %}
-            <!-- 兼容老模式:setup 没配选项 → 退回手填 -->
+            <!-- 兼容老模式:中央台未配置 → 退回手填 -->
             <input type="text" id="nc_company"
                    placeholder="例 运营中心 / 瑞升-运营中心"
                    style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;box-sizing:border-box;">
             <div style="margin-top:4px;color:#7c8a9a;font-size:10px;line-height:1.5;">
-              💡 系统设置「业务设置」里配了下拉选项后,这里会自动变成下拉。<br>
-              中央台按字段算归属,带公司前缀(瑞升、鼎丰)也支持自动识别。
+              💡 中央台没连上时显示输入框。接通后会自动变成下拉(数据从中央台「预警路由」拉)。
             </div>
           {% endif %}
         </div>
         <div>
-          <label style="display:block;color:#a5c4e0;font-size:11px;letter-spacing:1px;margin-bottom:6px;">监察员 TG ID / 用户名 <span style="color:#5a7c9a;">(写到 Sheet B4,账号被吊销时 @ 此人)</span></label>
+          <label style="display:block;color:#a5c4e0;font-size:11px;letter-spacing:1px;margin-bottom:6px;">监察员 TG ID / 用户名 <span style="color:#5a7c9a;">(账号失效时预警群 @ 此人)</span></label>
           <input type="text" id="nc_inspector_tg_id"
                  placeholder="例 @inspector 或 123456789,留空则不 at"
                  style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:monospace;font-size:12px;box-sizing:border-box;">
@@ -1230,6 +1235,26 @@ function showMsg(text, type) {
 
 function clearMsg() {
   document.getElementById('login-msg').innerHTML = '';
+}
+
+// v3.0.17: 一键重登 — 「会话已吊销」按钮 → 自动填号 + 滚到登录区 + 发验证码
+// 走的是同一个 /api/send-code → /api/verify-code 流程,业务字段不丢
+async function reLogin(phone) {
+  const input = document.getElementById('input-phone');
+  if (!input) return;
+  input.value = phone;
+  // 滚到「添加账号」段
+  input.scrollIntoView({behavior: 'smooth', block: 'center'});
+  input.focus();
+  // v3.0.22 fix: 先重启监听器释放该 phone 的 session 文件(避免「database is locked」)
+  // 然后等 3 秒让监听器真正退出 + session 文件释放,再触发 sendCode
+  showMsg('正在释放该账号 session,3 秒后自动发验证码...', 'info');
+  try {
+    await fetch('/api/restart', {method: 'POST'});
+  } catch (e) {
+    /* 重启失败不阻塞,sendCode 仍然尝试一次 */
+  }
+  setTimeout(() => sendCode(), 3000);
 }
 
 async function sendCode() {
@@ -1608,5 +1633,6 @@ document.getElementById('input-password').addEventListener('keyup', e => { if (e
 })();
 </script>
 
+{% include "_lite_mode.html" %}
 </body>
 </html>

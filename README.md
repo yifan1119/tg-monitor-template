@@ -2,23 +2,46 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-> 📌 **最新版**:v3.0.15(2026-05-09) — 🪪 **外事号 5 字段 web 自助管理 + Sheet 反向同步** — 解决「业务字段必须 Sheet 手填等 60s 反向同步」痛点。`accounts` migration V7 加 `inspector_tg_id`(监察员 TG handle/numeric ID,v3.0.17 用于账号吊销 @ 通知)。`/api/accounts/<id>/notify-config` PATCH 扩 `operator/company/inspector_tg_id` 三业务字段(`templates/index.html` 「配置」modal 同步扩,Codex round1 P1 fix 加加载未完成保存按钮 disabled 防误清);`tasks._sync_account_business_to_sheet` 60s loop 把 DB 业务字段单向覆盖到 Sheet B2/B3/B4(Codex P0 fix 改 `spreadsheet.values_batch_get` 一次拉所有 ws,200 账号无差异从 200 次 API 砍到 2 次;feature flag `BUSINESS_FIELD_SYNC_ENABLED=true` 默认开)。Sheet 模板 row 4 占用为「监察员」label/value(`create_account_tab_full` + `upgrade_minimal_tab` 把老 spacer 改可见;**保持 frozen=6 零数据迁移**)。`_safe_add_column` 跨进程 race 容错(Codex P0 fix:duplicate column 异常 + recheck 视为成功)。⚠ **单向覆盖** = Sheet 手改会被 web 值压回。中央台报表按 account.company 同步留 v3.0.16 单独发。
-> 之前:v3.0.14(2026-05-08) — 🪪 **同名外事号自动加 phone 后缀建独立 Sheets 分页** — 解决 Google Sheets worksheet 标题唯一性导致同名第二号建不了分页 + 消息混入第一号分页的历史问题。新增 module-level helper `sheets.dedupe_assign_sheet_tabs(conn)`,`web._create_sheet_tab` 加 phone 参数(向后兼容)登录时调,`sheets.ensure_account_tabs` 启动 + 60s patrol 第一行调。规则:同 name ≥ 2 个按 phone 字典序排,**第一个保留 name 不变(零数据迁移老分页不动)**,第二个起 `sheet_tab='<name>-<phone后4位>'`(例:张三-6384);已设过 sheet_tab 的不动(尊重客户/老逻辑)。客户 ./update.sh 升级后自动处理所有存量重名,新登录无感。⚠ 升级前已混入第一号的第二号历史消息无法回溯分离,从升级时刻起干净隔离
-> 之前:v3.0.13(2026-04-30) — 🔧 **升级后 web 后台 502 自愈(共享 Caddy 模式)** — `update.sh` 末段加 network 重连自愈:检测 `tg-web` 跟它对应的共享 Caddy 不在同一 docker network → 自动 `docker network connect` + `caddy reload`。修一台 VPS 多部门 + 共享 Caddy 模式下,`docker compose up -d` recreate 容器后 `enable_https.sh` 旧 connect 丢失导致 Caddy DNS 解析失败的 502 问题。仅 shared 模式生效(`MY_CADDY != tg-caddy-${COMPANY_NAME}`),自建 Caddy 不影响;幂等 + 失败不阻断。⚠ 第一次升到 v3.0.13 仍需手工修一次,之后自动
-> 之前:v3.1(2026-04-29) — 📋 **Sheet 后台扫描 + 客户删旧消息自动回填空位** — `peers` 加 `next_sheet_row` 缓存(migration V6),`write_messages` 双轨决策(update 命中 next_row / NULL 走 append fallback),`_sheet_position_resync_loop` 每 15 分钟 `ws.get_all_values` 一次性扫描整 worksheet 找首空行(1 API/ws 无视 peer 数),解决 v3.0.8 `values.append` 被 Google 自动检测全表 boundary 推高行号、客户删旧消息不回填的痛点;feature flag `SHEET_RESYNC_ENABLED` 默认 ON,关掉退回 v3.0.9 行为;tg-web → tg-monitor IPC 通过 `data/.sheet_resync_request` 文件标志(跟 ADR-0021 OAuth 同模式),admin 「立刻重扫」按钮触发
-> 之前:v3.0.9(2026-04-29) — 📊 **中央台数据接口扩展 — 0 客户可见 UI 改动** — `dashboard_api.accounts_matrix()` SELECT 加 `tg_id / business_tg_id / owner_tg_id / remind_*_text`;`alerts_recent()` SELECT 加 `status / stage / keyword / reviewed_at / sheet_written / claimed_at / last_write_error + account_id/peer_id/msg_id`;新增 4 个 `/api/v1/*` 只读 endpoint(`violations` / `alerts` / `peers` / `messages`)沿用 metrics token 鉴权。0 新表 0 新字段 0 数据迁移,纯只读
-> 之前:v3.0.8.3(2026-04-25) — 🔧 **修「立刻重启监听器」404 找不到容器** — `/api/restart` 改用 `_start_tg_monitor()` 复用现有 fallback(`.env COMPANY_NAME` 跟实际 docker 容器名对不齐时自动 fallback 到本机任意 tg-monitor-*);`dashboard_api._diagnose_sheets_stuck` 同样加 fallback。客户案例: URL `gs2` 但 `.env` 是 `gs1`(部署遗留 inconsistency)
-> 之前:v3.0.8.2(2026-04-25) — 🔧 **升级提示去掉 SSH 包装 + 复制按钮 HTTP/HTTPS 三层兜底 + 深度诊断永远可见入口** — `upgrader.build_upgrade_cmd` 不再 wrap `ssh root@<IP>`(误导客户);3 个 templates 复制按钮加 `copyTextFallback`(`navigator.clipboard` → `execCommand('copy')` → `prompt()` 三层);驾驶舱日志面板上方新增「Sheet 写入诊断 ▸ 立刻深度诊断」**永远可见按钮**(admin only),客户随时点查未写明细 + 一键修
-> 之前:v3.0.8.1(2026-04-25) — 🔧 **docker cp 漏同步根治 + 普通用户隐藏 admin 按钮** — `docker-compose.yml` `tg-web` command 从 `cp -rf templates 目录复制`(嵌套 bug,Flask 读旧版)改成 `templates/*.html` 文件级 glob,以后 templates / README / release_notes 改动 update.sh 后自动生效不用 docker exec 手动同步;`web.py::dashboard_page` 传 `is_admin` 给 template,`dashboard.html` 加 `IS_ADMIN` 全局 JS 标志,管理员才看到「立刻深度诊断」/「一键修复」/「立刻重启监听器」按钮,普通成员看到「请联系管理员」文字提示。CLAUDE.md 硬规定 #8 长期修法落地
-> 之前:v3.0.8(2026-04-25) — 🚀 **Sheet 写入治本 + 卡死一键自助** — 写入用 `values.append` 替代 `update + col_values read`(quota 用量砍半 + 客户改表单不会被覆盖) + 全局令牌桶 50 req/min + 驾驶舱「立刻深度诊断」modal + 「一键修复」按钮 + 「立刻重启监听器」按钮(整合 v3.0.7.1) + 设置页 `SHEETS_FLUSH_INTERVAL` / `SHEETS_RATE_LIMIT_PER_MIN`
-> 之前:v3.0.7(2026-04-25) — 🔁 **OAuth 重新授权后 Sheets 自愈** — 闭合 v3.0.6 的诊断—修复链路。客户在驾驶舱点「去重新授权」走完 OAuth,**5-30 秒内 Sheets 自动恢复写入**,不用 SSH `docker restart`。`flush_pending` 加 `RefreshError` 自愈,`OAUTH_FAIL_MARKERS` 抽到 `oauth_helper.py` 单一来源(诊断卡片 + 自愈逻辑共用)。`SheetsWriter._write_lock` 改 RLock 防递归死锁
-> 之前:v3.0.6(2026-04-24) — 🛠 **驾驶舱三件套运维自助化** — 后台日志面板 + Sheet 堵塞自动诊断 + REMIND_DELETE 文案 UI
-> 之前:v3.0.5(2026-04-24) — 🗑 **删除消息预警对齐 stage2 审批体验** — @负责人 + 登记违规/取消按钮(数据驱动,没配 owner_tg_id 的账号保持老路径)
-> 之前:v3.0.4(2026-04-24) — 📣 **两段式预警 @username 改走 TG 原生解析** — 修 inline mention 反垃圾不通知问题
-> 之前:v3.0.3(2026-04-23) — 🩺 **update.sh 升级时自动 Caddy 体检 + 自愈** — 承接 v3.0.2,把故障检测从"客户自己跑诊断工具"升到"升级自动自愈"。只动本部门相关的那一个 Caddy 容器,保护客户 VPS 上其他项目不受影响。客户零操作
-> 之前:v3.0.2(2026-04-23) — 🛠 **Caddy inode 自愈 + `scripts/caddy-doctor.sh` 自查工具** — 修 shared caddy 模式多部门 HTTPS 失败(docker file bind mount inode 断裂)
-> 之前:v3.0.0(2026-04-23) — 🆕 **两段式未回复预警 + TG 装置伪装** — 30 分钟 @ 商务 / 40 分钟 @ 负责人 + 违规/取消按钮 + 员工回复事件驱动自动结案 + Telethon 真名解析。全部 feature flag 默认关(`TWO_STAGE_NO_REPLY_ENABLED=false`),老客户升级零感知
+## 📌 当前版本:v3.0.23(2026-05-12)
 
+🚀 **客户 6 项优化诉求全部完成 + 中央台同步 + UI/文案完善**
+
+| 版本 | 功能 |
+|---|---|
+| **v3.0.17** | 账号失效 @ 监察员 + AuthKeyDuplicated 异地登录单独高优先级文案 + `【外事号离线预警 · 部门 (IP)】` 标题 |
+| **v3.0.18** | 操作审计 `audit_logs` 表(V8 migration)+ `/audit` 「审批历史」管理员面板(全中文 + ⚠ 非当事人怠工识别) |
+| **v3.0.19** | 闲聊词白名单 3 字段搬 web `/settings`(`SKIP_NO_REPLY_TEXTS / MIN_LEN / PURE_EMOJI` 不再 SSH 改 .env)|
+| **v3.0.20** | 关动效 — `_lite_mode.html` 6 行 `* { animation: none !important }`,无切换按钮直接全站静态(多 tab 不卡)|
+| **v3.0.21** | 公司/中心下拉从中央台 `/api/v1/options` 实时拉(60s TTL),删 `.env COMPANY_OPTIONS/CENTER_OPTIONS` 单部门字段 |
+| **v3.0.22** | stage2/删除走中央台 callback bridge — `/api/v1/callback` endpoint + audit `expected_actor`(怠工识别)|
+| **v3.0.23** | UI 大改 — navbar 加「📋 审批历史」、reLogin 常显 + 自动重启监听、配置精灵架构提示、`_humanize_tg_error` 加 8 类英文翻中文 |
+
+**跨 repo 配套**:中央台 v0.18(`/api/v1/options` 暴露 + callback_listener daemon + Sheet 公式注入修复)
+
+**部署约束**:中央台 `alert_routes.bot_token` ≠ 任何部门 `.env BOT_TOKEN`(避免 polling 撞 409),客户为公司新建独立 bot 才能开 `CALLBACK_LISTENER_ENABLED=true`(默认 OFF stage2/删除 fallback 本地)
+
+<details>
+<summary>📚 历史版本(展开看完整变更)</summary>
+
+- 之前:v3.0.17(2026-05-11) — 🚨 **账号挂掉 @ 监察员 + 异地登录区分 + session/keyword 走中央台** — 利用 v3.0.15 的 `inspector_tg_id` + v3.0.16 的 `VPS_PUBLIC_IP`。`templates.session_revoked_alert` 加 `inspector_mention`/`host_ip`/`company_display` 参数,标题变 `【外事号离线预警 · 部门 (IP)】` + 正文 `监察员:@xxx`(`bot._build_tg_mention` 复用 v3.0.4 解析路径)。新增 `templates.session_hijacked_alert` 模板(被盗号场景 ⚠ 高优先级 + 三步处理指引);`tasks._check_single_session` 加 `AuthKeyDuplicated` 优先匹配 → 返新状态 `'hijacked'`,`_session_health_loop` healthy↔revoked/hijacked 三态转场都识别;`bot.send_session_alert` 加 `kind='hijacked'` 分支 + `parse_mode='HTML'` + 调 `_try_central_route()`;`send_keyword_alert` 同接入。**stage2 / 删除预警保留本地推**(callback button Telegram 协议必须回原 bot,中央台另一个 bot 收不到 → 强行路由会让按钮失效,有意保留)。老账号没设 `inspector_tg_id` → 模板兼容无 @ 行其余照旧。
+- 之前:v3.0.15(2026-05-09) — 🪪 **外事号 5 字段 web 自助管理 + Sheet 反向同步** — 解决「业务字段必须 Sheet 手填等 60s 反向同步」痛点。`accounts` migration V7 加 `inspector_tg_id`(监察员 TG handle/numeric ID,v3.0.17 用于账号吊销 @ 通知)。`/api/accounts/<id>/notify-config` PATCH 扩 `operator/company/inspector_tg_id` 三业务字段(`templates/index.html` 「配置」modal 同步扩,Codex round1 P1 fix 加加载未完成保存按钮 disabled 防误清);`tasks._sync_account_business_to_sheet` 60s loop 把 DB 业务字段单向覆盖到 Sheet B2/B3/B4(Codex P0 fix 改 `spreadsheet.values_batch_get` 一次拉所有 ws,200 账号无差异从 200 次 API 砍到 2 次;feature flag `BUSINESS_FIELD_SYNC_ENABLED=true` 默认开)。Sheet 模板 row 4 占用为「监察员」label/value(`create_account_tab_full` + `upgrade_minimal_tab` 把老 spacer 改可见;**保持 frozen=6 零数据迁移**)。`_safe_add_column` 跨进程 race 容错(Codex P0 fix:duplicate column 异常 + recheck 视为成功)。⚠ **单向覆盖** = Sheet 手改会被 web 值压回。中央台报表按 account.company 同步留 v3.0.16 单独发。
+- 之前:v3.0.14(2026-05-08) — 🪪 **同名外事号自动加 phone 后缀建独立 Sheets 分页** — 解决 Google Sheets worksheet 标题唯一性导致同名第二号建不了分页 + 消息混入第一号分页的历史问题。新增 module-level helper `sheets.dedupe_assign_sheet_tabs(conn)`,`web._create_sheet_tab` 加 phone 参数(向后兼容)登录时调,`sheets.ensure_account_tabs` 启动 + 60s patrol 第一行调。规则:同 name ≥ 2 个按 phone 字典序排,**第一个保留 name 不变(零数据迁移老分页不动)**,第二个起 `sheet_tab='<name>-<phone后4位>'`(例:张三-6384);已设过 sheet_tab 的不动(尊重客户/老逻辑)。客户 ./update.sh 升级后自动处理所有存量重名,新登录无感。⚠ 升级前已混入第一号的第二号历史消息无法回溯分离,从升级时刻起干净隔离
+- 之前:v3.0.13(2026-04-30) — 🔧 **升级后 web 后台 502 自愈(共享 Caddy 模式)** — `update.sh` 末段加 network 重连自愈:检测 `tg-web` 跟它对应的共享 Caddy 不在同一 docker network → 自动 `docker network connect` + `caddy reload`。修一台 VPS 多部门 + 共享 Caddy 模式下,`docker compose up -d` recreate 容器后 `enable_https.sh` 旧 connect 丢失导致 Caddy DNS 解析失败的 502 问题。仅 shared 模式生效(`MY_CADDY != tg-caddy-${COMPANY_NAME}`),自建 Caddy 不影响;幂等 + 失败不阻断。⚠ 第一次升到 v3.0.13 仍需手工修一次,之后自动
+- 之前:v3.1(2026-04-29) — 📋 **Sheet 后台扫描 + 客户删旧消息自动回填空位** — `peers` 加 `next_sheet_row` 缓存(migration V6),`write_messages` 双轨决策(update 命中 next_row / NULL 走 append fallback),`_sheet_position_resync_loop` 每 15 分钟 `ws.get_all_values` 一次性扫描整 worksheet 找首空行(1 API/ws 无视 peer 数),解决 v3.0.8 `values.append` 被 Google 自动检测全表 boundary 推高行号、客户删旧消息不回填的痛点;feature flag `SHEET_RESYNC_ENABLED` 默认 ON,关掉退回 v3.0.9 行为;tg-web → tg-monitor IPC 通过 `data/.sheet_resync_request` 文件标志(跟 ADR-0021 OAuth 同模式),admin 「立刻重扫」按钮触发
+- 之前:v3.0.9(2026-04-29) — 📊 **中央台数据接口扩展 — 0 客户可见 UI 改动** — `dashboard_api.accounts_matrix()` SELECT 加 `tg_id / business_tg_id / owner_tg_id / remind_*_text`;`alerts_recent()` SELECT 加 `status / stage / keyword / reviewed_at / sheet_written / claimed_at / last_write_error + account_id/peer_id/msg_id`;新增 4 个 `/api/v1/*` 只读 endpoint(`violations` / `alerts` / `peers` / `messages`)沿用 metrics token 鉴权。0 新表 0 新字段 0 数据迁移,纯只读
+- 之前:v3.0.8.3(2026-04-25) — 🔧 **修「立刻重启监听器」404 找不到容器** — `/api/restart` 改用 `_start_tg_monitor()` 复用现有 fallback(`.env COMPANY_NAME` 跟实际 docker 容器名对不齐时自动 fallback 到本机任意 tg-monitor-*);`dashboard_api._diagnose_sheets_stuck` 同样加 fallback。客户案例: URL `gs2` 但 `.env` 是 `gs1`(部署遗留 inconsistency)
+- 之前:v3.0.8.2(2026-04-25) — 🔧 **升级提示去掉 SSH 包装 + 复制按钮 HTTP/HTTPS 三层兜底 + 深度诊断永远可见入口** — `upgrader.build_upgrade_cmd` 不再 wrap `ssh root@<IP>`(误导客户);3 个 templates 复制按钮加 `copyTextFallback`(`navigator.clipboard` → `execCommand('copy')` → `prompt()` 三层);驾驶舱日志面板上方新增「Sheet 写入诊断 ▸ 立刻深度诊断」**永远可见按钮**(admin only),客户随时点查未写明细 + 一键修
+- 之前:v3.0.8.1(2026-04-25) — 🔧 **docker cp 漏同步根治 + 普通用户隐藏 admin 按钮** — `docker-compose.yml` `tg-web` command 从 `cp -rf templates 目录复制`(嵌套 bug,Flask 读旧版)改成 `templates/*.html` 文件级 glob,以后 templates / README / release_notes 改动 update.sh 后自动生效不用 docker exec 手动同步;`web.py::dashboard_page` 传 `is_admin` 给 template,`dashboard.html` 加 `IS_ADMIN` 全局 JS 标志,管理员才看到「立刻深度诊断」/「一键修复」/「立刻重启监听器」按钮,普通成员看到「请联系管理员」文字提示。CLAUDE.md 硬规定 #8 长期修法落地
+- 之前:v3.0.8(2026-04-25) — 🚀 **Sheet 写入治本 + 卡死一键自助** — 写入用 `values.append` 替代 `update + col_values read`(quota 用量砍半 + 客户改表单不会被覆盖) + 全局令牌桶 50 req/min + 驾驶舱「立刻深度诊断」modal + 「一键修复」按钮 + 「立刻重启监听器」按钮(整合 v3.0.7.1) + 设置页 `SHEETS_FLUSH_INTERVAL` / `SHEETS_RATE_LIMIT_PER_MIN`
+- 之前:v3.0.7(2026-04-25) — 🔁 **OAuth 重新授权后 Sheets 自愈** — 闭合 v3.0.6 的诊断—修复链路。客户在驾驶舱点「去重新授权」走完 OAuth,**5-30 秒内 Sheets 自动恢复写入**,不用 SSH `docker restart`。`flush_pending` 加 `RefreshError` 自愈,`OAUTH_FAIL_MARKERS` 抽到 `oauth_helper.py` 单一来源(诊断卡片 + 自愈逻辑共用)。`SheetsWriter._write_lock` 改 RLock 防递归死锁
+- 之前:v3.0.6(2026-04-24) — 🛠 **驾驶舱三件套运维自助化** — 后台日志面板 + Sheet 堵塞自动诊断 + REMIND_DELETE 文案 UI
+- 之前:v3.0.5(2026-04-24) — 🗑 **删除消息预警对齐 stage2 审批体验** — @负责人 + 登记违规/取消按钮(数据驱动,没配 owner_tg_id 的账号保持老路径)
+- 之前:v3.0.4(2026-04-24) — 📣 **两段式预警 @username 改走 TG 原生解析** — 修 inline mention 反垃圾不通知问题
+- 之前:v3.0.3(2026-04-23) — 🩺 **update.sh 升级时自动 Caddy 体检 + 自愈** — 承接 v3.0.2,把故障检测从"客户自己跑诊断工具"升到"升级自动自愈"。只动本部门相关的那一个 Caddy 容器,保护客户 VPS 上其他项目不受影响。客户零操作
+- 之前:v3.0.2(2026-04-23) — 🛠 **Caddy inode 自愈 + `scripts/caddy-doctor.sh` 自查工具** — 修 shared caddy 模式多部门 HTTPS 失败(docker file bind mount inode 断裂)
+- 之前:v3.0.0(2026-04-23) — 🆕 **两段式未回复预警 + TG 装置伪装** — 30 分钟 @ 商务 / 40 分钟 @ 负责人 + 违规/取消按钮 + 员工回复事件驱动自动结案 + Telethon 真名解析。全部 feature flag 默认关(`TWO_STAGE_NO_REPLY_ENABLED=false`),老客户升级零感知
+
+</details>
 ---
 
 ## 目录
