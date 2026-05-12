@@ -2644,6 +2644,61 @@ def api_v1_metrics():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/v1/admin/cmd", methods=["POST"])
+def api_v1_admin_cmd():
+    """v3.0.26 Remote Agent — 中央台远程运维 endpoint。
+
+    鉴权(4 层):
+    1. Bearer token = METRICS_TOKEN(.env)
+    2. X-Agent-Ts:Unix 时间戳,±5 分钟时钟差
+    3. X-Agent-Nonce:16+ char,5 分钟内去重(防重放)
+    4. X-Agent-Sig:HMAC_SHA256(token, ts + nonce + body_hex)
+    + rate limit: 同 token 5 次/分钟
+
+    Body JSON: {"action": "...", "params": {...}}
+    """
+    import agent
+
+    # 1. token
+    env = read_env()
+    token = _ensure_metrics_token(env)
+    auth = request.headers.get("Authorization", "")
+    provided_token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not provided_token or not _secrets.compare_digest(provided_token, token):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    # 2. timestamp + 3. nonce + 4. HMAC sig
+    ts = request.headers.get("X-Agent-Ts", "").strip()
+    nonce = request.headers.get("X-Agent-Nonce", "").strip()
+    sig = request.headers.get("X-Agent-Sig", "").strip()
+    body_bytes = request.get_data() or b""
+    if not agent.check_timestamp(ts):
+        return jsonify({"ok": False, "error": "timestamp out of window"}), 401
+    if not agent.verify_hmac(token, ts, nonce, body_bytes, sig):
+        return jsonify({"ok": False, "error": "invalid signature"}), 401
+    if not agent.check_nonce(nonce):
+        return jsonify({"ok": False, "error": "nonce replay"}), 401
+    # 5. rate limit
+    if not agent.check_rate_limit(token):
+        return jsonify({"ok": False, "error": "rate limit"}), 429
+
+    # 解析 body
+    try:
+        payload = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid json body"}), 400
+    action = (payload.get("action") or "").strip()
+    params = payload.get("params") or {}
+    if not action:
+        return jsonify({"ok": False, "error": "action required",
+                         "available": sorted(agent.ACTION_HANDLERS.keys())}), 400
+
+    actor_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+    ok, result = agent.dispatch(action, params, actor_ip=actor_ip)
+    status = 200 if ok else 500
+    return jsonify({"ok": ok, "action": action, "result": result}), status
+
+
 @app.route("/api/v1/callback", methods=["POST"])
 def api_v1_callback():
     """v3.0.22 (ADR-0037 webhook bridge): 中央台 callback_listener 收到按钮点击后 POST 这里
