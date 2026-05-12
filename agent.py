@@ -341,10 +341,76 @@ def action_restart_svc(params: dict) -> tuple[bool, dict]:
 # Dispatch + audit
 # ============================================================
 
+def action_verify_ui_version(params: dict) -> tuple[bool, dict]:
+    """v3.0.27:通过 docker SDK 在 tg-web 容器内 grep templates/index.html,
+    验证 UI 是否同步到最新版(各版本特征字段)。
+
+    返:
+      - markers: {label: {marker, count, present}}
+      - is_up_to_date: 所有 markers 都 present
+    """
+    company = os.environ.get("COMPANY_NAME", "").strip()
+    if not company:
+        return False, {"error": "COMPANY_NAME not set"}
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        c = client.containers.get(f"tg-web-{company}")
+        version_markers = {
+            "v3.0.15+": "nc_inspector_tg_id",   # 监察员 TG ID 字段
+            "v3.0.21+": "company_options",      # 公司中心下拉数据源
+            "v3.0.25+": "autoOpenConfig",       # 登录后自动 open 配置 modal
+        }
+        markers = {}
+        for label, needle in version_markers.items():
+            exit_code, out = c.exec_run(
+                ["sh", "-c", f"grep -c '{needle}' /app/templates/index.html 2>/dev/null || echo 0"]
+            )
+            try:
+                count = int(out.decode("utf-8", "ignore").strip())
+            except ValueError:
+                count = 0
+            markers[label] = {"marker": needle, "count": count, "present": count > 0}
+
+        return True, {
+            "container":     f"tg-web-{company}",
+            "markers":       markers,
+            "is_up_to_date": all(m["present"] for m in markers.values()),
+        }
+    except Exception as e:
+        return False, {"error": f"{type(e).__name__}: {e}"}
+
+
+def action_get_web_credentials(params: dict) -> tuple[bool, dict]:
+    """v3.0.27 ⚠ 高敏感 — 返 .env 里的 WEB_USERNAME / WEB_PASSWORD 明文。
+    用途:中央台运维远程登入 dept VPS web 后台 debug。
+    安全:走 metrics_token + HMAC 鉴权,audit_log 完整留痕。"""
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return False, {"error": ".env not found"}
+    user, pw = "", ""
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("WEB_USERNAME="):
+                user = line.split("=", 1)[1].strip()
+            elif line.startswith("WEB_PASSWORD="):
+                pw = line.split("=", 1)[1].strip()
+    except Exception as e:
+        return False, {"error": f"read .env: {e}"}
+    return True, {
+        "username": user,
+        "password": pw,
+        "note": "⚠ .env 初始凭据。客户在 web /settings/users 改过密码,users 表才是真值。",
+    }
+
+
 ACTION_HANDLERS = {
-    "inspect":     action_inspect,
-    "upgrade":     action_upgrade,
-    "restart_svc": action_restart_svc,
+    "inspect":             action_inspect,
+    "upgrade":             action_upgrade,
+    "restart_svc":         action_restart_svc,
+    "verify_ui_version":   action_verify_ui_version,
+    "get_web_credentials": action_get_web_credentials,
 }
 
 
