@@ -262,5 +262,11 @@
     "changes": [
       "(运维内部)Remote Agent 远程运维 endpoint — 中央台从此可远程对单部门 VPS 做健康检查/升级/重启,客户运维 0 介入"
     ]
+  },
+  "v3.0.28": {
+    "date": "2026-05-12",
+    "changes": [
+      "(运维内部)一次根治升级链所有已知问题:Dockerfile 装 git + update.sh 强制 checkout main + .env 自动补逻辑修空值卡住 + agent.upgrade 加临时 alpine 容器 fallback + 加 4 个 action (set_env / tail_logs / reload_oauth / fix_sheets)"
+    ]
   }
 }
