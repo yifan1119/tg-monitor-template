@@ -459,37 +459,43 @@ def action_tail_logs(params: dict) -> tuple[bool, dict]:
 
 
 def action_reload_oauth(params: dict) -> tuple[bool, dict]:
-    """v3.0.28:OAuth credentials 重载(走 v3.0.7 SheetsWriter.reload_credentials 路径)。
-    复用 tg-web 容器内已存在的 reload 端点。"""
+    """v3.0.30:OAuth credentials 重载 — 异步触发 tg-monitor 重启读最新 oauth token 文件。
+    本质就是让 tg-monitor 进程重新 init SheetsWriter(读 data/google_oauth_token.json)。
+    异步发起后立刻返 200,不等 restart 完成(避免 HTTP client 超时)。"""
+    company = os.environ.get("COMPANY_NAME", "").strip()
+    if not company:
+        return False, {"error": "COMPANY_NAME not set"}
     try:
-        import urllib.request as _req, json as _json
-        port = os.environ.get("WEB_PORT", "5001")
-        url = f"http://localhost:{port}/api/oauth/reload_credentials"
-        req = _req.Request(url, method="POST", data=b"{}")
-        with _req.urlopen(req, timeout=10) as r:
-            return True, {"http": r.status, "body": _json.loads(r.read().decode())}
+        import docker as docker_sdk, threading
+        client = docker_sdk.from_env()
+        c = client.containers.get(f"tg-monitor-{company}")
+        # 后台线程触发 restart,不阻塞 HTTP 响应
+        threading.Thread(target=lambda: c.restart(timeout=20), daemon=True).start()
+        return True, {
+            "container": f"tg-monitor-{company}",
+            "status": "restart_triggered_async",
+            "note": "tg-monitor 后台重启,约 10 秒后生效。期间 tg-web/dashboard 不受影响"
+        }
     except Exception as e:
-        # 若 endpoint 不存在,fallback 重启 tg-monitor + tg-web(触发 reload)
-        try:
-            import docker as docker_sdk
-            client = docker_sdk.from_env()
-            company = os.environ.get("COMPANY_NAME", "").strip()
-            for svc in ("tg-monitor", "tg-web"):
-                client.containers.get(f"{svc}-{company}").restart(timeout=15)
-            return True, {"method": "fallback_restart", "err": str(e)}
-        except Exception as e2:
-            return False, {"error": f"reload + restart fallback both failed: {e2}"}
+        return False, {"error": f"{type(e).__name__}: {e}"}
 
 
 def action_fix_sheets(params: dict) -> tuple[bool, dict]:
-    """v3.0.28:调 tg-web 容器内已有的 /api/diag/sheets-fix-stuck endpoint。"""
+    """v3.0.30:直接调 dashboard_api 函数,绕过 HTTP cookie 鉴权问题。
+    agent 跟 web.py 同 Python 进程,可直接 import。
+    params.action: 'orphan_messages' | 'col_group_null' | 'all'(默认 all)"""
+    action = (params.get("action") or "all").strip().lower()
+    if action not in ("orphan_messages", "col_group_null", "all"):
+        return False, {"error": f"invalid action: {action!r}"}
     try:
-        import urllib.request as _req, json as _json
-        port = os.environ.get("WEB_PORT", "5001")
-        url = f"http://localhost:{port}/api/diag/sheets-fix-stuck"
-        req = _req.Request(url, method="POST", data=b"{}")
-        with _req.urlopen(req, timeout=30) as r:
-            return True, {"http": r.status, "body": _json.loads(r.read().decode())}
+        import dashboard_api
+        results = {}
+        if action in ("orphan_messages", "all"):
+            results["orphan_messages"] = dashboard_api.fix_orphan_messages()
+        if action in ("col_group_null", "all"):
+            results["col_group_null"] = dashboard_api.fix_peers_no_col_group()
+        all_ok = all(r.get("ok", False) for r in results.values())
+        return all_ok, {"results": results}
     except Exception as e:
         return False, {"error": f"{type(e).__name__}: {e}"}
 
