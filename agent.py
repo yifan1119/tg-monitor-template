@@ -480,6 +480,112 @@ def action_reload_oauth(params: dict) -> tuple[bool, dict]:
         return False, {"error": f"{type(e).__name__}: {e}"}
 
 
+def action_restart_caddy(params: dict) -> tuple[bool, dict]:
+    """v3.1:重启 dept VPS 的 Caddy 容器(走 docker SDK,不依赖 Caddy 反代)。
+    用于 TLS 故障 / 证书续期失败时手动恢复。注意:Caddy 完全挂时外部到 agent
+    的路径也断,这条 endpoint 形同虚设;真正自愈靠下面的 caddy_self_heal_loop
+    daemon 在 dept 容器内自启动定时跑。"""
+    company = os.environ.get("COMPANY_NAME", "").strip()
+    if not company:
+        return False, {"error": "COMPANY_NAME not set"}
+    try:
+        import docker as docker_sdk
+        client = docker_sdk.from_env()
+        # 部门 caddy 容器名:tg-caddy-<company>(共享 caddy 模式可能不同名)
+        candidates = [f"tg-caddy-{company}", f"caddy-{company}", "tg-caddy", "caddy"]
+        for cn in candidates:
+            try:
+                c = client.containers.get(cn)
+                c.restart(timeout=20)
+                c.reload()
+                return True, {"container": cn, "status": c.status}
+            except docker_sdk.errors.NotFound:
+                continue
+        return False, {"error": f"caddy container not found, tried: {candidates}"}
+    except Exception as e:
+        return False, {"error": f"{type(e).__name__}: {e}"}
+
+
+# ============================================================
+# v3.1 Caddy self-heal daemon — 内部自检 + 自愈
+# ============================================================
+
+_CADDY_HEAL_LAST_ATTEMPT = {"ts": 0, "fail_count": 0}
+CADDY_HEAL_COOLDOWN = 600   # 同 Caddy 重启冷却 10 min(防 rapid loop)
+CADDY_HEAL_MAX_FAILS = 5    # 5 次自愈失败放弃,推 TG 求救
+CADDY_HEAL_CHECK_INTERVAL = 300   # 5 min 自检一次
+
+
+def _caddy_self_test() -> tuple[bool, str]:
+    """从 dept 容器内 self-test:HTTPS 访问自己看 TLS 是否 work。
+    通过 PUBLIC_DOMAIN 或 VPS_PUBLIC_IP+nip.io 拼出自己的 URL。"""
+    domain = (os.environ.get("PUBLIC_DOMAIN") or "").strip()
+    if not domain:
+        ip = (os.environ.get("VPS_PUBLIC_IP") or "").strip()
+        company = (os.environ.get("COMPANY_NAME") or "").strip()
+        if not ip or not company:
+            return True, "skip: no domain/ip"  # 没法判断,跳过
+        domain = f"{company}.{ip.replace('.', '-')}.nip.io"  # 大概率不准,只 best-effort
+    import urllib.request as _req, ssl as _ssl
+    ctx = _ssl.create_default_context()
+    ctx.check_hostname = False; ctx.verify_mode = _ssl.CERT_NONE
+    try:
+        with _req.urlopen(f"https://{domain}/login", timeout=10, context=ctx) as r:
+            return True, f"HTTPS OK ({r.status})"
+    except _ssl.SSLError as e:
+        return False, f"SSL: {str(e)[:80]}"
+    except Exception as e:
+        msg = str(e)[:80]
+        if "SSL" in msg or "TLS" in msg or "tlsv1" in msg.lower():
+            return False, f"TLS: {msg}"
+        # 网络层错(443 端口不通等)— 不算 TLS 错,但 Caddy 也可能挂
+        return False, f"net: {type(e).__name__}: {msg}"
+
+
+def caddy_self_heal_loop():
+    """v3.1 daemon:每 5 分钟 self-test TLS,失败立刻 docker restart caddy。
+    冷却 10 min(防 rapid loop)。连续 5 次失败放弃 + 写 log(后续 TG 推)。"""
+    if os.environ.get("CADDY_SELF_HEAL_ENABLED", "true").lower() != "true":
+        logger.info("[caddy_heal] CADDY_SELF_HEAL_ENABLED=false,跳过")
+        return
+    time.sleep(120)  # 等启动稳定
+    logger.info("[caddy_heal] daemon 启动 interval=%ds cooldown=%ds",
+                CADDY_HEAL_CHECK_INTERVAL, CADDY_HEAL_COOLDOWN)
+    while True:
+        try:
+            ok, detail = _caddy_self_test()
+            if ok:
+                if _CADDY_HEAL_LAST_ATTEMPT["fail_count"] > 0:
+                    logger.info("[caddy_heal] 自愈成功 ✓ %s", detail)
+                _CADDY_HEAL_LAST_ATTEMPT["fail_count"] = 0
+            else:
+                now = time.time()
+                if now - _CADDY_HEAL_LAST_ATTEMPT["ts"] < CADDY_HEAL_COOLDOWN:
+                    logger.info("[caddy_heal] 检测到故障但在冷却内,跳过本轮: %s", detail)
+                else:
+                    _CADDY_HEAL_LAST_ATTEMPT["ts"] = now
+                    _CADDY_HEAL_LAST_ATTEMPT["fail_count"] += 1
+                    fc = _CADDY_HEAL_LAST_ATTEMPT["fail_count"]
+                    if fc <= CADDY_HEAL_MAX_FAILS:
+                        logger.warning("[caddy_heal] TLS 故障 (#%d/%d): %s — restart caddy",
+                                       fc, CADDY_HEAL_MAX_FAILS, detail)
+                        ok2, res = action_restart_caddy({})
+                        logger.info("[caddy_heal] restart 结果: ok=%s res=%s", ok2, res)
+                    else:
+                        logger.error("[caddy_heal] %d 次自愈失败,放弃 — 需 SSH 介入", fc)
+        except Exception as e:
+            logger.exception("[caddy_heal] loop 异常: %s", e)
+        time.sleep(CADDY_HEAL_CHECK_INTERVAL)
+
+
+def start_caddy_self_heal_in_thread():
+    """main.py 启动时调一次"""
+    import threading as _th
+    t = _th.Thread(target=caddy_self_heal_loop, daemon=True, name="caddy_self_heal")
+    t.start()
+    return t
+
+
 def action_fix_sheets(params: dict) -> tuple[bool, dict]:
     """v3.0.30:直接调 dashboard_api 函数,绕过 HTTP cookie 鉴权问题。
     agent 跟 web.py 同 Python 进程,可直接 import。
@@ -606,6 +712,7 @@ ACTION_HANDLERS = {
     "inspect":             action_inspect,
     "upgrade":             action_upgrade,
     "restart_svc":         action_restart_svc,
+    "restart_caddy":       action_restart_caddy,        # v3.1
     "verify_ui_version":   action_verify_ui_version,
     "get_web_credentials": action_get_web_credentials,
     "set_env":             action_set_env,
