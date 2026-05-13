@@ -4,7 +4,7 @@
 
 ## 📌 当前版本:v3.1.1(2026-05-12)
 
-🚀 **修「git 仓库 Caddyfile 误 commit demo 域名」根因 — 升级时自动清理异地 IP site block**
+🚀 **修「git 仓库 Caddyfile 误 commit demo 域名」根因 + Caddy 自愈 daemon**
 
 | 版本 | 功能 |
 |---|---|
