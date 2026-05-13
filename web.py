@@ -3361,5 +3361,12 @@ def api_diag_sheets_fix_stuck():
 
 if __name__ == "__main__":
     db.init_db()
+    # v3.1: agent caddy self-heal daemon — 每 5 min 自检 TLS,失败 docker restart caddy
+    try:
+        import agent
+        agent.start_caddy_self_heal_in_thread()
+        logger.info("[v3.1] caddy_self_heal daemon 已启动")
+    except Exception as e:
+        logger.warning("[v3.1] caddy_self_heal 启动失败 (不阻塞 web): %s", e)
     print("🌐 登录管理介面启动: http://localhost:5001")
     app.run(host="0.0.0.0", port=5001, debug=False)
