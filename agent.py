@@ -23,6 +23,7 @@ from __future__ import annotations
 import hmac
 import hashlib
 import json
+import logging
 import os
 import shutil
 import socket
@@ -31,6 +32,10 @@ import time
 from pathlib import Path
 
 import database as db
+
+# v3.1.2.1 P0-1 修复:caddy_self_heal_loop 和其他日志调用都用这个 logger;
+# 之前模块顶部没声明,daemon 启动即 NameError。
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -287,22 +292,42 @@ def action_upgrade(params: dict) -> tuple[bool, dict]:
     if not repo.exists():
         repo = Path(__file__).parent
 
+    # v3.1.2.1 P0-3 fix:tag 和 branch 走不同 checkout 路径。
+    # 老代码用 `git reset --hard origin/<target>`,但 git tag 不存在 `origin/<tag>`
+    # 这个 ref(只有 branch 才有),Codex 复现 `git rev-parse origin/v3.0.16` 失败。
+    # tag → `git checkout --detach <tag>`(读 refs/tags/<tag>)
+    # branch → 仍走老的 `checkout + reset --hard origin/<branch>`
+    import re as _re_internal
+    is_tag = bool(_re_internal.match(r'^v\d', target))
+
     if dry_run:
         path = "container_git" if shutil.which("git") else "alpine_container"
         return True, {"target": target, "repo": str(repo), "method": path,
-                       "would_run": "git fetch + checkout main + reset --hard + bash update.sh"}
+                       "is_tag": is_tag,
+                       "would_run": (
+                           f"git fetch --tags + git checkout --detach {target} + bash update.sh"
+                           if is_tag else
+                           f"git fetch + git checkout {target} + git reset --hard origin/{target} + bash update.sh"
+                       )}
 
     # ---- 路径 1:容器内有 git ----
     if shutil.which("git"):
         env = os.environ.copy()
         env["NO_INTERACTIVE"] = "1"
         steps = []
-        cmds = [
-            ["git", "-C", str(repo), "fetch", "--tags", "--prune"],
-            ["git", "-C", str(repo), "checkout", target],
-            ["git", "-C", str(repo), "reset", "--hard", f"origin/{target}"],
-            ["bash", str(repo / "update.sh")],
-        ]
+        if is_tag:
+            cmds = [
+                ["git", "-C", str(repo), "fetch", "--tags", "--prune"],
+                ["git", "-C", str(repo), "checkout", "--detach", target],
+                ["bash", str(repo / "update.sh")],
+            ]
+        else:
+            cmds = [
+                ["git", "-C", str(repo), "fetch", "--tags", "--prune"],
+                ["git", "-C", str(repo), "checkout", target],
+                ["git", "-C", str(repo), "reset", "--hard", f"origin/{target}"],
+                ["bash", str(repo / "update.sh")],
+            ]
         for cmd in cmds:
             try:
                 r = subprocess.run(cmd, capture_output=True, timeout=480, env=env,
@@ -314,11 +339,14 @@ def action_upgrade(params: dict) -> tuple[bool, dict]:
                     "stderr_tail": r.stderr.decode("utf-8", "ignore")[-500:],
                 })
                 if r.returncode != 0:
-                    return False, {"steps": steps, "failed_at": cmd[0], "method": "container_git"}
+                    return False, {"steps": steps, "failed_at": cmd[0], "method": "container_git",
+                                    "is_tag": is_tag}
             except subprocess.TimeoutExpired:
                 steps.append({"cmd": " ".join(cmd), "error": "timeout 8min"})
-                return False, {"steps": steps, "failed_at": cmd[0], "method": "container_git"}
+                return False, {"steps": steps, "failed_at": cmd[0], "method": "container_git",
+                                "is_tag": is_tag}
         return True, {"target": target, "method": "container_git", "steps": steps,
+                       "is_tag": is_tag,
                        "new_version": _read_version_string()}
 
     # ---- 路径 2:容器内无 git → 起临时 alpine 容器 ----
@@ -329,13 +357,20 @@ def action_upgrade(params: dict) -> tuple[bool, dict]:
     try:
         import docker as docker_sdk
         client = docker_sdk.from_env()
+        # v3.1.2.1 P0-3 fix:tag 走 --detach,branch 走 reset --hard origin/
+        if is_tag:
+            checkout_seq = f"git checkout --detach {target}"
+        else:
+            checkout_seq = (
+                f"(git checkout {target} 2>/dev/null || git checkout -B {target} origin/{target}); "
+                f"git reset --hard origin/{target}"
+            )
         script = (
             f"set -e; "
             f"apk add --no-cache --quiet git bash docker-cli docker-cli-compose >/dev/null 2>&1; "
             f"cd /repo; "
             f"git fetch --tags --prune; "
-            f"git checkout {target} 2>/dev/null || git checkout -B {target} origin/{target}; "
-            f"git reset --hard origin/{target}; "
+            f"{checkout_seq}; "
             f"bash update.sh"
         )
         out_bytes = client.containers.run(

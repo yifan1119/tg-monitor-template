@@ -58,6 +58,10 @@ echo ""
 
 # ===== 0. Caddyfile 异地 IP site block 清理(v3.1.2:提前到最前面,
 #         避免 「无需升级」直接 exit 时漏跑 self-heal)=====
+# v3.1.2.1 P0-2 fix:加 command -v python3 检查 — 之前硬依赖 python3,
+# 客户 VPS 没 python3 (alpine / 极简 ubuntu) 时升级会在 git fetch 前断。
+# 现在没 python3 → 打 warning 跳过 self-heal,客户照样能升级。
+#
 # 历史 bug:f300f64 那次 git add -A 把 demo VPS 的 multi.187.77.157.220.nip.io
 # 误 commit 进 git。客户 git pull 拉到 → Caddy 反复试给非本机 IP 签证书 → 卡死。
 # 即使 sha 相等(代码无需更新),也要扫一遍清掉历史脏 block。
@@ -68,10 +72,22 @@ if [ -f Caddyfile ]; then
         BAD_HOSTS=$(grep -oE '\b[a-zA-Z0-9-]+\.[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.nip\.io\b' Caddyfile 2>/dev/null \
             | grep -vF ".${MY_IP_PRECHECK}.nip.io" | sort -u || true)
         if [ -n "$BAD_HOSTS" ]; then
-            echo "⚠ 检测到 Caddyfile 含异地 IP site block (历史 commit 遗留),清理中..."
+            echo "⚠ 检测到 Caddyfile 含异地 IP site block (历史 commit 遗留)"
             echo "$BAD_HOSTS" | sed 's/^/    /'
-            cp Caddyfile Caddyfile.bak.$(date +%s) 2>/dev/null
-            python3 - <<PYEOF > /tmp/Caddyfile.cleaned 2>/dev/null
+            # v3.1.2.1 P0-2 round 2:双重检测 python3 — `command -v` 只防"没装",不防
+            # "装了但崩"(Codex 提醒)。再加 `python3 -c 'pass'` 验证真能跑。
+            # 配合 `|| true` + `set +e/-e` 包住,避免 set -e 在 python3 内部 fail 时
+            # 整段 exit。
+            PYTHON_OK=0
+            if command -v python3 >/dev/null 2>&1; then
+                set +e
+                python3 -c "pass" >/dev/null 2>&1 && PYTHON_OK=1
+                set -e
+            fi
+            if [ "$PYTHON_OK" = "1" ]; then
+                cp Caddyfile Caddyfile.bak.$(date +%s) 2>/dev/null
+                set +e
+                python3 - <<PYEOF > /tmp/Caddyfile.cleaned 2>/dev/null
 import re
 content = open("Caddyfile").read()
 bad_hosts = """$BAD_HOSTS""".strip().splitlines()
@@ -81,16 +97,25 @@ for host in bad_hosts:
     content = re.sub(re.escape(host) + r'\s*\{[^}]*\}\n?', '', content, flags=re.DOTALL)
 print(content, end='')
 PYEOF
-            cat /tmp/Caddyfile.cleaned > Caddyfile  # > 保 inode
-            echo "  ✅ 已清理 — restart caddy 让 inode 重 attach"
-            # 找到对应 caddy 容器 restart(自家或共享)
-            for cn in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^tg-caddy-'); do
-                if docker exec "$cn" grep -qF "$(basename $(pwd))" /etc/caddy/Caddyfile 2>/dev/null \
-                   || [ "$cn" = "tg-caddy-${COMPANY_NAME}" ]; then
-                    docker restart "$cn" >/dev/null 2>&1 && echo "  ✅ restarted $cn"
-                    break
+                set -e
+                if [ -s /tmp/Caddyfile.cleaned ]; then
+                    cat /tmp/Caddyfile.cleaned > Caddyfile  # > 保 inode
+                    echo "  ✅ 已清理 — restart caddy 让 inode 重 attach"
+                    # 找到对应 caddy 容器 restart(自家或共享)
+                    for cn in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^tg-caddy-'); do
+                        if docker exec "$cn" grep -qF "$(basename $(pwd))" /etc/caddy/Caddyfile 2>/dev/null \
+                           || [ "$cn" = "tg-caddy-${COMPANY_NAME}" ]; then
+                            docker restart "$cn" >/dev/null 2>&1 && echo "  ✅ restarted $cn"
+                            break
+                        fi
+                    done
+                else
+                    echo "  ⚠ Caddyfile 清理失败 (python3 输出为空) — 跳过 self-heal,不阻塞升级"
                 fi
-            done
+            else
+                echo "  ⚠ python3 不可用 — 跳过 Caddyfile self-heal,不阻塞升级"
+                echo "     (异地 IP block 仍在 Caddyfile,升级后请手动 vim 删除然后 docker restart tg-caddy-${COMPANY_NAME})"
+            fi
         fi
     fi
 fi
@@ -102,57 +127,88 @@ echo "📥 检查远端版本..."
 git fetch origin --tags
 OLD_SHA=$(git rev-parse HEAD)
 OLD_SHORT=$(git rev-parse --short HEAD)
-REMOTE_SHA=$(git rev-parse origin/main)
-REMOTE_SHORT=$(git rev-parse --short origin/main)
 
-if [ "$OLD_SHA" = "$REMOTE_SHA" ]; then
-    # v2.10.24: 即使代码是最新,也要检查容器是否缺失。
-    # 如果 tg-monitor / tg-web 任一容器不存在(可能被 docker rm 清过),跳过 pull 但继续重建。
-    # 避免客户误删容器后跑 update.sh 被「已是最新版」误导不知道下一步。
-    MISSING=""
-    for c in "tg-monitor-${COMPANY_NAME}" "tg-web-${COMPANY_NAME}"; do
-        if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${c}$"; then
-            MISSING="${MISSING} ${c}"
-        fi
-    done
+# v3.1.2.1 P0-3 fix:agent 用 git checkout --detach <tag> 切到 tag 后调 update.sh,
+# 这种情况 HEAD 是 detached 不在 main branch。老逻辑会强制 checkout main + reset --hard
+# origin/main → 把刚才切到的 tag 拉回 main,tag 升级失效。
+#
+# 探测 detached HEAD:`git symbolic-ref -q HEAD` 在 detached 时返回非 0。
+# detached → 设 SKIP_GIT_REMOTE_SYNC=1,跳过远端比对 + git reset,只走容器重建。
+SKIP_GIT_REMOTE_SYNC=""
+if ! git symbolic-ref -q HEAD >/dev/null 2>&1; then
+    DETACHED_TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "")
+    if [ -n "$DETACHED_TAG" ]; then
+        echo "  📌 当前 HEAD detached 在 tag ${DETACHED_TAG} (agent 升级到指定 tag)"
+        echo "     跳过 git remote sync + 强制容器重建(tag checkout 已改所有 host 文件,"
+        echo "     web.py-only NEED_REBUILD 检测不够覆盖)"
+        SKIP_GIT_REMOTE_SYNC=1
+        NEW_SHA="$OLD_SHA"
+        NEW_SHORT="$OLD_SHORT"
+        echo "$OLD_SHA" > .last_commit
+        SKIP_CODE_PULL=1   # 跳过老的 git reset 路径(下面 stash + checkout main + reset --hard 都跳)
+    fi
+fi
 
-    # v3.0.29: 即使 sha 相等 + 容器都在,也要 sanity check「容器内 image 是不是基于当前
-    # git 的内容 build 的」。检测方法:容器内 /app/web.py 跟 host /app/repo/web.py 不一致
-    # → 说明 docker compose up 没真 rebuild image,跳过 exit 走 force rebuild。
-    # 修「sha 相等但 image 没 rebuild」根因 — 之前的 v3.0.13/14/15/26/27/28 升级失败
-    # 大多卡在这里。
-    NEED_REBUILD=0
-    if [ -z "$MISSING" ]; then
-        for c in "tg-web-${COMPANY_NAME}"; do
-            if ! docker exec "$c" diff /app/web.py /app/repo/web.py >/dev/null 2>&1; then
-                NEED_REBUILD=1
-                echo "  ⚠ 容器 ${c} 内 web.py 跟 host 不一致 → 需要 rebuild image"
-                break
+# v3.1.2.1 P0-3 round 3:detached HEAD on tag 路径下完全跳过「OLD_SHA = REMOTE_SHA」
+# 检查 + 「已是最新版 exit 0」分支。Codex round 3 抓出:之前把 REMOTE_SHA = OLD_SHA
+# 让脚本进入"已是最新版"分支,NEED_REBUILD 只 diff web.py,如果 tag 升级只改了
+# agent.py / 模板 / 文案 → web.py 一样 → exit 0 静默不重建,升级失效。
+#
+# detached 路径 = SKIP_GIT_REMOTE_SYNC=1 + SKIP_CODE_PULL=1 → 直接 fall through 到
+# 容器重建步骤(本文件后面的 docker compose up --build),不再做 sha 对比。
+if [ -z "$SKIP_GIT_REMOTE_SYNC" ]; then
+    REMOTE_SHA=$(git rev-parse origin/main)
+    REMOTE_SHORT=$(git rev-parse --short origin/main)
+
+    if [ "$OLD_SHA" = "$REMOTE_SHA" ]; then
+        # v2.10.24: 即使代码是最新,也要检查容器是否缺失。
+        # 如果 tg-monitor / tg-web 任一容器不存在(可能被 docker rm 清过),跳过 pull 但继续重建。
+        # 避免客户误删容器后跑 update.sh 被「已是最新版」误导不知道下一步。
+        MISSING=""
+        for c in "tg-monitor-${COMPANY_NAME}" "tg-web-${COMPANY_NAME}"; do
+            if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${c}$"; then
+                MISSING="${MISSING} ${c}"
             fi
         done
-    fi
 
-    if [ -z "$MISSING" ] && [ "$NEED_REBUILD" = "0" ]; then
-        echo ""
-        echo "ℹ 当前已是最新版 (${OLD_SHORT}),容器内代码也已同步,无需升级"
-        exit 0
-    elif [ -z "$MISSING" ]; then
-        # NEED_REBUILD=1:sha 相等但容器代码旧
-        echo ""
-        echo "ℹ 代码最新 (${OLD_SHORT}) 但容器内代码旧,触发 image 重建..."
-        NEW_SHA="$OLD_SHA"
-        NEW_SHORT="$OLD_SHORT"
-        echo "$OLD_SHA" > .last_commit
-        SKIP_CODE_PULL=1
-    else
-        echo ""
-        echo "ℹ 当前代码已是最新 (${OLD_SHORT}),但检测到容器缺失:${MISSING}"
-        echo "  跳过 git pull,继续重建容器..."
-        NEW_SHA="$OLD_SHA"
-        NEW_SHORT="$OLD_SHORT"
-        echo "$OLD_SHA" > .last_commit
-        # 跳到重建步骤,不走 git stash / git reset 流程
-        SKIP_CODE_PULL=1
+        # v3.0.29: 即使 sha 相等 + 容器都在,也要 sanity check「容器内 image 是不是基于当前
+        # git 的内容 build 的」。检测方法:容器内 /app/web.py 跟 host /app/repo/web.py 不一致
+        # → 说明 docker compose up 没真 rebuild image,跳过 exit 走 force rebuild。
+        # 修「sha 相等但 image 没 rebuild」根因 — 之前的 v3.0.13/14/15/26/27/28 升级失败
+        # 大多卡在这里。
+        NEED_REBUILD=0
+        if [ -z "$MISSING" ]; then
+            for c in "tg-web-${COMPANY_NAME}"; do
+                if ! docker exec "$c" diff /app/web.py /app/repo/web.py >/dev/null 2>&1; then
+                    NEED_REBUILD=1
+                    echo "  ⚠ 容器 ${c} 内 web.py 跟 host 不一致 → 需要 rebuild image"
+                    break
+                fi
+            done
+        fi
+
+        if [ -z "$MISSING" ] && [ "$NEED_REBUILD" = "0" ]; then
+            echo ""
+            echo "ℹ 当前已是最新版 (${OLD_SHORT}),容器内代码也已同步,无需升级"
+            exit 0
+        elif [ -z "$MISSING" ]; then
+            # NEED_REBUILD=1:sha 相等但容器代码旧
+            echo ""
+            echo "ℹ 代码最新 (${OLD_SHORT}) 但容器内代码旧,触发 image 重建..."
+            NEW_SHA="$OLD_SHA"
+            NEW_SHORT="$OLD_SHORT"
+            echo "$OLD_SHA" > .last_commit
+            SKIP_CODE_PULL=1
+        else
+            echo ""
+            echo "ℹ 当前代码已是最新 (${OLD_SHORT}),但检测到容器缺失:${MISSING}"
+            echo "  跳过 git pull,继续重建容器..."
+            NEW_SHA="$OLD_SHA"
+            NEW_SHORT="$OLD_SHORT"
+            echo "$OLD_SHA" > .last_commit
+            # 跳到重建步骤,不走 git stash / git reset 流程
+            SKIP_CODE_PULL=1
+        fi
     fi
 fi
 
@@ -395,10 +451,18 @@ if [ -f Caddyfile ]; then
             echo ""
             echo "⚠ 发现 Caddyfile 含**不属于本机 IP** 的 nip.io site block (历史 commit 遗留 bug):"
             echo "$BAD_HOSTS" | sed 's/^/    /'
-            echo "  → 自动清理(防 Caddy 续证书卡死)..."
-            # 用 awk 跳过这些 block 整段(从 host { 到对应的 } 或 # === end ... ===)
-            cp Caddyfile Caddyfile.bak.$(date +%s)
-            python3 - <<PYEOF > /tmp/Caddyfile.cleaned
+            # v3.1.2.1 P0-2 round 2:同顶部段,双重检测 python3
+            PYTHON_OK_2=0
+            if command -v python3 >/dev/null 2>&1; then
+                set +e
+                python3 -c "pass" >/dev/null 2>&1 && PYTHON_OK_2=1
+                set -e
+            fi
+            if [ "$PYTHON_OK_2" = "1" ]; then
+                echo "  → 自动清理(防 Caddy 续证书卡死)..."
+                cp Caddyfile Caddyfile.bak.$(date +%s)
+                set +e
+                python3 - <<PYEOF > /tmp/Caddyfile.cleaned
 import re, sys
 content = open("Caddyfile").read()
 bad_hosts = """$BAD_HOSTS""".strip().splitlines()
@@ -414,8 +478,17 @@ for host in bad_hosts:
         '', content, flags=re.DOTALL)
 print(content, end='')
 PYEOF
-            cat /tmp/Caddyfile.cleaned > Caddyfile   # > redirect 保 inode
-            echo "  ✅ 已清理"
+                set -e
+                if [ -s /tmp/Caddyfile.cleaned ]; then
+                    cat /tmp/Caddyfile.cleaned > Caddyfile   # > redirect 保 inode
+                    echo "  ✅ 已清理"
+                else
+                    echo "  ⚠ 清理失败 (python3 输出为空),跳过不阻塞升级"
+                fi
+            else
+                echo "  ⚠ python3 不可用 — 跳过 Caddyfile self-heal,不阻塞升级"
+                echo "     (升级后请手动清理: vim Caddyfile 删除异地 host 段 + docker restart tg-caddy-${COMPANY_NAME})"
+            fi
         fi
     fi
 fi
