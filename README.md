@@ -2,12 +2,13 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1.1(2026-05-12)
+## 📌 当前版本:v3.1.2(2026-05-13)
 
-🚀 **修「git 仓库 Caddyfile 误 commit demo 域名」根因 + Caddy 自愈 daemon**
+🚀 **修「sha 相等时漏跑 Caddyfile self-heal」corner case**
 
 | 版本 | 功能 |
 |---|---|
+| **v3.1.2** | 🔴 **修 v3.1.1 self-heal corner case**:之前 5.5 节放在 `git fetch` 之后,如果 sha 相等 + 容器代码已同步 → exit 0 直接退,**self-heal 不跑**。但客户 Caddyfile 里的 multi 脏 block 仍在(因为 git pull 之前就在了)。修法:**把 self-heal 移到第 0 节**(`git fetch` 之前),无条件先跑一次清理,然后再做其他流程。同时强制 restart 对应 caddy 容器让 inode 重 attach。 |
 | **v3.1.1** | 🔴 **修「客户升级后 TLS 卡死」真根因**:git 仓库 Caddyfile 末尾误 commit 了 `multi.187.77.157.220.nip.io`(demo VPS 的子域名,`f300f64` 那次 `git add -A` 副作用),所有客户 git pull 拉到 → Caddy 试给这个非本机 IP 的域名签证书 → Let's Encrypt 验证失败 → 整张 caddy TLS 卡死,**合法域名证书也续不下来**。修法:① 删 git 仓库 Caddyfile 误配 block ② update.sh 加 self-heal:扫 Caddyfile 找含 nip.io 但 IP 跟本机不一致的 site block 自动删(用 cat redirect 保 bind-mount inode)③ 客户跑一次 update.sh 自动清理。 |
 | **v3.1** | 🩹 **Caddy self-heal daemon** — agent 加 `caddy_self_heal_loop`(web.py 启动时自启线程):每 5 min HTTPS self-test,失败立刻 `docker restart tg-caddy-<dept>`(走 docker SDK 不依赖 Caddy 反代)。冷却 10 min 防 rapid loop,5 次自愈失败放弃 + log。+ 加 `restart_caddy` action 中央台 fleet UI 也能远程触发(只在 caddy 没完全挂时有用)。可在 `.env CADDY_SELF_HEAL_ENABLED=false` 关。 |
 | **v3.0.30** | 🔧 修 v3.0.28 两个 action UX 瑕疵:① `reload_oauth` 改成异步 `threading.Thread` 触发 tg-monitor 重启,立刻返 200 不等 restart 完成(避免 HTTP client 超时)② `fix_sheets` 改成直接 `import dashboard_api` 调 `fix_orphan_messages` / `fix_peers_no_col_group`,绕过 HTTP cookie 鉴权(agent 跟 web.py 同进程,可直接 import) |
