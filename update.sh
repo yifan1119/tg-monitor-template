@@ -56,6 +56,45 @@ echo "  部门: ${COMPANY_NAME}"
 echo "  路径: ${INSTALL_DIR}"
 echo ""
 
+# ===== 0. Caddyfile 异地 IP site block 清理(v3.1.2:提前到最前面,
+#         避免 「无需升级」直接 exit 时漏跑 self-heal)=====
+# 历史 bug:f300f64 那次 git add -A 把 demo VPS 的 multi.187.77.157.220.nip.io
+# 误 commit 进 git。客户 git pull 拉到 → Caddy 反复试给非本机 IP 签证书 → 卡死。
+# 即使 sha 相等(代码无需更新),也要扫一遍清掉历史脏 block。
+if [ -f Caddyfile ]; then
+    MY_IP_PRECHECK=$(grep "^VPS_PUBLIC_IP=" .env 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+    [ -z "$MY_IP_PRECHECK" ] && MY_IP_PRECHECK=$(curl -s --max-time 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    if [ -n "$MY_IP_PRECHECK" ]; then
+        BAD_HOSTS=$(grep -oE '\b[a-zA-Z0-9-]+\.[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.nip\.io\b' Caddyfile 2>/dev/null \
+            | grep -vF ".${MY_IP_PRECHECK}.nip.io" | sort -u || true)
+        if [ -n "$BAD_HOSTS" ]; then
+            echo "⚠ 检测到 Caddyfile 含异地 IP site block (历史 commit 遗留),清理中..."
+            echo "$BAD_HOSTS" | sed 's/^/    /'
+            cp Caddyfile Caddyfile.bak.$(date +%s) 2>/dev/null
+            python3 - <<PYEOF > /tmp/Caddyfile.cleaned 2>/dev/null
+import re
+content = open("Caddyfile").read()
+bad_hosts = """$BAD_HOSTS""".strip().splitlines()
+for host in bad_hosts:
+    if not host: continue
+    content = re.sub(r'# === [^\n]*===\n' + re.escape(host) + r'\s*\{[^}]*\}\n# === end [^\n]*===\n?', '', content, flags=re.DOTALL)
+    content = re.sub(re.escape(host) + r'\s*\{[^}]*\}\n?', '', content, flags=re.DOTALL)
+print(content, end='')
+PYEOF
+            cat /tmp/Caddyfile.cleaned > Caddyfile  # > 保 inode
+            echo "  ✅ 已清理 — restart caddy 让 inode 重 attach"
+            # 找到对应 caddy 容器 restart(自家或共享)
+            for cn in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^tg-caddy-'); do
+                if docker exec "$cn" grep -qF "$(basename $(pwd))" /etc/caddy/Caddyfile 2>/dev/null \
+                   || [ "$cn" = "tg-caddy-${COMPANY_NAME}" ]; then
+                    docker restart "$cn" >/dev/null 2>&1 && echo "  ✅ restarted $cn"
+                    break
+                fi
+            done
+        fi
+    fi
+fi
+
 # ===== 1. 先 fetch 比对远端,已是最新直接退出(不动本地) =====
 echo "📥 检查远端版本..."
 # v3.0.1: --tags 一起 fetch,让驾驶舱能显示「v3.0.0」这种 tag 名字而不是 raw SHA
