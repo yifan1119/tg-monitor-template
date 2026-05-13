@@ -300,18 +300,26 @@ def action_upgrade(params: dict) -> tuple[bool, dict]:
     import re as _re_internal
     is_tag = bool(_re_internal.match(r'^v\d', target))
 
+    # v3.1.3 P0-4 fix:必须 git AND docker 都在容器内,才走 container_git 路径。
+    # 之前只查 git,但 Dockerfile 没装 docker-cli → update.sh 里所有 docker ps /
+    # docker exec / docker compose up 全 fail。fanout 28 台全失败的根因。
+    # 现在缺 docker → fall through 到 alpine fallback 路径(alpine 容器 apk add docker-cli)。
+    have_container_tools = bool(shutil.which("git") and shutil.which("docker"))
+
     if dry_run:
-        path = "container_git" if shutil.which("git") else "alpine_container"
+        path = "container_git" if have_container_tools else "alpine_container"
         return True, {"target": target, "repo": str(repo), "method": path,
                        "is_tag": is_tag,
+                       "container_has_git": bool(shutil.which("git")),
+                       "container_has_docker": bool(shutil.which("docker")),
                        "would_run": (
                            f"git fetch --tags + git checkout --detach {target} + bash update.sh"
                            if is_tag else
                            f"git fetch + git checkout {target} + git reset --hard origin/{target} + bash update.sh"
                        )}
 
-    # ---- 路径 1:容器内有 git ----
-    if shutil.which("git"):
+    # ---- 路径 1:容器内有 git + docker(只有两个都有才走) ----
+    if have_container_tools:
         env = os.environ.copy()
         env["NO_INTERACTIVE"] = "1"
         steps = []
