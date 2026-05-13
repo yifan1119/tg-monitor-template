@@ -124,7 +124,10 @@ fi
 echo "📥 检查远端版本..."
 # v3.0.1: --tags 一起 fetch,让驾驶舱能显示「v3.0.0」这种 tag 名字而不是 raw SHA
 # (dashboard_api.code_version 读 .git/refs/tags/ 找 tag matching HEAD SHA)
-git fetch origin --tags
+# v3.1.3.2: 加 --force + 容错。`git fetch --tags` 默认遇到本地 tag 跟远端不一致(retag 场景)
+# 会拒绝 overwrite 并 exit 1 → set -e 整段退出 → fanout 升级全失败(已踩过这坑)。
+# 加 `--force` 强制 overwrite,加 `|| true` 防本地 git 行为差异(alpine 的 musl git 行为略不同)。
+git fetch origin --tags --force || true
 OLD_SHA=$(git rev-parse HEAD)
 OLD_SHORT=$(git rev-parse --short HEAD)
 
@@ -489,6 +492,51 @@ PYEOF
                 echo "  ⚠ python3 不可用 — 跳过 Caddyfile self-heal,不阻塞升级"
                 echo "     (升级后请手动清理: vim Caddyfile 删除异地 host 段 + docker restart tg-caddy-${COMPANY_NAME})"
             fi
+        fi
+    fi
+fi
+
+# ===== 5.5b Caddyfile upstream 显式化 (v3.1.3.2) =====
+# 背景:历史 Caddyfile 模板第一个 site block 用 {$WEB_UPSTREAM:web:5001} 模糊别名。
+#       一台 VPS 只跑一部门时没事,共用 Caddy 给同 VPS 第二个部门反代时(运维
+#       手动 docker network connect 把 Caddy 拉进第二个 dept 的 network),每个
+#       network 里都有名为 "web" 的容器 → Docker DNS 撞车 → 部门 A 子域被路由到
+#       部门 B 的后端(2026-05-13 线上复现,客户截图同 IP 不同子域显示相同内容)。
+#       详见 ADR-0044。
+# 自愈:两个替换 — 新部署模板的 __COMPANY_NAME__ 占位符 + 老部署的裸 web:5001。
+#       全部替换成显式 tg-web-<部门>:5001,跟 enable_https.sh 加的子部门 site block
+#       写法一致,跨 network 不撞 DNS。
+#       enable_https.sh 加的 site block 本来就显式(tg-web-XXX:5001 含 "web-XXX:5001"
+#       不含 "web:5001" 子串),不会被误伤。
+if [ -f Caddyfile ]; then
+    NEED_UPSTREAM_REWRITE=0
+    if grep -q "__COMPANY_NAME__" Caddyfile 2>/dev/null; then
+        NEED_UPSTREAM_REWRITE=1
+    fi
+    # 用 grep 子串"web:5001"判断是否要改 — 已显式的 tg-web-XXX:5001 含子串
+    # "web-XXX:5001" 不含 "web:5001"(部门名隔开),所以不会误判已显式行。
+    if grep -q "web:5001" Caddyfile 2>/dev/null; then
+        NEED_UPSTREAM_REWRITE=1
+    fi
+    if [ "$NEED_UPSTREAM_REWRITE" = "1" ]; then
+        echo ""
+        echo "🔧 Caddyfile upstream 显式化(防共用 Caddy DNS 撞车,v3.1.3.2)..."
+        cp Caddyfile Caddyfile.bak.upstream.$(date +%s) 2>/dev/null
+        # 两个替换合并到一次 sed,顺序无关:
+        # 1) __COMPANY_NAME__ → 实际部门名(新模板占位符)
+        # 2) 限定 reverse_proxy 行内 web:5001 → tg-web-<部门>:5001。
+        #    BSD/GNU sed 都兼容,不用 \b 或捕获组。已显式 tg-web-XXX:5001 行内含子串
+        #    "web-XXX:5001" 不含 "web:5001",sed 不会误替换。
+        sed -e "s/__COMPANY_NAME__/${COMPANY_NAME}/g" \
+            -e "/reverse_proxy/s|web:5001|tg-web-${COMPANY_NAME}:5001|g" \
+            Caddyfile > /tmp/Caddyfile.upstream
+        if [ -s /tmp/Caddyfile.upstream ]; then
+            cat /tmp/Caddyfile.upstream > Caddyfile   # > redirect 保 inode
+            rm -f /tmp/Caddyfile.upstream
+            echo "  ✅ upstream 已绑定到 tg-web-${COMPANY_NAME}:5001"
+            # section 5.6 后面会做 inode 自愈 + caddy restart,这里不重复 restart
+        else
+            echo "  ⚠ sed 输出为空,跳过(已备份 Caddyfile.bak.upstream.*)"
         fi
     fi
 fi
