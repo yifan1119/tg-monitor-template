@@ -2,12 +2,13 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1(2026-05-12)
+## 📌 当前版本:v3.1.1(2026-05-12)
 
-🚀 **Caddy 自愈 daemon — TLS 故障 5 分钟内自动重启 caddy 容器恢复**
+🚀 **修「git 仓库 Caddyfile 误 commit demo 域名」根因 — 升级时自动清理异地 IP site block**
 
 | 版本 | 功能 |
 |---|---|
+| **v3.1.1** | 🔴 **修「客户升级后 TLS 卡死」真根因**:git 仓库 Caddyfile 末尾误 commit 了 `multi.187.77.157.220.nip.io`(demo VPS 的子域名,`f300f64` 那次 `git add -A` 副作用),所有客户 git pull 拉到 → Caddy 试给这个非本机 IP 的域名签证书 → Let's Encrypt 验证失败 → 整张 caddy TLS 卡死,**合法域名证书也续不下来**。修法:① 删 git 仓库 Caddyfile 误配 block ② update.sh 加 self-heal:扫 Caddyfile 找含 nip.io 但 IP 跟本机不一致的 site block 自动删(用 cat redirect 保 bind-mount inode)③ 客户跑一次 update.sh 自动清理。 |
 | **v3.1** | 🩹 **Caddy self-heal daemon** — agent 加 `caddy_self_heal_loop`(web.py 启动时自启线程):每 5 min HTTPS self-test,失败立刻 `docker restart tg-caddy-<dept>`(走 docker SDK 不依赖 Caddy 反代)。冷却 10 min 防 rapid loop,5 次自愈失败放弃 + log。+ 加 `restart_caddy` action 中央台 fleet UI 也能远程触发(只在 caddy 没完全挂时有用)。可在 `.env CADDY_SELF_HEAL_ENABLED=false` 关。 |
 | **v3.0.30** | 🔧 修 v3.0.28 两个 action UX 瑕疵:① `reload_oauth` 改成异步 `threading.Thread` 触发 tg-monitor 重启,立刻返 200 不等 restart 完成(避免 HTTP client 超时)② `fix_sheets` 改成直接 `import dashboard_api` 调 `fix_orphan_messages` / `fix_peers_no_col_group`,绕过 HTTP cookie 鉴权(agent 跟 web.py 同进程,可直接 import) |
 | **v3.0.29** | 🔴 **修「客户升完容器还是旧版」最后一个根因** — `update.sh` `OLD_SHA == REMOTE_SHA` 时不再直接 exit,增加 sanity check:容器内 `/app/web.py` vs host `/app/repo/web.py` 不一致 → 强制 image rebuild + `--force-recreate`。**这是所有「客户升完 UI 还是旧版」的真根因**。+ docker compose up 永远加 `--force-recreate` 确保 image rebuild 后容器也 recreate。 |

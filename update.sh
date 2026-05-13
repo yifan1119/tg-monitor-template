@@ -336,6 +336,51 @@ if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${CADDY_NAME}$"; t
     fi
 fi
 
+# ===== 5.5 Caddyfile 异地 IP site block 清理 (v3.1.1) =====
+# 背景:历史上 git 仓库 Caddyfile 末尾误 commit 了 demo VPS 的 multi.187.77.157.220.nip.io
+#       site block(`f300f64` 那次 git add -A 副作用)。客户 git pull 拉到这一行,
+#       Caddy 试给这个不属于自己 IP 的域名签 Let's Encrypt → 验证失败 → 整张 caddy
+#       TLS 卡死,自己合法域名也续不下来。
+# 自愈:扫 Caddyfile 每个 nip.io site block,IP 不是本机 IP 的 block 整段删,用
+#       cat > redirect 保 inode(避免 bind-mount inode 断)。
+if [ -f Caddyfile ]; then
+    MY_IP=$(grep "^VPS_PUBLIC_IP=" .env 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+    if [ -z "$MY_IP" ]; then
+        MY_IP=$(curl -s --max-time 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    fi
+    if [ -n "$MY_IP" ]; then
+        # 扫 Caddyfile 找含 nip.io 但 IP 跟本机不一致的 host
+        BAD_HOSTS=$(grep -oE '\b[a-zA-Z0-9-]+\.[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.nip\.io\b' Caddyfile 2>/dev/null \
+            | grep -vF ".${MY_IP}.nip.io" | sort -u || true)
+        if [ -n "$BAD_HOSTS" ]; then
+            echo ""
+            echo "⚠ 发现 Caddyfile 含**不属于本机 IP** 的 nip.io site block (历史 commit 遗留 bug):"
+            echo "$BAD_HOSTS" | sed 's/^/    /'
+            echo "  → 自动清理(防 Caddy 续证书卡死)..."
+            # 用 awk 跳过这些 block 整段(从 host { 到对应的 } 或 # === end ... ===)
+            cp Caddyfile Caddyfile.bak.$(date +%s)
+            python3 - <<PYEOF > /tmp/Caddyfile.cleaned
+import re, sys
+content = open("Caddyfile").read()
+bad_hosts = """$BAD_HOSTS""".strip().splitlines()
+for host in bad_hosts:
+    if not host: continue
+    # 删 "# === xxx ===\n<host> { ... }\n# === end xxx ===" 整段
+    content = re.sub(
+        r'# === [^\n]*===\n' + re.escape(host) + r'\s*\{[^}]*\}\n# === end [^\n]*===\n?',
+        '', content, flags=re.DOTALL)
+    # fallback: 也删 host { ... } 单独 block(没注释包围的)
+    content = re.sub(
+        re.escape(host) + r'\s*\{[^}]*\}\n?',
+        '', content, flags=re.DOTALL)
+print(content, end='')
+PYEOF
+            cat /tmp/Caddyfile.cleaned > Caddyfile   # > redirect 保 inode
+            echo "  ✅ 已清理"
+        fi
+    fi
+fi
+
 # ===== 5.6 Caddy inode 自愈 (v3.0.2) =====
 # 背景: docker file bind mount (./Caddyfile:/etc/caddy/Caddyfile:ro) 按 inode 绑定。
 #       历史上有人用 sed -i / cp / vim 原子替换过 Caddyfile → 新 inode →
