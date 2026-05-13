@@ -13,7 +13,12 @@
 # 前提:VPS 80 / 443 端口对外开放(Let's Encrypt HTTP-01 challenge 用)
 
 {$PUBLIC_DOMAIN} {
-    reverse_proxy {$WEB_UPSTREAM:web:5001} {
+    # v3.1.3.2 改用显式容器名 tg-web-__COMPANY_NAME__:5001 防 DNS 撞车。
+    # 历史「web:5001」别名问题:Caddy 容器一旦接进多个 docker network(共用 Caddy
+    # 给同 VPS 第二个部门反代),每个 network 里都有名为「web」的容器 → Docker DNS
+    # 返回任意一个 → 部门 A 子域被路由到部门 B 的后端(2026-05-13 线上复现)。
+    # __COMPANY_NAME__ 由 install.sh / update.sh 替换成实际部门名。详见 ADR-0044。
+    reverse_proxy {$WEB_UPSTREAM:tg-web-__COMPANY_NAME__:5001} {
         # 透传真实 host,Flask 的 request.host_url 才会拿到外部 host(给 OAuth redirect 用)
         header_up Host {host}
         header_up X-Real-IP {remote}

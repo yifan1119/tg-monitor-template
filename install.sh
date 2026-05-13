@@ -238,6 +238,24 @@ else
     fi
 fi
 
+# v3.1.3.2: Caddyfile 模板 __COMPANY_NAME__ 占位符替换为实际部门名
+# 防共用 Caddy 多部门 DNS 撞车(老 web:5001 别名会被多 network 解析撞)。
+# 用 cat > redirect 保 inode 兼顾「重装」场景(Caddy 容器可能已在跑,sed -i 换 inode
+# 会让 bind mount 断 → 容器读不到新 Caddyfile,Codex P1 fix)。
+if [ -f Caddyfile ] && grep -q "__COMPANY_NAME__" Caddyfile; then
+    sed "s/__COMPANY_NAME__/${COMPANY_NAME}/g" Caddyfile > /tmp/Caddyfile.installed
+    if [ -s /tmp/Caddyfile.installed ]; then
+        cat /tmp/Caddyfile.installed > Caddyfile   # > redirect 保 inode
+        rm -f /tmp/Caddyfile.installed
+        echo "   ✅ Caddyfile upstream 已绑定到 tg-web-${COMPANY_NAME}:5001"
+        # 如果 Caddy 容器已经在跑(重装场景),restart 让新 Caddyfile 生效
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "tg-caddy-${COMPANY_NAME}"; then
+            echo "   📡 检测到 Caddy 已在跑,restart 让新 upstream 生效"
+            docker restart "tg-caddy-${COMPANY_NAME}" >/dev/null 2>&1 || true
+        fi
+    fi
+fi
+
 # 6. 启动（project 名带部门名避免 compose 把同部门跨安装合并）
 # v2.10.14: compose 用了固定 container_name,以前手动 docker run / docker exec 创建的
 #   同名容器会导致 "container name already in use" — 先清掉,避免客户卡在这
