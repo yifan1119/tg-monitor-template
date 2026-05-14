@@ -6,6 +6,7 @@
 """
 import json
 import logging
+import os
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone, timedelta
@@ -223,7 +224,14 @@ def check_once():
 
 
 async def check_and_notify(alert_bot):
-    """调 check_once,若有新版 且 本版本还没推送过 → 推 TG 通知"""
+    """调 check_once,若有新版 且 本版本还没推送过 → 推 TG 通知
+
+    v3.1.3.4: 加 feature flag UPDATE_CHECK_NOTIFY_ENABLED(.env)默认 false。
+    背景:升级统一由我们运维(中央台 fleet fanout)触发,客户群不需要再被
+    「有新版」打扰。check_once 仍然跑(GitHub 状态写到 state 文件供 web
+    后台显示),只是不主动推 TG 通知。客户/运维想恢复:.env 设
+    UPDATE_CHECK_NOTIFY_ENABLED=true。
+    """
     has_update, state = check_once()
     if not has_update:
         return
@@ -231,6 +239,13 @@ async def check_and_notify(alert_bot):
     latest_sha = state.get("latest_sha", "")
     if state.get("last_notified_sha") == latest_sha:
         # 已经推过这个版本的通知了,不再推
+        return
+
+    # v3.1.3.4: 默认不推,运维统一通过中央台 fanout 升级
+    notify_enabled = os.environ.get("UPDATE_CHECK_NOTIFY_ENABLED", "false").lower() == "true"
+    if not notify_enabled:
+        # 仍记录看到了新版(state 给 web 后台用),但不推 TG
+        logger.info(f"new version {latest_sha[:7]} detected but UPDATE_CHECK_NOTIFY_ENABLED=false, skip TG notice")
         return
 
     if alert_bot:

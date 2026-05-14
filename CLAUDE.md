@@ -196,12 +196,14 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 **真实客户 / 部门列表 / 联系人 / VPS 地址** 放在 `.claude/private-notes.md`
 (gitignored,不进 GitHub)。需要时本地查。
 
-## 当前状态(2026-05-13)
+## 当前状态(2026-05-14)
 
-- **WIP v3.1.3.2** — Caddyfile 模板模糊别名 `web:5001` 改成显式 `tg-web-__COMPANY_NAME__:5001`,install.sh / update.sh 替换占位符,update.sh 加 section 5.5b 自愈兼容老模板。2026-05-13 客户线上撞车(同 IP 多部门共用 Caddy → DNS 撞车 → 子域内容串号)修根因。ADR-0044。Codex review 待跑。
-- 同 IP 多部门隐患:全网 45 个部门里 4 处同 IP,1 处已触发并手动修(已加 `git update-index --skip-worktree` 保护),3 处未查潜在埋雷。v3.1.3.2 升级后全部根治。
-- 计划顺序:v3.1.3.2 修 Caddy → 全网升级 v3.1.3.2 → 后续 v3.2.x(.env 审计 / 重置部门按钮 / fleet_health 容器识别 bug / Caddyfile 改目录 mount)
-- main:`v3.1.3.1`(已发布 — 为修复 v3.1.3 retag fanout 失败的小 bump)
+- **WIP v3.1.3.4** — 修两件事:① bash-cache bug(2026-05-14 dev VPS 完整 e2e 实测捞到,Plan/Codex 都没抓出来)— update.sh 顶部加 self-reload bootstrapper;② 升级通知拔掉(`update_checker` 默认 OFF,客户群不再收升级通知,运维统一中央台 fleet 触发)。同时 backport v3.1.3.3 的 5.5b 显式 reload Caddy。ADR-0046。
+- v3.1.3.3 已 revert(PR #37):dev 实测 5.5b reload 段静默不执行,Caddy 用字面 `__COMPANY_NAME__` 占位符当 hostname,web /login 502。bash 启动 update.sh 时 cache 整个文件,git reset 拉新版后 bash 仍按内存里老版跑,新加段不执行。修法见 v3.1.3.4 self-reload bootstrapper。
+- 配套中央台 v0.22(fleet fanout 按 IP 串行)已开 PR #19 待合,跟 v3.1.3.4 同时 ship。
+- ⚠ **升级路径限定**:v3.1.3.4 必须走 fleet fanout(走 agent.upgrade 路径,新启 bash + git 已 reset → bash cache 是新版,不撞 bug),**不要 SSH 手动跑 update.sh**。升完所有客户在 v3.1.3.4 含 self-reload bootstrapper,未来 SSH 升级也安全。
+- 计划顺序:v3.1.3.4 修 → 中央台 v0.22 fanout 串行 → 全网 fanout 升级 → 后续 v3.2.x(.env 审计 / 重置部门按钮 / fleet_health 容器识别 bug)
+- main:`v3.1.3.2`(已发布 + revert v3.1.3.3 = PR #37 之后状态)
 - 之前:`v3.0.13`(已发布 — `update.sh` 共享 Caddy 模式 web 502 自愈,docker network 重连)
 - 之前:`v3.1`(开发中 — Sheet 后台扫描 + 客户删旧消息自动回填空位 — 解决 v3.0.8 append 被 Google 自动检测全表推高行号 + 客户手删无回填的痛点;`peers` migration V6,`write_messages` 双轨,`_sheet_position_resync_loop` 每 15 min `ws.get_all_values` 整张扫;feature flag 默认 ON 可关退 v3.0.9;0 重登 0 数据迁移)
 - 之前:`v3.0.9`(已发布 — 中央台数据接口扩展:23 个 DB 业务字段全暴露给 metrics token,新增 4 个 /api/v1/* 只读 endpoint。**0 新表 0 新字段 0 数据迁移**,200+ 账号不重登)
