@@ -27,6 +27,9 @@ class TaskScheduler:
         self._inspector_cache = {}
         self._INSPECTOR_CACHE_TTL_OK_SEC = 86400
         self._INSPECTOR_CACHE_TTL_FAIL_SEC = 300
+        # v3.1.3.5(ADR-0047): patrol_loop 至少跑过一轮的标志位
+        # _startup_health_loop 启动后 5 分钟检查这个,没 True 就推预警群告警
+        self._first_patrol_done = False
 
     async def start(self):
         self._running = True
@@ -45,6 +48,7 @@ class TaskScheduler:
             self._alert_backfill_loop(),      # v2.10.24.2: 预警分页历史空白回填巡检
             self._alert_writeback_loop(),     # v2.10.24.3: 预警分页整行缺失无限重试(ADR-0010)
             self._sheet_position_resync_loop(),  # v3.1 (ADR-0027): peers.next_sheet_row 后台扫描
+            self._startup_health_loop(),      # v3.1.3.5 (ADR-0047): 启动 5min 自检 patrol_loop 跑过没
         )
 
     async def stop(self):
@@ -417,9 +421,14 @@ class TaskScheduler:
 
         v2.10.24.1: sync_headers 从跟随 PATROL_INTERVAL 改成独立节流
         (SYNC_HEADERS_INTERVAL_SEC,默认 600s),保护 Google Sheets 读配额。
+
+        v3.1.3.5(ADR-0047): 启动加 INFO log + 每轮成功后 set self._first_patrol_done,
+        让 _startup_health_loop 5 分钟自检 patrol_loop 是否真的跑过。
         """
         # 启动后等一会儿再开始巡检
         await asyncio.sleep(30)
+        logger.info("[patrol_loop] 启动,interval=%ds(每轮:sync_headers/sync_account_names/bus_sync/enforce_sheet_tab/ensure_alert_tabs/ensure_account_tabs/check_deleted)",
+                    config.PATROL_INTERVAL)
         # v2.10.24.1(Codex P1 修复): 时间戳式节流,避免 sync_headers 异常时 counter 卡住
         # → 下一轮 60s 再试 → 429 自我循环。用 monotonic 记上次运行时间,异常也会更新。
         _last_sync_headers_at = 0.0
@@ -492,6 +501,8 @@ class TaskScheduler:
                                 self.sheets.mark_deleted_in_sheet(ws, m)
             except Exception as e:
                 logger.error("巡检失败: %s", e)
+            # v3.1.3.5(ADR-0047): 标记本轮完成,_startup_health_loop 用来自检
+            self._first_patrol_done = True
             await asyncio.sleep(config.PATROL_INTERVAL)
 
     async def _no_reply_loop(self):
@@ -949,3 +960,48 @@ class TaskScheduler:
                     await self.bot.send_daily_report()
             except Exception as e:
                 logger.error("日报发送失败: %s", e)
+
+    async def _startup_health_loop(self):
+        """v3.1.3.5(ADR-0047): 启动 5 分钟自检 patrol_loop 是否被 spawn 并进入主循环。
+
+        2026-05-14 全网巡检发现 42/62 dept 容器 Up healthy 但 patrol_loop 实际没起
+        (telegram flood wait 卡 pull_history → TaskScheduler 不被 spawn,跟 main.py 异步化
+        修法配合)。这个 loop 是「最后一道防线」 — 如果由于代码 bug 或其他卡死
+        patrol_loop 5 分钟内一次都没进入主循环,推预警群让运维知道。
+
+        只检查一次(不循环) — 启动后 5 分钟内 patrol_loop 没起就告警。
+        正常情况:patrol_loop 启动 30s 延迟 + 第一轮跑完 < 60s ≈ 1.5 分钟内 self._first_patrol_done=True。
+
+        v3.1.3.5(Codex P1):告警限流 — 写文件标志 `data/.startup_health_alerted`,1 小时内
+        重启不重发,防 docker restart loop 时刷屏预警群。
+        """
+        await asyncio.sleep(300)  # 5 分钟
+        if self._first_patrol_done:
+            logger.info("[startup_health] patrol_loop 5 分钟内已正常跑过,健康")
+            return
+        # patrol_loop 5 分钟没跑 → 告警(带去重)
+        import os
+        ALERT_DEDUP_FILE = "/app/data/.startup_health_alerted"
+        ALERT_DEDUP_TTL = 3600  # 1 小时内不重发
+        try:
+            if os.path.exists(ALERT_DEDUP_FILE):
+                age = time.time() - os.path.getmtime(ALERT_DEDUP_FILE)
+                if age < ALERT_DEDUP_TTL:
+                    logger.warning("[startup_health] patrol_loop 未运行,但 %.0fs 前已告警过,跳过(防 crash loop 刷屏)", age)
+                    return
+        except Exception as e:
+            logger.warning("[startup_health] 去重文件检查失败,继续告警: %s", e)
+
+        msg = "⚠ tg-monitor 启动 5 分钟内 patrol_loop 未运行 — 业务循环可能卡住,请检查 docker logs"
+        logger.error("[startup_health] %s", msg)
+        try:
+            if self.bot and self.bot.bot and config.ALERT_GROUP_ID:
+                await self.bot.bot.send_message(config.ALERT_GROUP_ID, msg)
+            # 推送成功才写去重文件,失败下次启动还会再试
+            try:
+                with open(ALERT_DEDUP_FILE, "w") as f:
+                    f.write(str(int(time.time())))
+            except Exception as e:
+                logger.warning("[startup_health] 去重文件写失败(下次重启会重发): %s", e)
+        except Exception as e:
+            logger.error("[startup_health] 告警推送失败: %s", e)

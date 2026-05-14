@@ -2,12 +2,13 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1.3.4(2026-05-14)
+## 📌 当前版本:v3.1.3.5(2026-05-14)
 
-🛡 **v3.1.3.4:升级流程根治 bash 缓存陷阱 + 升级通知拔掉** — Plan/Codex 都没抓到,dev VPS 完整 e2e 实测捞到的 bug:bash 启动 update.sh 时 cache 整个文件,git reset 拉新版后 bash 仍按内存里老版跑,新加段静默不执行(2026-05-14 v3.1.3.3 实测 web /login 502,已 revert PR #37)。修法:① update.sh 顶部加 self-reload bootstrapper(检测自身 hash 落后 → exec 重启 bash 重新载入新版)② v3.1.3.3 5.5b reload 段 backport 进来(Caddyfile 改完显式 reload Caddy,if/else 不吞错)③ update_checker 加 feature flag 默认 OFF(客户群不再收升级通知,运维统一中央台 fleet 触发)。⚠ 这版**必须走 fleet fanout 升级**(走 agent.upgrade 路径绕开 bash cache),不要 SSH 手动跑;升完之后未来 SSH 升级也安全。详见 [ADR-0046](docs/adr/0046-v3.1.3.4-bash-cache-fix-and-disable-update-notify.md)。
+🛡 **v3.1.3.5:数据同步双向 race 修 + pull_history 异步化(2 个 P0 + 1 个监控)** — 2026-05-14 全网巡检捞出 2 个严重 P0:① 客户在 web 后台填的归属(operator/company/inspector_tg_id)被 sync_headers 每 600s Sheet→DB 单向覆盖清空(实测全网 18 dept 中招,跟 v3.0.15 引入的 DB→Sheet 双向打架);② 全网 42/62 dept 容器 Up healthy 但 patrol_loop 没启动(`pull_history` 阻塞 TaskScheduler.run,telegram flood wait 卡几小时 → 4 大业务功能全停摆)。修法:① `sheets._sync_one_account_headers` 加「Sheet 空 + DB 有值跳过」保护(8 行);② `main.py pull_history` 改 `asyncio.create_task` 异步 fire-and-forget(+done_callback 防异常吞);③ 加 `_startup_health_loop` 5 分钟自检告警(patrol_loop 没起 → 推预警群)。0 数据迁移 / 0 schema 变 / 0 配置变。详见 [ADR-0047](docs/adr/0047-v3.1.3.5-sync-race-fix-and-pull-history-async.md)。
 
 | 版本 | 功能 |
 |---|---|
+| **v3.1.3.4** | 🛡 升级流程根治 bash 缓存陷阱 + 升级通知拔掉 — bash 启动 update.sh 时 cache 整个文件,git reset 拉新版后 bash 仍按内存里老版跑,新加段静默不执行。修法:update.sh 顶部加 self-reload bootstrapper + v3.1.3.3 5.5b reload backport + update_checker 默认 OFF。详见 [ADR-0046](docs/adr/0046-v3.1.3.4-bash-cache-fix-and-disable-update-notify.md) |
 | **v3.1.3.2** | 🔴 共用 Caddy 模式 DNS 撞车根治 — Caddyfile 模板用模糊别名 `web:5001`,共用 Caddy 给同 VPS 第二个部门反代时 Docker DNS 撞车,部门 A 子域被路由到部门 B 后端。修法:模板改 `tg-web-__COMPANY_NAME__:5001` 占位符,install/update 替换部门名 + update.sh section 5.5b 自愈兼容老模板保 inode。详见 [ADR-0044](docs/adr/0044-v3.1.3.2-caddyfile-explicit-upstream.md) |
 | ~~v3.1.3.3~~ | ⛔ 已 revert(PR #37):dev VPS 实测捞到 bash-cache bug,5.5b reload 不执行,升级后 web 502。修法见 v3.1.3.4 |
 | **v3.1.3.1** | 🚀 为修复 v3.1.3 retag 引发的 fanout 失败而推的小 bump(无新代码,仅 README 版本号刷新) |

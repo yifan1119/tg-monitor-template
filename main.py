@@ -180,19 +180,41 @@ async def main():
         # unreachable but 保留结构清晰
         return
 
-    # 6. 拉取历史消息
-    logger.info("拉取最近 %d 天历史消息...", config.HISTORY_DAYS)
-    for phone in listener.clients:
-        await listener.pull_history(phone, days=config.HISTORY_DAYS)
+    # 6. 拉取历史消息(v3.1.3.5 ADR-0047:改异步 fire-and-forget,不阻塞 TaskScheduler 启动)
+    # 老路径:这里阻塞等所有号 pull_history 完才往下 → telegram flood wait 触发时
+    # 整段卡几小时 → patrol_loop / listener / bot 永不被 spawn → 客户机器实际 0 业务在跑。
+    # 新路径:背景 task 慢慢跑,主线程立刻起 TaskScheduler / listener / bot 让业务循环跑起来。
+    # 客户实时新消息走 listener 不受影响;补拉历史完成时间不固定但不阻塞业务。
+    async def _bg_pull_all_history():
+        logger.info("[bg_pull_history] 开始背景补拉最近 %d 天历史消息(不阻塞业务循环)", config.HISTORY_DAYS)
+        # v3.1.3.5(Codex P1): list() 防御 — 即使未来某 task 在跑期间增删 client 也不会
+        # RuntimeError: dictionary changed size during iteration。当前 listener.clients 只在
+        # 登录阶段填充,运行时无增删,但成本零的防御加上。
+        for phone in list(listener.clients):
+            try:
+                await listener.pull_history(phone, days=config.HISTORY_DAYS)
+            except Exception as e:
+                logger.warning("[bg_pull_history] phone=%s 失败 (跳过,继续下一个): %s", phone, e)
+        logger.info("[bg_pull_history] 全部账号背景补拉完成")
+
+    _pull_history_task = asyncio.create_task(_bg_pull_all_history())
+    # done_callback 防异常被静默吞掉(rule 19:静默失败必须告警)
+    def _on_pull_done(t):
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            logger.error("[bg_pull_history] 背景任务异常退出: %s", exc, exc_info=exc)
+    _pull_history_task.add_done_callback(_on_pull_done)
 
     # 7. 同步表头（商务人员、所属公司等）
     logger.info("同步 Sheets 表头...")
     sheets.sync_headers()
 
-    # 8. 首次批量写入 Sheets
-    logger.info("首次写入 Sheets...")
+    # 8. 首次 flush 已在 DB 的存量 backlog(v3.1.3.5: 背景 pull_history 还在跑,后续陆续 flush)
+    logger.info("首次 flush 已在 DB 的存量 backlog...")
     count = sheets.flush_pending()
-    logger.info("写入 %d 条历史消息", count)
+    logger.info("flush %d 条已存 backlog 消息(背景 pull_history 还在跑,后续陆续 flush 新拉到的历史)", count)
 
     # 9. 记录启动时间（只对启动后的新消息触发预警）
     from database import TZ_BJ, now_bj

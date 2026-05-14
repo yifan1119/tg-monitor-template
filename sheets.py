@@ -1022,7 +1022,15 @@ class SheetsWriter:
                 continue
 
     def _sync_one_account_headers(self, account):
-        """v2.10.23: sync_headers 单账号逻辑 — 抛异常由 sync_headers 的 try/except 捕获隔离。"""
+        """v2.10.23: sync_headers 单账号逻辑 — 抛异常由 sync_headers 的 try/except 捕获隔离。
+
+        v3.1.3.5(ADR-0047): 修 P0 双向同步互相覆盖 bug。
+        v3.0.15 引入 _sync_account_business_to_sheet (DB→Sheet) 后,Sheet→DB 这条老路径
+        在「Sheet B2/B3 空 + DB 有值」时会把 DB 的 operator/company 清空(用户在 web 后台填了
+        但 Sheet 一直空 → 每 600s sync_headers 跑一轮就清一次),导致客户填的归属周期性消失。
+        修法:Sheet 空(空字符串)时保留 DB 已有值,只在 Sheet 真有内容时回写 DB。
+        客户在 web 后台清空字段的场景由 web PATCH /api/accounts/<id> 直接写 DB,不走这条路径。
+        """
         ws = self.get_or_create_sheet(account)
         if not ws:
             return
@@ -1030,17 +1038,22 @@ class SheetsWriter:
         self._rate_limit()
         header_data = ws.get("A2:B3")
         if header_data:
-            a2_label = header_data[0][0] if len(header_data) > 0 and len(header_data[0]) > 0 else ""
-            operator = header_data[0][1] if len(header_data) > 0 and len(header_data[0]) > 1 else ""
-            company  = header_data[1][1] if len(header_data) > 1 and len(header_data[1]) > 1 else ""
-            # 更新数据库
-            if operator != (account["operator"] or "") or company != (account["company"] or ""):
+            a2_label = (header_data[0][0] if len(header_data) > 0 and len(header_data[0]) > 0 else "").strip()
+            # v3.1.3.5(Codex P1):.strip() 处理 — 客户在 Sheet B2 填空格 " " 不能被当真值
+            operator = (header_data[0][1] if len(header_data) > 0 and len(header_data[0]) > 1 else "").strip()
+            company  = (header_data[1][1] if len(header_data) > 1 and len(header_data[1]) > 1 else "").strip()
+            # v3.1.3.5: Sheet 空 + DB 有值 → 跳过(防双向 race 清 DB);Sheet 真有内容才回写 DB
+            db_op = (account["operator"] or "").strip()
+            db_co = (account["company"] or "").strip()
+            new_op = operator if operator else db_op
+            new_co = company if company else db_co
+            if new_op != db_op or new_co != db_co:
                 db.get_conn().execute(
                     "UPDATE accounts SET operator=?, company=? WHERE id=?",
-                    (operator, company, account["id"])
+                    (new_op, new_co, account["id"])
                 )
                 db.get_conn().commit()
-                logger.info("从 Sheets 同步: 操作人员=%s, 所属公司=%s", operator, company)
+                logger.info("从 Sheets 同步: 操作人员=%s, 所属公司=%s", new_op, new_co)
             # v2.6.4: 同步 A2 label(操作人员标签)
             if a2_label and a2_label != config.OPERATOR_LABEL:
                 try:
