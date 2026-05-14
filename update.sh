@@ -521,7 +521,8 @@ if [ -f Caddyfile ]; then
     if [ "$NEED_UPSTREAM_REWRITE" = "1" ]; then
         echo ""
         echo "🔧 Caddyfile upstream 显式化(防共用 Caddy DNS 撞车,v3.1.3.2)..."
-        cp Caddyfile Caddyfile.bak.upstream.$(date +%s) 2>/dev/null
+        # v3.1.3.3 P1 fix: cp 失败(罕见盘满)加 || true 防 set -e 整段挂
+        cp Caddyfile Caddyfile.bak.upstream.$(date +%s) 2>/dev/null || true
         # 两个替换合并到一次 sed,顺序无关:
         # 1) __COMPANY_NAME__ → 实际部门名(新模板占位符)
         # 2) 限定 reverse_proxy 行内 web:5001 → tg-web-<部门>:5001。
@@ -534,7 +535,47 @@ if [ -f Caddyfile ]; then
             cat /tmp/Caddyfile.upstream > Caddyfile   # > redirect 保 inode
             rm -f /tmp/Caddyfile.upstream
             echo "  ✅ upstream 已绑定到 tg-web-${COMPANY_NAME}:5001"
-            # section 5.6 后面会做 inode 自愈 + caddy restart,这里不重复 restart
+
+            # ===== v3.1.3.3 P0 fix:显式 reload Caddy 让新 upstream 立刻生效 =====
+            # 修 v3.1.3.2 设计漏洞:之前以为 section 5.6 inode 自愈会兜底 restart,
+            # 但 5.6 比 host vs container 文件 size,而 cat > redirect 保 inode
+            # → size 始终一致 → 5.6 永不触发 → Caddy 进程内存仍是老 routes
+            # → DNS 撞车 bug 没修。
+            #
+            # reload exit code 显式判定,不用 `|| true` 吞错(Codex P0 fix:防撒谎日志)。
+            MY_CADDY_5_5B=""
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "tg-caddy-${COMPANY_NAME}"; then
+                MY_CADDY_5_5B="tg-caddy-${COMPANY_NAME}"
+            else
+                MY_DOMAIN_5_5B=$(grep "^PUBLIC_DOMAIN=" .env 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+                if [ -n "$MY_DOMAIN_5_5B" ]; then
+                    for caddy in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^tg-caddy-' || true); do
+                        if docker exec "$caddy" grep -qF "$MY_DOMAIN_5_5B" /etc/caddy/Caddyfile 2>/dev/null; then
+                            MY_CADDY_5_5B="$caddy"
+                            break
+                        fi
+                    done
+                fi
+            fi
+            if [ -n "$MY_CADDY_5_5B" ]; then
+                # 捕获 stdout/stderr 跟 exit code 分开判定 — 不吞错不撒谎日志
+                set +e
+                reload_out_5_5b=$(docker exec "$MY_CADDY_5_5B" caddy reload --config /etc/caddy/Caddyfile 2>&1)
+                reload_rc_5_5b=$?
+                set -e
+                if [ "$reload_rc_5_5b" = "0" ]; then
+                    echo "  ✅ Caddy 已 reload (${MY_CADDY_5_5B})"
+                else
+                    echo "  ⚠ Caddy reload 失败 exit=${reload_rc_5_5b}(${MY_CADDY_5_5B}):"
+                    echo "$reload_out_5_5b" | tail -5 | sed 's/^/      /'
+                    echo "  ⚠ Caddyfile host 端已更新但 Caddy 进程仍跑老配置,请人工排查"
+                fi
+            else
+                # 部门没自家 Caddy 也没识别到共享 Caddy → 本次 5.5b 改写不会即时生效
+                # 这种部门通常是「裸 HTTP 部署」或 v3.0.1 之前老部署,不影响升级流程
+                echo "  ⚠ 未识别到本部门相关的 Caddy 容器,本次 reload 跳过"
+                echo "     (Caddyfile host 端已更新,下次 Caddy 重启或手动 reload 会生效)"
+            fi
         else
             echo "  ⚠ sed 输出为空,跳过(已备份 Caddyfile.bak.upstream.*)"
         fi
