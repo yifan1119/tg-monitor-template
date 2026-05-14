@@ -196,12 +196,12 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 **真实客户 / 部门列表 / 联系人 / VPS 地址** 放在 `.claude/private-notes.md`
 (gitignored,不进 GitHub)。需要时本地查。
 
-## 当前状态(2026-05-14)
+## 当前状态(2026-05-13)
 
-- **WIP v3.1.3.3** — Plan agent + Codex 复审 v3.1.3.2 抓出 2 个 P0:① 改完 Caddyfile 没显式 reload,Caddy 进程内存仍跑老 routes(5.6 inode 自愈不触发因 size 一致);② 中央台 fanout 并发让同 IP 多部门 VPS 共用 Caddy 反复 restart 抖动。修法:update.sh 5.5b 末尾加 if/else 显式 reload + cp || true 防挂;中央台 v0.22 fleet.fanout 加 serialize_by_ip 同 IP 部门串行跨 IP 并发,真实域名 dept 退回并发 + log warning。Codex review 待第二轮(改完后再跑)。ADR-0045。
-- 之前:v3.1.3.2(已 merge main + tag,2026-05-13)— Caddyfile 模板 web:5001 改 tg-web-__COMPANY_NAME__:5001 显式占位符,但 reload 漏写,v3.1.3.3 补
-- 计划顺序:v3.1.3.3 修透 → 全网升级 v3.1.3.3 → 后续 v3.2.x(.env 审计 / 重置部门按钮 / fleet_health 容器识别 bug / setup 精灵 SHEET_ID 空 raise vs silent / Caddyfile 改目录 mount)
-- main:`v3.1.3.2`(已发布,但有 P0 待 v3.1.3.3 补)
+- **WIP v3.1.3.2** — Caddyfile 模板模糊别名 `web:5001` 改成显式 `tg-web-__COMPANY_NAME__:5001`,install.sh / update.sh 替换占位符,update.sh 加 section 5.5b 自愈兼容老模板。2026-05-13 客户线上撞车(同 IP 多部门共用 Caddy → DNS 撞车 → 子域内容串号)修根因。ADR-0044。Codex review 待跑。
+- 同 IP 多部门隐患:全网 45 个部门里 4 处同 IP,1 处已触发并手动修(已加 `git update-index --skip-worktree` 保护),3 处未查潜在埋雷。v3.1.3.2 升级后全部根治。
+- 计划顺序:v3.1.3.2 修 Caddy → 全网升级 v3.1.3.2 → 后续 v3.2.x(.env 审计 / 重置部门按钮 / fleet_health 容器识别 bug / Caddyfile 改目录 mount)
+- main:`v3.1.3.1`(已发布 — 为修复 v3.1.3 retag fanout 失败的小 bump)
 - 之前:`v3.0.13`(已发布 — `update.sh` 共享 Caddy 模式 web 502 自愈,docker network 重连)
 - 之前:`v3.1`(开发中 — Sheet 后台扫描 + 客户删旧消息自动回填空位 — 解决 v3.0.8 append 被 Google 自动检测全表推高行号 + 客户手删无回填的痛点;`peers` migration V6,`write_messages` 双轨,`_sheet_position_resync_loop` 每 15 min `ws.get_all_values` 整张扫;feature flag 默认 ON 可关退 v3.0.9;0 重登 0 数据迁移)
 - 之前:`v3.0.9`(已发布 — 中央台数据接口扩展:23 个 DB 业务字段全暴露给 metrics token,新增 4 个 /api/v1/* 只读 endpoint。**0 新表 0 新字段 0 数据迁移**,200+ 账号不重登)

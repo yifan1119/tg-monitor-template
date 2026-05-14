@@ -2,13 +2,12 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1.3.3(2026-05-14)
+## 📌 当前版本:v3.1.3.2(2026-05-13)
 
-🔴 **v3.1.3.3:让 v3.1.3.2 的 Caddy 修复真生效 + 中央台升级时同 IP 串行** — Plan agent + Codex 复审抓出 v3.1.3.2 两个 P0:① 改完 Caddyfile 没显式 reload,Caddy 进程内存仍跑老 routes;② 中央台 fanout 并发让同 IP 多部门 VPS 上共用 Caddy 反复 restart 抖动 HTTPS。修法:`update.sh` 5.5b 末尾加 if/else 显式 reload(不吞错不撒谎日志)+ `cp || true` 防 set -e 挂;中央台 v0.22 `fleet.fanout` 加 `serialize_by_ip` 同 IP 部门串行跨 IP 并发,真实域名 dept 退回并发 + log warning。详见 [ADR-0045](docs/adr/0045-v3.1.3.3-caddy-reload-explicit.md)。
+🔴 **v3.1.3.2:共用 Caddy 模式 DNS 撞车根治** — Caddyfile 模板用模糊别名 `web:5001`,共用 Caddy 给同 VPS 第二个部门反代时 Docker DNS 撞车,部门 A 子域被路由到部门 B 后端(2026-05-13 线上复现:客户截图同 IP 不同子域显示相同账号列表)。修法:模板改 `tg-web-__COMPANY_NAME__:5001` 占位符,install.sh / update.sh 替换成实际部门名;update.sh 加 section 5.5b 自愈,兼容老 `web:5001` 模板,保 bind-mount inode。详见 [ADR-0044](docs/adr/0044-v3.1.3.2-caddyfile-explicit-upstream.md)。
 
 | 版本 | 功能 |
 |---|---|
-| **v3.1.3.2** | 🔴 共用 Caddy 模式 DNS 撞车根治 — Caddyfile 模板用模糊别名 `web:5001`,共用 Caddy 给同 VPS 第二个部门反代时 Docker DNS 撞车,部门 A 子域被路由到部门 B 后端。修法:模板改 `tg-web-__COMPANY_NAME__:5001` 占位符,install/update 替换部门名 + update.sh section 5.5b 自愈兼容老模板保 inode。详见 [ADR-0044](docs/adr/0044-v3.1.3.2-caddyfile-explicit-upstream.md) |
 | **v3.1.3.1** | 🚀 为修复 v3.1.3 retag 引发的 fanout 失败而推的小 bump(无新代码,仅 README 版本号刷新) |
 | **v3.1.3** | 🔴 **修中央台 fanout upgrade 全失败的真根因**:Dockerfile 只装 `curl procps git`,**没 docker-cli**。agent 跑在 tg-web 容器内,调 `bash update.sh`,update.sh 里 `docker ps / docker exec / docker compose up --build` 全 fail。修法:① `agent.py` action_upgrade 判断改 `git AND docker 都在容器内` 才走 container_git,缺 docker → fall through 到 alpine fallback 路径(alpine 容器 apk add docker-cli 自带)② Dockerfile 装 docker-ce-cli + docker-compose-plugin(future-proof) |
 | **v3.1.2.1** | 🔴 **修 3 个 P0 阻塞 ship 的 bug**(Codex 4 轮独立 review 抓出): ① `agent.py` caddy_self_heal_loop 用未定义 `logger` 启动即 NameError ② `update.sh` 硬依赖 `python3`,客户没装会卡升级 ③ `agent.py` + `update.sh` tag 升级 detached HEAD 路径(老逻辑用不存在的 `origin/<tag>` ref) |
