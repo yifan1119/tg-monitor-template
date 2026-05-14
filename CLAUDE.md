@@ -144,6 +144,62 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 
 **背景**:2026-04-23 线上某 VPS 一台机部署多部门 HTTPS 失败,排查 40 分钟才发现是这个 inode 断裂问题。详见 [ADR-0017](docs/adr/0017-v3.0.2-caddyfile-inode-bind-mount.md)。
 
+### 10. 🔴 Caddyfile / docker-compose 不准用模糊 service alias 作 upstream(硬性规定)
+
+**踩过的坑**:Caddyfile `{$WEB_UPSTREAM:web:5001}` 模糊别名 `web`,共用 Caddy 给同 VPS 第二部门反代时(Caddy 容器接进多个 docker network),每个 network 都有名为 `web` 的容器 → Docker DNS 撞车 → 部门 A 子域被路由到部门 B 后端(2026-05-13 客户截图同 IP 不同子域显示相同账号列表)。
+
+**硬性规定**:**所有 reverse_proxy upstream 必须用显式容器名** `tg-web-${COMPANY_NAME}:5001`,禁用 `web:5001` / `app:8080` 等通用 alias。
+
+详见 [ADR-0044](docs/adr/0044-v3.1.3.2-caddyfile-explicit-upstream.md)。
+
+### 11. 🔴 脚本自我升级必须有 self-reload bootstrapper(硬性规定)
+
+**踩过的坑**:`bash update.sh` 启动时把整个文件 read 进内存(cache),后续 `git reset --hard origin/main` 拉新版 update.sh,但 bash 仍按内存里老版本继续跑 → 老版本没新加段就跳过(2026-05-14 dev VPS 实测 v3.1.3.3 升级后 web 502 因 Caddy 用字面占位符 `__COMPANY_NAME__` DNS 解析失败,Plan/Codex 都没抓出来,只有真实测捞到)。
+
+**硬性规定**:**任何脚本自我升级模式必须在顶部加 self-reload bootstrapper**,先 git fetch + 比对自身 hash,落后立即 exec 重启 bash 让新文件 cache。
+
+详见 [ADR-0046](docs/adr/0046-v3.1.3.4-bash-cache-fix-and-disable-update-notify.md)。
+
+### 12. 🔴 enable_https.sh / 任何"自动追加到 git tracked 文件"必须改 .gitignored 文件 + import(硬性规定)
+
+**踩过的坑**:`enable_https.sh` 直接 `cat >> Caddyfile` 加额外 site block(给同 VPS 后接入部门反代),但 Caddyfile 是 git tracked 文件 → update.sh 跑 `git reset --hard` 拉主仓模板 → **额外 site block 全被冲掉** → Caddy 反代失败 502/TLS 错(2026-05-14 麦小麦 4 台 fanout 升级 2 台撞这条)。
+
+**硬性规定**:运维脚本要追加配置不能 append 到 git 管理的文件,必须:
+- 写到 `.gitignored` 的 `Caddyfile.local` 或 `conf.d/*.caddy`
+- 主 Caddyfile `import Caddyfile.local` 或 `import conf.d/*`
+- update.sh git reset 不会冲掉 .gitignored
+
+或者:update.sh 在 git reset 之前 backup 这些段,reset 之后 append 回。
+
+### 13. 🔴 `git fetch --tags` 永远 `--force || true`(硬性规定)
+
+**踩过的坑**:本地 v3.1.3 tag 跟远端 retag 后不一致,`git fetch --tags` 默认拒绝 overwrite → set -e 整段 update.sh 退出 → 后续步骤(包括 self-reload bootstrapper)都跑不到。
+
+**硬性规定**:任何 update.sh / install.sh / agent / fanout 路径中的 `git fetch --tags` 必须加 `--force || true`,防 retag 阻塞升级。
+
+### 14. 🔴 用 `git update-index --skip-worktree` 前必须考虑后续升级路径(硬性规定)
+
+**踩过的坑**:2026-05-14 下午我手动修客户 VPS 的 Caddyfile 后,加 `git update-index --skip-worktree` 想保护手改不被升级冲走。当晚 fanout 升级 → `git reset --hard` 拒绝执行(`error: Entry 'Caddyfile' not uptodate`)→ 升级失败 → 必须再 SSH 上去 unskip 才能升。
+
+**硬性规定**:**SSH 临时手术修客户 VPS 文件后,不要 skip-worktree**。改用更稳的方式:
+- 把临时手术变成正式 fix(改主仓代码 + 发新版)
+- 或者把改动写到 .env / .gitignored 文件,update.sh 自动迁移
+
+### 15. 🔴 fanout 验证用 git HEAD 不只信脚本返回值(硬性规定)
+
+**踩过的坑**:agent.upgrade 跑 `subprocess.run(["bash", "update.sh"])`,update.sh 内部 `docker compose up --force-recreate` 把 web 容器(agent 自己)杀掉重建 → subprocess 中断 → agent 上报 `bash failed` → fanout 标失败,**但 git 实际 reset 完成 + 升级真的成功了**(self-suicide 假象)。
+
+**硬性规定**:fanout 完成后必须再调一轮 inspect 验证 `git rev-parse HEAD` 是不是目标 commit,**不能只信 fanout response 的 ok 字段**。
+
+### 16. 🔴 跨对话 Claude 不传染记忆(硬性规定)
+
+**踩过的坑**:用户在别对话发 SSH 密码,这对话 Claude 看不到 → 我假设有就出错。
+
+**硬性规定**:**敏感信息(密码 / token / chat_id)统一存固定地方**:
+- 本地 `.claude/private-notes.md`(gitignored)
+- 或 1Password / Bitwarden 等
+- 不要假设 Claude 跨对话能拿到。每个对话独立。
+
 ## 关键决策历史
 
 全部 ADR 见 [`docs/adr/`](docs/adr/README.md)。
