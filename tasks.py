@@ -962,24 +962,31 @@ class TaskScheduler:
                 logger.error("日报发送失败: %s", e)
 
     async def _startup_health_loop(self):
-        """v3.1.3.5(ADR-0047): 启动 5 分钟自检 patrol_loop 是否被 spawn 并进入主循环。
+        """v3.1.3.5(ADR-0047): 启动 15 分钟自检 patrol_loop 是否被 spawn 并进入主循环。
 
         2026-05-14 全网巡检发现 42/62 dept 容器 Up healthy 但 patrol_loop 实际没起
         (telegram flood wait 卡 pull_history → TaskScheduler 不被 spawn,跟 main.py 异步化
         修法配合)。这个 loop 是「最后一道防线」 — 如果由于代码 bug 或其他卡死
-        patrol_loop 5 分钟内一次都没进入主循环,推预警群让运维知道。
+        patrol_loop 15 分钟内一次都没进入主循环,推预警群让运维知道。
 
-        只检查一次(不循环) — 启动后 5 分钟内 patrol_loop 没起就告警。
-        正常情况:patrol_loop 启动 30s 延迟 + 第一轮跑完 < 60s ≈ 1.5 分钟内 self._first_patrol_done=True。
+        只检查一次(不循环) — 启动后 15 分钟内 patrol_loop 没起就告警。
+
+        v3.1.3.5(2026-05-14 fix):阈值 5min → 15min。
+        实测 hengfeng-hf(23 号) + dingfengsw(11 号) 启动期 sheets API 撞 429 配额超限,
+        第一轮 patrol_loop 跑 sheets API + sync_account_names + bus_sync 重试拖到 8-10 分钟
+        → 5 分钟阈值频繁 false positive。15 分钟阈值覆盖大 dept 第一轮极端情况,
+        仍能在 dept 真死时(代码 bug / asyncio task 没 spawn)报警。
+
+        正常情况:patrol_loop 启动 30s 延迟 + 第一轮跑完 1-10 分钟 → self._first_patrol_done=True。
 
         v3.1.3.5(Codex P1):告警限流 — 写文件标志 `data/.startup_health_alerted`,1 小时内
         重启不重发,防 docker restart loop 时刷屏预警群。
         """
-        await asyncio.sleep(300)  # 5 分钟
+        await asyncio.sleep(900)  # 15 分钟(2026-05-14 fix:从 5 分钟改成 15 分钟,适配大 dept)
         if self._first_patrol_done:
-            logger.info("[startup_health] patrol_loop 5 分钟内已正常跑过,健康")
+            logger.info("[startup_health] patrol_loop 15 分钟内已正常跑过,健康")
             return
-        # patrol_loop 5 分钟没跑 → 告警(带去重)
+        # patrol_loop 15 分钟没跑 → 告警(带去重)
         import os
         ALERT_DEDUP_FILE = "/app/data/.startup_health_alerted"
         ALERT_DEDUP_TTL = 3600  # 1 小时内不重发
@@ -992,7 +999,7 @@ class TaskScheduler:
         except Exception as e:
             logger.warning("[startup_health] 去重文件检查失败,继续告警: %s", e)
 
-        msg = "⚠ tg-monitor 启动 5 分钟内 patrol_loop 未运行 — 业务循环可能卡住,请检查 docker logs"
+        msg = "⚠ tg-monitor 启动 15 分钟内 patrol_loop 未运行 — 业务循环可能卡住,请检查 docker logs"
         logger.error("[startup_health] %s", msg)
         try:
             if self.bot and self.bot.bot and config.ALERT_GROUP_ID:
