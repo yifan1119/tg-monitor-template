@@ -56,6 +56,47 @@ echo "  部门: ${COMPANY_NAME}"
 echo "  路径: ${INSTALL_DIR}"
 echo ""
 
+# ===== v3.1.3.4 self-reload bootstrapper =====
+# 修 bash-cache bug:bash 启动时把整个 update.sh 读进内存,后续 git reset 拉新版
+# 时 bash 仍按内存里老版跑,新增段不执行(2026-05-14 dev VPS 实测复现:升 v3.1.3.3
+# 后 5.5b reload 段没跑,Caddy 用字面占位符 502)。
+#
+# 方案:bootstrapper 一进来先 git fetch 比对自身 hash,落后 → checkout origin 上的
+# update.sh + exec 重启自己。新 bash 启动时 cache 的就是新版 update.sh,后续段全跑。
+#
+# `_UPDATE_SH_REENTRY=1` 标志位防无限循环 — exec 之后第二轮跳过 bootstrapper 直接进流程。
+# 整段失败不阻塞升级(走老版兜底,跟 v3.1.3.3 之前行为一致)。
+if [ "${_UPDATE_SH_REENTRY:-0}" != "1" ]; then
+    # v3.1.3.4 Codex P1 fix:加 timeout 15s 防慢网卡 — `timeout` 命令多数 Linux 默认有,
+    # 没有就裸跑(行为退回老版,可接受)。
+    if command -v timeout >/dev/null 2>&1; then
+        _FETCH_CMD="timeout 15 git"
+    else
+        _FETCH_CMD="git"
+    fi
+    set +e
+    $_FETCH_CMD fetch origin --tags --force --quiet 2>/dev/null
+    # 只有当 $0 是真实文件时才比对(防 `curl ... | bash` 入口 $0=bash 命令找不到文件)
+    if [ -f "$0" ]; then
+        REMOTE_HASH=$(git show "origin/main:update.sh" 2>/dev/null | sha256sum 2>/dev/null | awk '{print $1}')
+        LOCAL_HASH=$(sha256sum "$0" 2>/dev/null | awk '{print $1}')
+    else
+        REMOTE_HASH=""; LOCAL_HASH=""
+    fi
+    set -e
+    if [ -n "$REMOTE_HASH" ] && [ -n "$LOCAL_HASH" ] && [ "$REMOTE_HASH" != "$LOCAL_HASH" ]; then
+        echo "🔄 检测到 update.sh 自身有新版,先拉 + exec 重启避免 bash-cache bug..."
+        # 只 checkout update.sh 一个文件(不 reset 整个 repo,主流程后面会做)
+        if git checkout origin/main -- update.sh 2>/dev/null; then
+            export _UPDATE_SH_REENTRY=1
+            echo "   ✅ update.sh 已更新,exec 重启..."
+            exec bash "$0" "$@"
+        else
+            echo "   ⚠ git checkout update.sh 失败,继续按老版本跑(可能漏新增段)"
+        fi
+    fi
+fi
+
 # ===== 0. Caddyfile 异地 IP site block 清理(v3.1.2:提前到最前面,
 #         避免 「无需升级」直接 exit 时漏跑 self-heal)=====
 # v3.1.2.1 P0-2 fix:加 command -v python3 检查 — 之前硬依赖 python3,
@@ -521,7 +562,8 @@ if [ -f Caddyfile ]; then
     if [ "$NEED_UPSTREAM_REWRITE" = "1" ]; then
         echo ""
         echo "🔧 Caddyfile upstream 显式化(防共用 Caddy DNS 撞车,v3.1.3.2)..."
-        cp Caddyfile Caddyfile.bak.upstream.$(date +%s) 2>/dev/null
+        # v3.1.3.4 P1 fix: cp 失败(罕见盘满)加 || true 防 set -e 整段挂
+        cp Caddyfile Caddyfile.bak.upstream.$(date +%s) 2>/dev/null || true
         # 两个替换合并到一次 sed,顺序无关:
         # 1) __COMPANY_NAME__ → 实际部门名(新模板占位符)
         # 2) 限定 reverse_proxy 行内 web:5001 → tg-web-<部门>:5001。
@@ -534,7 +576,43 @@ if [ -f Caddyfile ]; then
             cat /tmp/Caddyfile.upstream > Caddyfile   # > redirect 保 inode
             rm -f /tmp/Caddyfile.upstream
             echo "  ✅ upstream 已绑定到 tg-web-${COMPANY_NAME}:5001"
-            # section 5.6 后面会做 inode 自愈 + caddy restart,这里不重复 restart
+
+            # ===== v3.1.3.4 P0 fix:显式 reload Caddy 让新 upstream 立刻生效 =====
+            # 5.6 inode 自愈靠 host vs container size 不一致才 restart,而 cat > redirect
+            # 保 inode → size 始终一致 → 5.6 永不触发 → Caddy 进程内存仍跑老 routes
+            # → DNS 撞车 bug 修不了。此处显式 reload 保证生效。
+            #
+            # exit code 显式存变量再判定,不用 `|| true` 吞错(防撒谎日志)。
+            MY_CADDY_5_5B=""
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "tg-caddy-${COMPANY_NAME}"; then
+                MY_CADDY_5_5B="tg-caddy-${COMPANY_NAME}"
+            else
+                MY_DOMAIN_5_5B=$(grep "^PUBLIC_DOMAIN=" .env 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+                if [ -n "$MY_DOMAIN_5_5B" ]; then
+                    for caddy in $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^tg-caddy-' || true); do
+                        if docker exec "$caddy" grep -qF "$MY_DOMAIN_5_5B" /etc/caddy/Caddyfile 2>/dev/null; then
+                            MY_CADDY_5_5B="$caddy"
+                            break
+                        fi
+                    done
+                fi
+            fi
+            if [ -n "$MY_CADDY_5_5B" ]; then
+                set +e
+                reload_out_5_5b=$(docker exec "$MY_CADDY_5_5B" caddy reload --config /etc/caddy/Caddyfile 2>&1)
+                reload_rc_5_5b=$?
+                set -e
+                if [ "$reload_rc_5_5b" = "0" ]; then
+                    echo "  ✅ Caddy 已 reload (${MY_CADDY_5_5B})"
+                else
+                    echo "  ⚠ Caddy reload 失败 exit=${reload_rc_5_5b} (${MY_CADDY_5_5B}):"
+                    echo "$reload_out_5_5b" | tail -5 | sed 's/^/      /'
+                    echo "  ⚠ Caddyfile host 端已更新但 Caddy 进程仍跑老配置,请人工排查"
+                fi
+            else
+                echo "  ⚠ 未识别到本部门相关的 Caddy 容器,本次 reload 跳过"
+                echo "     (Caddyfile host 端已更新,下次 Caddy 重启或手动 reload 会生效)"
+            fi
         else
             echo "  ⚠ sed 输出为空,跳过(已备份 Caddyfile.bak.upstream.*)"
         fi
