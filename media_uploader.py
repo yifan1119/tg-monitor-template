@@ -491,9 +491,20 @@ async def forward_to_tg_archive(message, media_type, account_row, peer_name, med
                 central_chat = await _lookup_central_archive_chat_id(company)
                 if central_chat:
                     try:
-                        chat_id = int(central_chat)
+                        cand = int(central_chat)
                     except (ValueError, TypeError):
                         logger.warning("[archive_route] 中央台返非整数 chat_id=%r, fallback 本地", central_chat)
+                    else:
+                        # Codex P1:必须 supergroup/channel(-100xxxxxxxx),否则
+                        # 中央台 admin UI 误配成私聊 / 普通群 → 媒体真发到错误 chat
+                        # → 敏感数据泄漏。校验逻辑跟 is_tg_archive_enabled 同款。
+                        if cand < 0 and str(abs(cand)).startswith("100"):
+                            chat_id = cand
+                        else:
+                            logger.warning(
+                                "[archive_route] 中央台返非 supergroup chat_id=%s "
+                                "(必须 -100 开头),fallback 本地", cand,
+                            )
         except Exception as e:
             logger.warning("[archive_route] lookup 异常,fallback 本地: %s", e)
         if not chat_id:
