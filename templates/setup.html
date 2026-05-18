@@ -941,35 +941,9 @@
       </div>
       {% endif %}{# end mode != 'setup' 守卫(首次部署精灵不显示 SA 拉取段)#}
 
-      {# ============ Service Account 共享指引(v3.1.4 — SA 启用时显示)============ #}
-      {% if d.sa_status and d.sa_status.enabled %}
-      <div style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
-        <div style="background:rgba(126,201,255,0.08);border-left:3px solid #7ec9ff;padding:12px 16px;margin-bottom:14px;border-radius:6px;font-size:13px;line-height:1.8;color:#cfe3f5;">
-          <b style="color:#7ec9ff;">▸ Google Sheets 接入</b>
-          <br>系统已配 Service Account,你只要把这个邮箱加到 Sheet 协作者(编辑权限)就行。
-          <br><b style="color:#9ef0b8;">不用做 Google 授权,不会失效,一次性配好。</b>
-        </div>
-
-        <div style="background:rgba(0,0,0,0.25);padding:14px;border-radius:6px;margin-bottom:14px;">
-          <div style="color:#9eb4c7;font-size:12px;margin-bottom:6px;">把以下邮箱加到 Sheet 协作者(编辑权限):</div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <input type="text" id="saEmail" readonly value="{{ d.sa_status.email }}"
-                   style="flex:1;background:rgba(126,201,255,0.1);border:1px solid rgba(126,201,255,0.4);color:#9ef0b8;padding:8px 12px;border-radius:4px;font-family:'SF Mono','Monaco',monospace;font-size:13px;">
-            <button type="button" class="test-btn" id="copySaEmailBtn"
-                    style="background:rgba(126,201,255,0.2);border-color:rgba(126,201,255,0.6);color:#7ec9ff;padding:8px 16px;">
-              ▸ 复制
-            </button>
-          </div>
-        </div>
-
-        <div style="background:rgba(0,0,0,0.18);padding:12px 16px;border-radius:6px;font-size:12px;line-height:1.9;color:#9eb4c7;">
-          <div style="color:#ffd28a;font-weight:600;margin-bottom:6px;">操作步骤(2 步):</div>
-          <div><b style="color:#7ec9ff;">1.</b> 打开你的 Google Sheet</div>
-          <div><b style="color:#7ec9ff;">2.</b> 右上角「分享 / Share」→ 粘贴上面邮箱 → 选「编辑者 / Editor」→ 取消勾「通知人员」(SA 不收邮件)→ 「发送 / Share」</div>
-          <div style="margin-top:8px;color:#7c8a9a;">完成,无需任何 Google 授权,以后永远不会失效。</div>
-        </div>
-      </div>
-      {% else %}
+      {# v3.1.4: SA 启用时跳过 OAuth 授权块(上面黄色 warning + 点击复制邮箱已足够,
+         旧 Service Account 共享指引蓝框 + 单独复制按钮已删,避免说明重复) #}
+      {% if not (d.sa_status and d.sa_status.enabled) %}
       {# ============ 老 OAuth 授权块(SA 没配时退回 OAuth)============ #}
       {# HTTPS 由 install.sh --https 统一处理,设置页不再让客户操作(减少配置负担) #}
       <div style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
@@ -2360,16 +2334,8 @@ bindPushToggle('toggle_daily_report_enabled', 'daily_report_enabled_status', '/a
     if (ok) { if (btn) btn.textContent = '✓ 已复制'; } else { prompt('复制以下命令:', text); }
   }
 
-  // v3.1.4: SA email 复制按钮
-  (function setupSaCopyBtn() {
-    const btn = document.getElementById('copySaEmailBtn');
-    const inp = document.getElementById('saEmail');
-    if (!btn || !inp) return;
-    btn.addEventListener('click', () => {
-      copyTextFallback(inp.value, btn);
-      setTimeout(() => { btn.textContent = '▸ 复制'; }, 1500);
-    });
-  })();
+  // v3.1.4: SA email 复制按钮(已删 — copySaEmailBtn / saEmail 元素 SA 共享指引区块整段删了,
+  // 改成上面黄色 warning 框里 code 元素点击即复制)
 
   // v3.1.5: 「拉取该中心 SA 配置」按钮 — POST /api/setup/fetch-sa
   (function setupFetchSaBtn() {
