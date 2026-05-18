@@ -1036,7 +1036,7 @@
           {% else %}
             <!-- 兼容老模式:中央台未配置 → 退回手填 -->
             <input type="text" id="nc_company"
-                   placeholder="例 运营中心 / 瑞升-运营中心"
+                   placeholder="例 运营中心 / xxx-运营中心"
                    style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;box-sizing:border-box;">
             <div style="margin-top:4px;color:#7c8a9a;font-size:10px;line-height:1.5;">
               💡 中央台没连上时显示输入框。接通后会自动变成下拉(数据从中央台「预警路由」拉)。
@@ -1128,9 +1128,9 @@ async function openNotifyConfig(accountId, accountName) {
       document.getElementById('nc_company').value = j.company || '';
       document.getElementById('nc_inspector_tg_id').value = j.inspector_tg_id || '';
       // v3.0.15.1: 双下拉模式 — 把老数据 company 拆回公司 / 中心两 select
-      // 例: company="瑞升-运营中心" → 公司=瑞升, 中心=运营中心
+      // 例: company="xxx-运营中心" → 公司=xxx, 中心=运营中心
       // 例: company="运营中心"     → 公司=空,   中心=运营中心
-      // 例: company="瑞升运营"     → 公司=瑞升, 中心=运营中心(endswith 智能识别)
+      // 例: company="xxx运营"     → 公司=xxx, 中心=运营中心(endswith 智能识别)
       const companySel = document.getElementById('nc_company_company');
       const centerSel = document.getElementById('nc_company_center');
       if (companySel || centerSel) {

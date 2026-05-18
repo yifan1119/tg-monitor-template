@@ -10,7 +10,7 @@
 
 | 部门 | 中断时长 | 影响 |
 |---|---|---|
-| 麦小麦 / yunying-yp | ~5 分钟(下午修 DNS 撞车 SSH 期间) | 客户 web 后台 502,无业务损失 |
+| 麦小麦 / <dept-A> | ~5 分钟(下午修 DNS 撞车 SSH 期间) | 客户 web 后台 502,无业务损失 |
 | 麦小麦 / linghang-qd@72.62.120.146 | 数小时(下午撞车 → 客户登入领航后台实际看到极乐数据) | 监察员看错部门数据,无外事号丢失 |
 | 麦小麦 / linghang-qd@76.13.196.103 | ~4 小时(v3.1.3.3 升完后 Caddy 用字面占位符 502) | 客户 web 后台无法访问 |
 | 全网其他 44 部门 | 0 | 没人在 v3.1.3.3 那短窗口手动 SSH 升级 |
@@ -21,7 +21,7 @@
 
 ### 坑 1:Caddyfile 模板模糊别名 `web:5001` 跨 network 撞 DNS
 
-**症状**:同一台 VPS 上两个部门 web 后台 URL 不同但显示完全相同账号列表(yunying-yp 显示 ruisheng-yy 数据)。
+**症状**:同一台 VPS 上两个部门 web 后台 URL 不同但显示完全相同账号列表(<dept-A> 显示 <dept-B> 数据)。
 
 **根因**:Caddyfile 用 `{$WEB_UPSTREAM:web:5001}`,Caddy 容器接进多个 docker network 时,每个 network 都有名为 `web` 的容器,Docker DNS 撞车。
 
@@ -57,7 +57,7 @@
 
 ### 坑 4:`git update-index --skip-worktree` 阻止 `git reset --hard`
 
-**症状**:今天下午我手动修 yunying-yp / linghang-qd@72.62.120.146 的 Caddyfile 后,加了 `git update-index --skip-worktree Caddyfile` 防 git reset 冲掉。后续 fanout 升级 git reset 报 `error: Entry 'Caddyfile' not uptodate. Cannot merge`。
+**症状**:今天下午我手动修 <dept-A> / linghang-qd@72.62.120.146 的 Caddyfile 后,加了 `git update-index --skip-worktree Caddyfile` 防 git reset 冲掉。后续 fanout 升级 git reset 报 `error: Entry 'Caddyfile' not uptodate. Cannot merge`。
 
 **根因**:skip-worktree 让 git 索引跟工作区脱钩,git reset --hard 拒绝执行(不愿冒险覆盖)。
 
@@ -69,7 +69,7 @@
 
 ### 坑 5:`git fetch --tags` 撞 retag 拒绝 → set -e 退出
 
-**症状**:ruisheng-yy SSH 跑 update.sh,卡在 `git fetch origin --tags` → `! [rejected] v3.1.3 -> v3.1.3 (would clobber existing tag)` → set -e 整段退出 → 后面 bootstrapper 都跑不到。
+**症状**:<dept-B> SSH 跑 update.sh,卡在 `git fetch origin --tags` → `! [rejected] v3.1.3 -> v3.1.3 (would clobber existing tag)` → set -e 整段退出 → 后面 bootstrapper 都跑不到。
 
 **根因**:本地 v3.1.3 tag 跟远端 retag 后不一致,git fetch --tags 默认拒绝 overwrite。
 
@@ -200,12 +200,12 @@
 
 | 部门 | git | 中央台串接 | 客户业务 |
 |---|---|---|---|
-| jileyinqing-qd@72.62.120.146 | v3.1.3.4 ✓ | 全维度 ✓ | 正常 |
+| <dept-E>@72.62.120.146 | v3.1.3.4 ✓ | 全维度 ✓ | 正常 |
 | linghang-qd@72.62.120.146 | v3.1.3.4 ✓ | 全维度 ✓ | 正常 |
-| yunying-yp@72.62.195.172 | v3.1.3.4 ✓ | 全维度 ✓ | 正常 |
-| ruisheng-yy@72.62.195.172 | v3.1.3.4 ✓ | 全维度 ✓ | 正常 |
-| hengfeng-hf@76.13.181.29 | v3.1.3.4 ✓ | 全维度 ✓ | 正常(OAuth 已客户重授) |
-| jileyinqing-yy@76.13.196.103 | v3.1.3.4 ✓ | 全维度 ✓ | 正常 |
+| <dept-A>@<vps-ip-1> | v3.1.3.4 ✓ | 全维度 ✓ | 正常 |
+| <dept-B>@<vps-ip-1> | v3.1.3.4 ✓ | 全维度 ✓ | 正常 |
+| <dept-C>@76.13.181.29 | v3.1.3.4 ✓ | 全维度 ✓ | 正常(OAuth 已客户重授) |
+| <dept-D>@76.13.196.103 | v3.1.3.4 ✓ | 全维度 ✓ | 正常 |
 | linghang-qd@76.13.196.103 | v3.1.3.4 ✓ | 全维度 ✓ | 正常(OAuth 已客户重授,仅 +85599875613 等 24h flood wait 解除) |
 
 **100% 串好,版本完全统一**。

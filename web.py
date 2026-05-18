@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -266,6 +267,7 @@ def write_env(updates):
         "BOT_TOKEN", "ALERT_GROUP_ID",
         "WEB_PORT", "WEB_PASSWORD",
         "METRICS_TOKEN",
+        "CENTER_SLUG",  # v3.1.5: 所属中心(business/channel/operations/hengfeng),用于自动拉 SA JSON
         "KEYWORDS", "NO_REPLY_MINUTES",
         # v3.0.21: COMPANY_OPTIONS / CENTER_OPTIONS 删 — 账号配置下拉改为中央台 /api/v1/options 实时拉
         "SKIP_NO_REPLY_TEXTS", "SKIP_NO_REPLY_MIN_LEN", "SKIP_NO_REPLY_PURE_EMOJI",  # v3.0.19: 闲聊词白名单 web 配
@@ -362,21 +364,31 @@ def _test_bot_api(token, group_id):
 
 
 def _test_sheets_access(sheet_id):
-    """验证 Google Sheets 访问权限 — 使用当前 OAuth 授权凭证。
-
-    调用前提:调用方已确认 OAuth 已授权(oauth_helper.has_token() 为 True)。
-    若 sheet_id 为空或 OAuth 未授权,请在调用方里处理,本函数不做这类分支。
-    """
+    """验证 Google Sheets 访问权限 — SA 优先,OAuth 兜底。"""
     sheet_id = (sheet_id or "").strip()
     if not sheet_id:
         return False, "Sheet ID 不能为空"
-    try:
-        import oauth_helper
-        creds = oauth_helper.get_credentials()
-        if not creds:
-            return False, "尚未完成 Google 授权,请先在上方点「连接 Google Drive」"
-    except Exception as e:
-        return False, f"获取 OAuth 凭证失败: {e}"
+    # v3.1.4: SA 优先
+    sa_path = config.DATA_DIR / "service_account.json"
+    creds = None
+    if sa_path.exists():
+        try:
+            from google.oauth2 import service_account as gsa
+            creds = gsa.Credentials.from_service_account_file(
+                str(sa_path),
+                scopes=["https://www.googleapis.com/auth/spreadsheets",
+                        "https://www.googleapis.com/auth/drive.file"],
+            )
+        except Exception as e:
+            return False, f"加载 SA 凭证失败: {e}"
+    else:
+        try:
+            import oauth_helper
+            creds = oauth_helper.get_credentials()
+            if not creds:
+                return False, "尚未完成 Google 授权,请先在上方点「连接 Google Drive」"
+        except Exception as e:
+            return False, f"获取 OAuth 凭证失败: {e}"
     try:
         gc = gspread.authorize(creds)
         sp = gc.open_by_key(sheet_id)
@@ -724,6 +736,33 @@ def _inject_app_version():
     return {"app_version": _app_version_string()}
 
 
+# ============================================================
+# CSRF — 简单 session token,给 JSON / fetch 类 mutating API 守关
+# ============================================================
+# 前端模板用 {{ csrf_token() }} 注入到 <meta> 或 window.CSRF_TOKEN,fetch 加 X-CSRF-Token 头。
+import secrets as _secrets_csrf
+
+
+def _get_csrf_token() -> str:
+    """惰性生成 / 取 session 内 csrf token。"""
+    tok = flask_session.get("csrf_token")
+    if not tok:
+        tok = _secrets_csrf.token_hex(16)
+        flask_session["csrf_token"] = tok
+    return tok
+
+
+def _check_csrf() -> bool:
+    expected = flask_session.get("csrf_token") or ""
+    provided = request.headers.get("X-CSRF-Token", "")
+    return bool(expected) and _secrets_csrf.compare_digest(expected, provided)
+
+
+@app.context_processor
+def _inject_csrf_token():
+    return {"csrf_token": _get_csrf_token}
+
+
 # 管理密码（从 .env 读取 WEB_PASSWORD，默认 tg@monitor2026）
 WEB_PASSWORD = os.environ.get("WEB_PASSWORD", "tg@monitor2026")
 
@@ -948,6 +987,8 @@ def setup_page():
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
+        # v3.1.4: SA 模式检测 — data/service_account.json 存在 → 隐藏 OAuth UI 显示 SA 共享指引
+        "sa_status": _get_sa_status(),
         "web_password": env.get("WEB_PASSWORD", DEFAULT_WEB_PASSWORD),
         "keywords": env.get("KEYWORDS", DEFAULT_KEYWORDS),
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
@@ -958,6 +999,10 @@ def setup_page():
         "skip_no_reply_texts": env.get("SKIP_NO_REPLY_TEXTS", ""),
         "skip_no_reply_min_len": env.get("SKIP_NO_REPLY_MIN_LEN", "1"),
         "skip_no_reply_pure_emoji": env.get("SKIP_NO_REPLY_PURE_EMOJI", "true"),
+        # v3.1.5: 所属中心下拉选项(用于自动拉 SA)
+        "center_slug_choices": CENTER_SLUG_CHOICES,
+        "center_slug": env.get("CENTER_SLUG", ""),
+        "central_push_url": (env.get("CENTRAL_PUSH_URL") or os.environ.get("CENTRAL_PUSH_URL") or "").strip(),
     }
     return render_template("setup.html", d=defaults, mode="setup", company=config.COMPANY_DISPLAY)
 
@@ -999,6 +1044,8 @@ def settings_page():
         "oauth_client_id": env.get("GOOGLE_OAUTH_CLIENT_ID", ""),
         "oauth_client_secret": env.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "oauth_status": _get_oauth_status(),
+        # v3.1.4: SA 模式
+        "sa_status": _get_sa_status(),
         "keywords": env.get("KEYWORDS", DEFAULT_KEYWORDS),
         "no_reply_minutes": env.get("NO_REPLY_MINUTES", DEFAULT_NO_REPLY_MINUTES),
         "api_id": env.get("API_ID", DEFAULT_API_ID),
@@ -1038,6 +1085,10 @@ def settings_page():
         "metrics_token": _ensure_metrics_token(env),
         "metrics_access_count_24h": _metrics_access_count(24),
         "metrics_last_access": _metrics_last_access(),
+        # v3.1.5: 所属中心下拉选项(用于自动拉 SA)
+        "center_slug_choices": CENTER_SLUG_CHOICES,
+        "center_slug": env.get("CENTER_SLUG", ""),
+        "central_push_url": (env.get("CENTRAL_PUSH_URL") or os.environ.get("CENTRAL_PUSH_URL") or "").strip(),
     }
     return render_template("setup.html", d=current, mode="settings", company=config.COMPANY_DISPLAY)
 
@@ -1060,6 +1111,44 @@ def _get_oauth_status():
         return {"connected": True, "email": oauth_helper.load_token().get("email", "")}
     except Exception as e:
         return {"connected": False, "email": "", "error": str(e)}
+
+
+def _get_sa_status():
+    """v3.1.4: 返回 Service Account 当前状态给前端展示。
+
+    存在 data/service_account.json → SA 模式生效 → 隐藏 OAuth UI 显示 SA 共享指引。
+    v3.1.5: 同时返回 center_slug(.env CENTER_SLUG),前端下拉默认选中。
+    v3.1.4 Codex P0-2 fix: 校验关键字段(client_email + private_key)缺失 → enabled=false,
+      防 SA 文件半道损坏(网络断连写到一半 / 编辑器破坏 JSON)时前端显示「✓ 已配」误导客户。
+    """
+    try:
+        center_slug = (read_env().get("CENTER_SLUG", "") or "").strip()
+        sa_path = config.DATA_DIR / "service_account.json"
+        if not sa_path.exists():
+            return {"enabled": False, "email": "", "center_slug": center_slug}
+        import json
+        sa = json.loads(sa_path.read_text())
+        if not isinstance(sa, dict):
+            return {"enabled": False, "email": "", "center_slug": center_slug, "error": "sa_json_invalid_type"}
+        email = (sa.get("client_email") or "").strip()
+        priv = (sa.get("private_key") or "").strip()
+        if not email or not priv:
+            # 文件存在但关键字段缺 — 视为 SA 损坏,不当成「已配」
+            return {"enabled": False, "email": email, "center_slug": center_slug,
+                    "error": "sa_json_missing_fields"}
+        return {"enabled": True, "email": email, "center_slug": center_slug}
+    except Exception as e:
+        return {"enabled": False, "email": "", "center_slug": "", "error": str(e)}
+
+
+# v3.1.5: 所属中心白名单 — 与中央台 /api/v1/sa/<slug> 路径对齐
+CENTER_SLUG_CHOICES = [
+    ("business",   "商务中心"),
+    ("channel",    "渠道中心"),
+    ("operations", "运营中心"),
+    ("hengfeng",   "恒丰公司"),
+]
+CENTER_SLUG_WHITELIST = {slug for slug, _ in CENTER_SLUG_CHOICES}
 
 
 def _oauth_redirect_uri():
@@ -1130,6 +1219,166 @@ def api_drive_auto_create_folder():
     except Exception as e:
         logger.warning(f"reload config 失败(不影响): {e}")
     return jsonify({"ok": True, "folder_id": folder_id, "created": True})
+
+
+@app.route("/api/setup/fetch-sa", methods=["POST"])
+def api_setup_fetch_sa():
+    """v3.1.5: 从中央台拉 Service Account JSON 自动写入 data/service_account.json。
+
+    工作流:
+    1. 前端 POST 一个 center_slug(business/channel/operations/hengfeng)
+    2. 后端用 .env CENTRAL_PUSH_URL 推导出中央台 base url,带 metrics_token 调
+       GET /api/v1/sa/<center_slug>
+    3. 中央台返 {"ok": true, "sa_email": "...", "sa_json": {...完整 JSON...}}
+    4. 已有 SA 文件 → 备份成 service_account.json.bak.<ts>
+    5. 写新 SA JSON
+    6. 持久化 CENTER_SLUG 到 .env
+    7. 重启 tg-monitor 容器让它读新 SA
+
+    鉴权:
+    - setup 模式(未完成首次设置)→ 不要求登录(setup 页本来就不要求登录)
+    - settings 模式(已完成)→ 要求 admin(防普通成员替换 SA)
+    """
+    # 鉴权:已 setup 完成时强制 admin + CSRF;setup 模式放行(精灵未登录态没 csrf)
+    if is_setup_complete():
+        if not flask_session.get("authed"):
+            return jsonify({"ok": False, "msg": "需要登录"}), 401
+        if not is_admin(flask_session.get("username", "")):
+            return jsonify({"ok": False, "msg": "需要管理员权限"}), 403
+        if not _check_csrf():
+            return jsonify({"ok": False, "msg": "csrf_invalid"}), 403
+
+    # 取 center_slug(form / json 兼容)
+    payload = request.get_json(silent=True) or {}
+    center_slug = (payload.get("center_slug") or request.form.get("center_slug") or "").strip().lower()
+    if center_slug not in CENTER_SLUG_WHITELIST:
+        return jsonify({"ok": False, "msg": "无效的中心,允许:" + ",".join(sorted(CENTER_SLUG_WHITELIST))}), 400
+
+    # 取中央台 URL + token
+    # v3.1.4 fix (2026-05-18): 改用 METRICS_TOKEN(dept 自己的 token,中央台按 departments.metrics_token 反查)
+    # 之前误用 CENTRAL_PUSH_TOKEN — 那是 bot 调 /api/v1/push_alert 用的全网共享 token,
+    # 跟 /api/v1/sa/<center> 的鉴权(dept 个体 token)是不同的域,一个变量当两件事必撞。
+    env = read_env()
+    central_url = (env.get("CENTRAL_PUSH_URL") or os.environ.get("CENTRAL_PUSH_URL") or "").strip()
+    metrics_token = (
+        env.get("METRICS_TOKEN")
+        or os.environ.get("METRICS_TOKEN")
+        or ""
+    ).strip()
+    if not central_url:
+        return jsonify({"ok": False, "msg": "需要先配中央台对接(.env CENTRAL_PUSH_URL 为空)"}), 400
+    if not metrics_token:
+        return jsonify({"ok": False, "msg": "未配置 CENTRAL_PUSH_TOKEN"}), 400
+
+    # CENTRAL_PUSH_URL 形如 http://host:5070/api/v1/push_alert → 取掉末段 → /api/v1/sa/<slug>
+    # v3.1.4 Codex P0-1 fix: 先 rstrip 防客户填 .../push_alert/(末尾斜杠)拼出错的 base
+    base = central_url.rstrip("/").rsplit("/", 1)[0]  # http://host:5070/api/v1
+    sa_url = f"{base}/sa/{center_slug}"
+
+    # 拉 SA JSON
+    try:
+        import urllib.request as _ureq
+        req = _ureq.Request(sa_url, method="GET",
+                            headers={"Authorization": f"Bearer {metrics_token}"})
+        with _ureq.urlopen(req, timeout=10) as r:
+            status = r.status
+            body = r.read().decode("utf-8")
+        if status == 200:
+            data = json.loads(body)
+        else:
+            return jsonify({"ok": False, "msg": f"中央台返回 HTTP {status}"}), 502
+    except urllib.error.HTTPError as e:
+        # 鉴权 / 不存在等(v3.1.4 P0+1 fix: 401/403 区分)
+        if e.code == 401:
+            return jsonify({"ok": False, "msg": "鉴权失败,检查 .env CENTRAL_PUSH_TOKEN(或 dept 没在中央台 departments 表登记)"}), 401
+        if e.code == 403:
+            # 中央台 P0-1 安全防护:dept 只能拉自己 center 的 SA,跨 center 拒绝
+            try:
+                body = e.read().decode("utf-8")
+                msg403 = json.loads(body).get("error") or "禁止跨中心拉 SA"
+            except Exception:
+                msg403 = "禁止跨中心拉 SA"
+            return jsonify({"ok": False, "msg": f"{msg403} — 请选你这个部门所属的中心"}), 403
+        if e.code == 404:
+            return jsonify({"ok": False, "msg": f"中央台未配置该中心({center_slug})的 SA,联系运维"}), 404
+        return jsonify({"ok": False, "msg": f"中央台返回 HTTP {e.code}"}), 502
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return jsonify({"ok": False, "msg": f"拉取失败(网络/超时): {e}"}), 502
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"拉取失败: {e}"}), 500
+
+    if not data.get("ok"):
+        return jsonify({"ok": False, "msg": f"中央台返 ok=false: {data.get('msg') or data}"}), 502
+    sa_json = data.get("sa_json")
+    sa_email = (data.get("sa_email") or "").strip()
+    if not sa_json or not isinstance(sa_json, dict):
+        return jsonify({"ok": False, "msg": "中央台返回缺少 sa_json"}), 502
+
+    # 写文件 — 先写 .tmp,再 os.replace 原子 rename(POSIX 保证不会留半截文件)
+    # 老 SA 备份保留 — 但用 hardlink 不动原文件,新 SA 失败也不会丢老 SA
+    sa_path = config.DATA_DIR / "service_account.json"
+    tmp_path = sa_path.with_suffix(".json.tmp")
+    backup_path = None
+    chmod_warning = None
+    try:
+        import time as _time
+        # 备份(只有当前存在时):rename 老的到 .bak.<ts>,新 SA 走 tmp → replace
+        if sa_path.exists():
+            backup_path = config.DATA_DIR / f"service_account.json.bak.{int(_time.time())}"
+            # 先 copy 到 backup(保留原文件),写完新 SA 再考虑要不要保留 backup
+            import shutil as _shutil
+            _shutil.copy2(str(sa_path), str(backup_path))
+        # 写 tmp
+        tmp_path.write_text(json.dumps(sa_json, indent=2, ensure_ascii=False), encoding="utf-8")
+        # 原子替换
+        os.replace(str(tmp_path), str(sa_path))
+        # chmod 失败 → fail-loud 给前端(但 SA 已经写入,不算 fatal)
+        try:
+            sa_path.chmod(0o600)  # SA private_key 敏感,锁权限
+        except Exception as _ce:
+            chmod_warning = f"chmod 600 失败: {_ce}(SA 已写入,建议手动 chmod 600 {sa_path})"
+            logger.warning(f"[fetch-sa] {chmod_warning}")
+    except Exception as e:
+        # tmp 已写入但 replace 没成 → 清理 tmp,原 sa_path 文件不动(原子保证)
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+        return jsonify({"ok": False, "msg": f"写 service_account.json 失败: {e}"}), 500
+
+    # 持久化 center_slug 到 .env(下次 setup 页下拉默认选中)
+    try:
+        write_env({"CENTER_SLUG": center_slug})
+    except Exception as e:
+        logger.warning(f"[fetch-sa] 写 CENTER_SLUG 到 .env 失败(不影响 SA 文件): {e}")
+
+    # 重启 tg-monitor 让它读新 SA(setup 阶段容器可能还没起,失败不算 fatal)
+    restarted = False
+    restart_msg = ""
+    try:
+        ok_r, msg_r = _start_tg_monitor()
+        restarted = bool(ok_r)
+        restart_msg = msg_r or ""
+    except Exception as e:
+        restart_msg = f"重启 tg-monitor 失败(可能容器还没起,setup 完成后会自动建): {e}"
+
+    # 从落盘的 SA 文件里读 client_email 兜底(防中央台没返 sa_email)
+    sa_email_final = sa_email or (sa_json.get("client_email") if isinstance(sa_json, dict) else "") or ""
+
+    base_msg = "SA 已写入,tg-monitor 已重启" if restarted else "SA 已写入(tg-monitor 未重启,可手动重启)"
+    if chmod_warning:
+        base_msg = base_msg + " · ⚠ " + chmod_warning
+    return jsonify({
+        "ok": True,
+        "sa_email": sa_email_final,
+        "center_slug": center_slug,
+        "backed_up": backup_path.name if backup_path else None,
+        "restarted": restarted,
+        "restart_msg": restart_msg,
+        "chmod_warning": chmod_warning,  # 前端可单独展示
+        "msg": base_msg,
+    })
 
 
 @app.route("/api/setup/save-oauth-creds", methods=["POST"])
@@ -1425,12 +1674,19 @@ def api_media_cleanup_now():
 
 @app.route("/api/test-sheets", methods=["POST"])
 def api_test_sheets():
-    """测试 Sheet ID 能否用当前 OAuth 凭证访问。
+    """测试 Sheet ID 能否用当前凭证访问(SA 优先,OAuth 兜底)。
     SHEET_ID 为空时直接返回 ok(会在授权后由 /api/sheets/auto-create 自动建)。"""
     sheet_id = (request.form.get("sheet_id") or "").strip()
     if not sheet_id:
         return jsonify({"ok": True, "msg": "Sheet ID 留空 — 将在 Google 授权后自动建一份"})
-    # SHEET_ID 已填 → 必须已授权才能验证
+    # v3.1.4: SA 模式优先 — SA 文件存在直接测,不查 OAuth
+    sa_path = config.DATA_DIR / "service_account.json"
+    if sa_path.exists():
+        ok, msg = _test_sheets_access(sheet_id)
+        if not ok and "permission" in msg.lower():
+            msg = f"❌ SA 没权限访问这个 Sheet。请把 SA 邮箱加到 Sheet 协作者(编辑权限)再试。原始错误:{msg}"
+        return jsonify({"ok": ok, "msg": msg})
+    # 老 OAuth 路径
     try:
         import oauth_helper
         if not oauth_helper.has_token():

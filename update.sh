@@ -103,7 +103,7 @@ fi
 # 客户 VPS 没 python3 (alpine / 极简 ubuntu) 时升级会在 git fetch 前断。
 # 现在没 python3 → 打 warning 跳过 self-heal,客户照样能升级。
 #
-# 历史 bug:f300f64 那次 git add -A 把 demo VPS 的 multi.187.77.157.220.nip.io
+# 历史 bug:f300f64 那次 git add -A 把 demo VPS 的 multi.<demo-vps-ip>.nip.io
 # 误 commit 进 git。客户 git pull 拉到 → Caddy 反复试给非本机 IP 签证书 → 卡死。
 # 即使 sha 相等(代码无需更新),也要扫一遍清掉历史脏 block。
 if [ -f Caddyfile ]; then
@@ -476,7 +476,7 @@ if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${CADDY_NAME}$"; t
 fi
 
 # ===== 5.5 Caddyfile 异地 IP site block 清理 (v3.1.1) =====
-# 背景:历史上 git 仓库 Caddyfile 末尾误 commit 了 demo VPS 的 multi.187.77.157.220.nip.io
+# 背景:历史上 git 仓库 Caddyfile 末尾误 commit 了 demo VPS 的 multi.<demo-vps-ip>.nip.io
 #       site block(`f300f64` 那次 git add -A 副作用)。客户 git pull 拉到这一行,
 #       Caddy 试给这个不属于自己 IP 的域名签 Let's Encrypt → 验证失败 → 整张 caddy
 #       TLS 卡死,自己合法域名也续不下来。

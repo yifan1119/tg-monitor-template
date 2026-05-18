@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <title>{{ '首次设置' if mode == 'setup' else '系统设置' }} · TG 监控</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}">
+<script>window.CSRF_TOKEN = "{{ csrf_token() }}";</script>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -833,22 +835,142 @@
     <div class="section">
       <div class="section-title">03 · Google Sheets</div>
       <div class="field">
-        <label>Sheet ID <span style="color:#7c8a9a;font-weight:400;">(首次授权后可自动建,可留空)</span></label>
+        <label>Sheet ID</label>
         <input type="text" name="sheet_id" id="sheet_id" value="{{ d.sheet_id }}"
-               placeholder="留空即可 — OAuth 授权后点「自动建表格」会自动填上">
+               placeholder="把你 Sheet URL 中间那串 ID 粘进来">
         <div class="hint">
+          {% if d.sa_status and d.sa_status.enabled %}
+          自己建一个空 Spreadsheet → 共享给下面 SA 邮箱 → 复制 Sheet 的 ID(URL <code>docs.google.com/spreadsheets/d/<b>[SHEET_ID]</b>/edit</code> 中间那串)→ 粘到这里。
+          {% else %}
           留空 + 完成下方 Google 授权 → 点「自动建表格」即可。
           想用已有表格才手动填,URL 里 <code>docs.google.com/spreadsheets/d/<b>[SHEET_ID]</b>/edit</code> 中间那串就是。
+          {% endif %}
         </div>
+        {% if not (d.sa_status and d.sa_status.enabled) %}
         <button type="button" class="test-btn" id="autoCreateSheetBtn" style="margin-top:8px;background:rgba(126,201,255,0.15);border-color:rgba(126,201,255,0.5);color:#7ec9ff;">
           ▸ 自动建表格(需先完成 Google 授权)
         </button>
+        {% endif %}
         <span class="test-result" id="autoCreateSheetResult"></span>
         <button type="button" class="test-btn" id="testSheetsBtn" style="margin-top:8px;">▸ 测试 Sheet 访问</button>
         <span class="test-result" id="testSheetsResult"></span>
       </div>
 
-      {# ============ OAuth 授权块 ============ #}
+      {# ============ v3.1.5: 所属中心 + 自动拉 SA(仅设置页可见,首次部署精灵藏起来减负)============ #}
+      {% if mode != 'setup' %}
+      <div class="field" style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
+        <label>所属中心
+          <span style="color:#7c8a9a;font-weight:400;">(选定后自动从中央台拉 Service Account 配置)</span>
+        </label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <select id="center_slug_select" name="center_slug"
+                  style="padding:9px 12px;background:#0f1822;color:#cfe3f5;border:1px solid rgba(255,255,255,0.12);border-radius:6px;font-size:14px;min-width:200px;">
+            {% for slug, label in d.center_slug_choices %}
+              <option value="{{ slug }}" {% if d.center_slug == slug %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <button type="button" class="test-btn" id="fetchSaBtn"
+                  {% if not d.central_push_url %}disabled title="需要先配中央台对接(.env CENTRAL_PUSH_URL 为空)"{% endif %}
+                  style="background:rgba(158,240,184,0.15);border-color:rgba(158,240,184,0.55);color:#9ef0b8;">
+            ▸ 拉取该中心 SA 配置
+          </button>
+          <span class="test-result" id="fetchSaResult" style="color:#9eb4c7;"></span>
+        </div>
+        <div class="hint" style="margin-top:8px;">
+          {% if d.sa_status and d.sa_status.enabled %}
+            <span style="color:#9ef0b8;">✓ 当前已配 SA:<code>{{ d.sa_status.email }}</code></span>
+            {% if d.sa_status.center_slug %}
+              (来自 <b>{{ d.sa_status.center_slug }}</b> 中心)
+            {% endif %}
+            <br>切换中心 / 重新拉取 → 老 SA 自动备份成 <code>service_account.json.bak.&lt;时间戳&gt;</code>。
+          {% else %}
+            <span style="color:#ff9b3d;">⚠ 当前未配 SA</span>。选好中心 → 点上面按钮一键拉取,无需手动上传 JSON。
+          {% endif %}
+          {% if not d.central_push_url %}
+            <br><span style="color:#ff6b6b;">⚠ 按钮禁用:.env <code>CENTRAL_PUSH_URL</code> 为空,先在中央台对接里填好。</span>
+          {% endif %}
+        </div>
+
+        {# v3.1.5: SA 共享权限强提示 — 拉了 SA 但还没在 Sheet 给编辑权,SA 写不进去 #}
+        {% if d.sa_status and d.sa_status.enabled %}
+        <div style="margin-top:12px;background:rgba(255,204,0,0.08);border-left:3px solid #ffcc00;
+                    padding:12px 16px;border-radius:6px;font-size:13px;line-height:1.7;color:#ffe7a8;">
+          <b style="color:#ffd700;">⚠ 必须做下一步:把 SA 邮箱加到 Google Sheet 协作者(编辑权限)</b>
+          <br>打开你们的 Google 表单 → 右上角「共享」→ 粘贴
+          <code id="saEmailWarnCode"
+                onclick="copySaEmailWarn(this)"
+                title="点击复制"
+                style="background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:3px;color:#9ef0b8;
+                       font-family:'SF Mono','Monaco',monospace;font-size:12px;cursor:pointer;
+                       border:1px dashed rgba(158,240,184,0.4);">{{ d.sa_status.email }}</code>
+          <span id="saEmailWarnCopied" style="margin-left:6px;color:#9ef0b8;font-size:11px;display:none;">✓ 已复制</span>
+          → 权限选「<b>编辑者</b>」→ 发送(不发通知也行)。
+          <br><span style="color:#ffb86b;">不做这步 SA 拿到凭据也写不进 Sheet。下面有详细共享步骤 + 复制按钮 ↓</span>
+        </div>
+        <script>
+        function copySaEmailWarn(el) {
+          const txt = el.textContent.trim();
+          const flag = document.getElementById('saEmailWarnCopied');
+          const showFlag = () => {
+            flag.style.display = 'inline';
+            setTimeout(() => { flag.style.display = 'none'; }, 1800);
+          };
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(txt).then(showFlag).catch(() => {
+              // 三层 fallback:execCommand → prompt
+              try {
+                const r = document.createRange(); r.selectNode(el);
+                window.getSelection().removeAllRanges();
+                window.getSelection().addRange(r);
+                document.execCommand('copy');
+                showFlag();
+              } catch (e) { window.prompt('复制此邮箱:', txt); }
+            });
+          } else {
+            try {
+              const r = document.createRange(); r.selectNode(el);
+              window.getSelection().removeAllRanges();
+              window.getSelection().addRange(r);
+              document.execCommand('copy');
+              showFlag();
+            } catch (e) { window.prompt('复制此邮箱:', txt); }
+          }
+        }
+        </script>
+        {% endif %}
+      </div>
+      {% endif %}{# end mode != 'setup' 守卫(首次部署精灵不显示 SA 拉取段)#}
+
+      {# ============ Service Account 共享指引(v3.1.4 — SA 启用时显示)============ #}
+      {% if d.sa_status and d.sa_status.enabled %}
+      <div style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
+        <div style="background:rgba(126,201,255,0.08);border-left:3px solid #7ec9ff;padding:12px 16px;margin-bottom:14px;border-radius:6px;font-size:13px;line-height:1.8;color:#cfe3f5;">
+          <b style="color:#7ec9ff;">▸ Google Sheets 接入</b>
+          <br>系统已配 Service Account,你只要把这个邮箱加到 Sheet 协作者(编辑权限)就行。
+          <br><b style="color:#9ef0b8;">不用做 Google 授权,不会失效,一次性配好。</b>
+        </div>
+
+        <div style="background:rgba(0,0,0,0.25);padding:14px;border-radius:6px;margin-bottom:14px;">
+          <div style="color:#9eb4c7;font-size:12px;margin-bottom:6px;">把以下邮箱加到 Sheet 协作者(编辑权限):</div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" id="saEmail" readonly value="{{ d.sa_status.email }}"
+                   style="flex:1;background:rgba(126,201,255,0.1);border:1px solid rgba(126,201,255,0.4);color:#9ef0b8;padding:8px 12px;border-radius:4px;font-family:'SF Mono','Monaco',monospace;font-size:13px;">
+            <button type="button" class="test-btn" id="copySaEmailBtn"
+                    style="background:rgba(126,201,255,0.2);border-color:rgba(126,201,255,0.6);color:#7ec9ff;padding:8px 16px;">
+              ▸ 复制
+            </button>
+          </div>
+        </div>
+
+        <div style="background:rgba(0,0,0,0.18);padding:12px 16px;border-radius:6px;font-size:12px;line-height:1.9;color:#9eb4c7;">
+          <div style="color:#ffd28a;font-weight:600;margin-bottom:6px;">操作步骤(2 步):</div>
+          <div><b style="color:#7ec9ff;">1.</b> 打开你的 Google Sheet</div>
+          <div><b style="color:#7ec9ff;">2.</b> 右上角「分享 / Share」→ 粘贴上面邮箱 → 选「编辑者 / Editor」→ 取消勾「通知人员」(SA 不收邮件)→ 「发送 / Share」</div>
+          <div style="margin-top:8px;color:#7c8a9a;">完成,无需任何 Google 授权,以后永远不会失效。</div>
+        </div>
+      </div>
+      {% else %}
+      {# ============ 老 OAuth 授权块(SA 没配时退回 OAuth)============ #}
       {# HTTPS 由 install.sh --https 统一处理,设置页不再让客户操作(减少配置负担) #}
       <div style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
         <div style="background:rgba(255,77,94,0.08);border-left:3px solid #ff9b3d;padding:12px 16px;margin-bottom:14px;border-radius:6px;font-size:13px;line-height:1.8;color:#cfe3f5;">
@@ -950,6 +1072,7 @@
           </div>
         </div>
       </div>
+      {% endif %}{# end SA/OAuth 二选一 #}
 
       {# ============ v2.10.25(ADR-0014):媒体存储模式 ============ #}
       <div class="field" style="margin-top:20px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:18px;">
@@ -1229,6 +1352,7 @@
           </div>
         </details>
       </div>
+
     </div>
 
     <button type="submit" class="submit-btn" id="submitBtn">
@@ -2236,6 +2360,80 @@ bindPushToggle('toggle_daily_report_enabled', 'daily_report_enabled_status', '/a
     if (ok) { if (btn) btn.textContent = '✓ 已复制'; } else { prompt('复制以下命令:', text); }
   }
 
+  // v3.1.4: SA email 复制按钮
+  (function setupSaCopyBtn() {
+    const btn = document.getElementById('copySaEmailBtn');
+    const inp = document.getElementById('saEmail');
+    if (!btn || !inp) return;
+    btn.addEventListener('click', () => {
+      copyTextFallback(inp.value, btn);
+      setTimeout(() => { btn.textContent = '▸ 复制'; }, 1500);
+    });
+  })();
+
+  // v3.1.5: 「拉取该中心 SA 配置」按钮 — POST /api/setup/fetch-sa
+  (function setupFetchSaBtn() {
+    const btn = document.getElementById('fetchSaBtn');
+    const sel = document.getElementById('center_slug_select');
+    const out = document.getElementById('fetchSaResult');
+    if (!btn || !sel || !out) return;
+
+    btn.addEventListener('click', async () => {
+      const slug = sel.value;
+      if (!slug) {
+        out.style.color = '#ff6b6b';
+        out.textContent = '请先选择所属中心';
+        return;
+      }
+      // 二次确认 — 已有 SA 时切换中心会备份老 SA
+      const saEmailInput = document.getElementById('saEmail');
+      if (saEmailInput && saEmailInput.value) {
+        const ok = confirm(
+          '当前已配 SA:' + saEmailInput.value + '\n\n' +
+          '拉取「' + (sel.options[sel.selectedIndex].text) + '」会覆盖当前 SA(老 SA 会自动备份)。\n\n' +
+          '确定继续吗?'
+        );
+        if (!ok) return;
+      }
+
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '⏳ 拉取中...';
+      out.style.color = '#9eb4c7';
+      out.textContent = '正在从中央台拉取 SA 配置...';
+
+      try {
+        const r = await fetch('/api/setup/fetch-sa', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.CSRF_TOKEN || '' },
+          body: JSON.stringify({ center_slug: slug }),
+        });
+        let j;
+        try { j = await r.json(); } catch (e) { j = { ok: false, msg: 'HTTP ' + r.status + ' 解析失败' }; }
+        if (!j.ok) {
+          out.style.color = '#ff6b6b';
+          out.textContent = '✗ ' + (j.msg || ('失败 HTTP ' + r.status));
+          btn.disabled = false;
+          btn.textContent = origText;
+          return;
+        }
+        out.style.color = '#9ef0b8';
+        let msg = '✓ 成功:' + (j.sa_email || '(SA 已写入)');
+        if (j.backed_up) msg += '(老 SA 已备份)';
+        if (!j.restarted) msg += ' · ⚠ tg-monitor 未重启:' + (j.restart_msg || '可能容器尚未启动');
+        out.textContent = msg;
+        btn.textContent = '✓ 完成,3 秒后刷新';
+        // 刷新页面让 SA 蓝框 / 状态显示更新
+        setTimeout(() => { window.location.reload(); }, 3000);
+      } catch (e) {
+        out.style.color = '#ff6b6b';
+        out.textContent = '✗ 网络错误: ' + String(e);
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
+    });
+  })();
+
   async function doSoftUpgrade(){
     body.innerHTML='<div style="padding:14px;color:#9cc9e8;">启动升级...</div>';
     try{
@@ -2307,6 +2505,7 @@ bindPushToggle('toggle_daily_report_enabled', 'daily_report_enabled_status', '/a
   })();
 })();
 </script>
+
 
 {% include "_lite_mode.html" %}
 </body>

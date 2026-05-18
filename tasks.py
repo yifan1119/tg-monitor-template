@@ -1,6 +1,7 @@
 """定时任务 — 巡检、未回复检查、日报"""
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -108,9 +109,10 @@ class TaskScheduler:
                 logger.warning("昵称同步失败 [%s]: %s", phone, e)
 
     async def _resolve_inspector_display(self, raw_id: str) -> str:
-        """v3.0.15: raw TG ID/username → 友好显示串。
+        """v3.0.15: raw TG ID/username → 友好显示串(v3.1.4 改成 HYPERLINK 可点跳 TG)。
 
-        - "@yifan123" / "yifan123" / "908696841" → "伊凡 (@yifan123123)"  或 "伊凡 (908696841)"
+        - 有 username → =HYPERLINK("https://t.me/<username>", "<name> (@<username>)")
+        - 没 username → 纯文字 "<name> (<id>)"(t.me 不支持 numeric ID)
         - resolve 失败 / listener 没起 → 返 raw_id 原样(兜底,不丢字段)
         """
         raw = (raw_id or "").strip()
@@ -131,8 +133,22 @@ class TaskScheduler:
             name = (first + " " + last).strip()
             if not name:
                 name = uname or raw
-            tag = f"@{uname}" if uname else str(getattr(entity, "id", "") or raw)
-            return f"{name} ({tag})"
+            if uname:
+                # v3.1.4: 有 username → 写成 HYPERLINK 可点跳 t.me
+                # Sheets / Excel 公式字符串字面量里 `"` 用 `""` 转义(防 first_name 含 `"` 跳出闭合)
+                # v3.1.4 Codex P0-3 fix: 顺手过滤换行/制表符 + 截 200(防破公式 / 撞 50000 字面量上限)
+                import re as _re
+                def _esc(s):
+                    s = _re.sub(r'[\r\n\t]', ' ', s or '')[:200]
+                    return s.replace('"', '""')
+                label = f'{name} (@{uname})'
+                return f'=HYPERLINK("https://t.me/{_esc(uname)}","{_esc(label)}")'
+            else:
+                # 没 username → 纯文字(t.me 不支持 numeric ID,无法跳转)
+                # 同样过滤控制字符防破单元格
+                import re as _re
+                name_clean = _re.sub(r'[\r\n\t]', ' ', name or '')[:200]
+                return f"{name_clean} ({entity.id})"
         except Exception as e:
             logger.debug("[bus_sync] resolve inspector_tg_id=%s 失败: %s", raw, e)
             return raw  # 兜底原样
@@ -278,7 +294,14 @@ class TaskScheduler:
                 for cell, val in updates:
                     self.sheets._rate_limit()
                     try:
-                        ws.update_acell(cell, val)
+                        # v3.1.4: B4 inspector 写 =HYPERLINK 公式可点跳 t.me
+                        # USER_ENTERED 让 Google 解析公式;B2/B3 纯文字也兼容
+                        from gspread.utils import absolute_range_name
+                        ws.spreadsheet.values_update(
+                            absolute_range_name(ws.title, cell),
+                            params={"valueInputOption": "USER_ENTERED"},
+                            body={"values": [[val]]},
+                        )
                         write_count += 1
                     except Exception as e:
                         logger.warning("[bus_sync] %s update %s 失败: %s", tab_name, cell, e)

@@ -2,9 +2,19 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1.3.5(2026-05-14)
+## 📌 当前版本:v3.1.4(2026-05-18)
 
-🛡 **v3.1.3.5:数据同步双向 race 修 + pull_history 异步化(2 个 P0 + 1 个监控)** — 2026-05-14 全网巡检捞出 2 个严重 P0:① 客户在 web 后台填的归属(operator/company/inspector_tg_id)被 sync_headers 每 600s Sheet→DB 单向覆盖清空(实测全网 18 dept 中招,跟 v3.0.15 引入的 DB→Sheet 双向打架);② 全网 42/62 dept 容器 Up healthy 但 patrol_loop 没启动(`pull_history` 阻塞 TaskScheduler.run,telegram flood wait 卡几小时 → 4 大业务功能全停摆)。修法:① `sheets._sync_one_account_headers` 加「Sheet 空 + DB 有值跳过」保护(8 行);② `main.py pull_history` 改 `asyncio.create_task` 异步 fire-and-forget(+done_callback 防异常吞);③ 加 `_startup_health_loop` 5 分钟自检告警(patrol_loop 没起 → 推预警群)。0 数据迁移 / 0 schema 变 / 0 配置变。详见 [ADR-0047](docs/adr/0047-v3.1.3.5-sync-race-fix-and-pull-history-async.md)。
+🚀 **v3.1.4:Service Account 替代 OAuth — 一次性配好永不失效** — OAuth refresh_token 50 上限 + 7 天 testing 模式过期 + 风控 revoke 反复救火,生产不可持续。本版引入 SA 模式作为主力,OAuth 降级 fallback。
+
+改动:① `sheets.py` 启动检测 `data/service_account.json` → 有 SA 优先(`google.oauth2.service_account` 凭据),无则回 OAuth 老路径(向后兼容,老客户无感);② setup 页加「所属中心」下拉 + 「拉取该中心 SA 配置」按钮,调中央台 `/api/v1/sa/<center_slug>` 拿 SA JSON 自动落地 `data/service_account.json`(chmod 600 + atomic write + 老 SA 自动备份)+ 黄色 warning「必须把 SA email 加 Sheet 协作者编辑权」+ 点击 email 即复制;③ `_resolve_inspector_display` 改 HYPERLINK 公式可点跳 t.me + 过滤 `\n\r\t` 防破公式;④ `_get_sa_status` 校验 client_email + private_key,文件半道损坏视为未启用;⑤ fetch-sa 用 METRICS_TOKEN(跟中央台 departments 反查对齐);⑥ Codex round1 P0 fix:URL 推导 rstrip("/") + SA JSON 缺关键字段不当「已配」+ HYPERLINK label 过滤换行。
+
+配套:中央台 v0.37+(SA 分发 endpoint)。客户操作:`update.sh` → setup 页选中心拉 SA → 把 SA email 加 Sheet 协作者 → 完成,以后再不动 OAuth。
+
+<details><summary>v3.1.3.5(2026-05-14) — 数据同步双向 race 修 + pull_history 异步化</summary>
+
+2026-05-14 全网巡检捞出 2 个严重 P0:① sync_headers 每 600s Sheet→DB 单向覆盖清空 operator/company/inspector_tg_id(全网 18 dept 中招,跟 v3.0.15 引入的 DB→Sheet 双向打架);② 全网 42/62 dept 容器 Up healthy 但 patrol_loop 没启动(pull_history 阻塞 TaskScheduler.run,4 大业务功能全停摆)。修法:① sheets._sync_one_account_headers 加「Sheet 空 + DB 有值跳过」保护;② main.py pull_history 改 asyncio.create_task 异步;③ 加 _startup_health_loop 5 分钟自检告警。详见 [ADR-0047](docs/adr/0047-v3.1.3.5-sync-race-fix-and-pull-history-async.md)。
+
+</details>
 
 | 版本 | 功能 |
 |---|---|
@@ -15,7 +25,7 @@
 | **v3.1.3** | 🔴 **修中央台 fanout upgrade 全失败的真根因**:Dockerfile 只装 `curl procps git`,**没 docker-cli**。agent 跑在 tg-web 容器内,调 `bash update.sh`,update.sh 里 `docker ps / docker exec / docker compose up --build` 全 fail。修法:① `agent.py` action_upgrade 判断改 `git AND docker 都在容器内` 才走 container_git,缺 docker → fall through 到 alpine fallback 路径(alpine 容器 apk add docker-cli 自带)② Dockerfile 装 docker-ce-cli + docker-compose-plugin(future-proof) |
 | **v3.1.2.1** | 🔴 **修 3 个 P0 阻塞 ship 的 bug**(Codex 4 轮独立 review 抓出): ① `agent.py` caddy_self_heal_loop 用未定义 `logger` 启动即 NameError ② `update.sh` 硬依赖 `python3`,客户没装会卡升级 ③ `agent.py` + `update.sh` tag 升级 detached HEAD 路径(老逻辑用不存在的 `origin/<tag>` ref) |
 | **v3.1.2** | 🔴 **修 v3.1.1 self-heal corner case**:之前 5.5 节放在 `git fetch` 之后,如果 sha 相等 + 容器代码已同步 → exit 0 直接退,**self-heal 不跑**。但客户 Caddyfile 里的 multi 脏 block 仍在(因为 git pull 之前就在了)。修法:**把 self-heal 移到第 0 节**(`git fetch` 之前),无条件先跑一次清理,然后再做其他流程。同时强制 restart 对应 caddy 容器让 inode 重 attach。 |
-| **v3.1.1** | 🔴 **修「客户升级后 TLS 卡死」真根因**:git 仓库 Caddyfile 末尾误 commit 了 `multi.187.77.157.220.nip.io`(demo VPS 的子域名,`f300f64` 那次 `git add -A` 副作用),所有客户 git pull 拉到 → Caddy 试给这个非本机 IP 的域名签证书 → Let's Encrypt 验证失败 → 整张 caddy TLS 卡死,**合法域名证书也续不下来**。修法:① 删 git 仓库 Caddyfile 误配 block ② update.sh 加 self-heal:扫 Caddyfile 找含 nip.io 但 IP 跟本机不一致的 site block 自动删(用 cat redirect 保 bind-mount inode)③ 客户跑一次 update.sh 自动清理。 |
+| **v3.1.1** | 🔴 **修「客户升级后 TLS 卡死」真根因**:git 仓库 Caddyfile 末尾误 commit 了 `multi.<demo-vps-ip>.nip.io`(demo VPS 的子域名,`f300f64` 那次 `git add -A` 副作用),所有客户 git pull 拉到 → Caddy 试给这个非本机 IP 的域名签证书 → Let's Encrypt 验证失败 → 整张 caddy TLS 卡死,**合法域名证书也续不下来**。修法:① 删 git 仓库 Caddyfile 误配 block ② update.sh 加 self-heal:扫 Caddyfile 找含 nip.io 但 IP 跟本机不一致的 site block 自动删(用 cat redirect 保 bind-mount inode)③ 客户跑一次 update.sh 自动清理。 |
 | **v3.1** | 🩹 **Caddy self-heal daemon** — agent 加 `caddy_self_heal_loop`(web.py 启动时自启线程):每 5 min HTTPS self-test,失败立刻 `docker restart tg-caddy-<dept>`(走 docker SDK 不依赖 Caddy 反代)。冷却 10 min 防 rapid loop,5 次自愈失败放弃 + log。+ 加 `restart_caddy` action 中央台 fleet UI 也能远程触发(只在 caddy 没完全挂时有用)。可在 `.env CADDY_SELF_HEAL_ENABLED=false` 关。 |
 | **v3.0.30** | 🔧 修 v3.0.28 两个 action UX 瑕疵:① `reload_oauth` 改成异步 `threading.Thread` 触发 tg-monitor 重启,立刻返 200 不等 restart 完成(避免 HTTP client 超时)② `fix_sheets` 改成直接 `import dashboard_api` 调 `fix_orphan_messages` / `fix_peers_no_col_group`,绕过 HTTP cookie 鉴权(agent 跟 web.py 同进程,可直接 import) |
 | **v3.0.29** | 🔴 **修「客户升完容器还是旧版」最后一个根因** — `update.sh` `OLD_SHA == REMOTE_SHA` 时不再直接 exit,增加 sanity check:容器内 `/app/web.py` vs host `/app/repo/web.py` 不一致 → 强制 image rebuild + `--force-recreate`。**这是所有「客户升完 UI 还是旧版」的真根因**。+ docker compose up 永远加 `--force-recreate` 确保 image rebuild 后容器也 recreate。 |
