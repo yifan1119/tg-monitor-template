@@ -3,10 +3,23 @@ import html as _html
 import config
 
 
+def _swap_company(c):
+    """v3.1.6: account.company 存储格式是「公司-中心」(下拉拼接),
+    但文案字段标签是「中心/部门」, 用户期望显示「中心-部门」顺序 → 反转。
+    输入「鼎丰公司-商务中心」→ 输出「商务中心-鼎丰公司」。
+    无 '-' 或拆不出来 → 原样返回。"""
+    if not c or "-" not in c:
+        return c or ""
+    parts = c.rsplit("-", 1)
+    if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+        return f"{parts[1].strip()}-{parts[0].strip()}"
+    return c
+
+
 def no_reply_alert(company, operator, account_name, peer_name, message_text):
     return (
         f"【信息未回复预警{config.COMPANY_DISPLAY}】\n\n"
-        f"中心/部门：{company}\n"
+        f"中心/部门：{_swap_company(company)}\n"
         f"{config.OPERATOR_LABEL}：{operator}\n"
         f"外事号：{account_name}\n"
         f"{config.PEER_ROLE_LABEL}：{peer_name}\n"
@@ -28,7 +41,7 @@ def no_reply_alert_stage1(company, operator, account_name, peer_name,
     e = _html.escape
     base = (
         f"【信息未回复预警{config.COMPANY_DISPLAY}】\n\n"
-        f"中心/部门：{e(company)}\n"
+        f"中心/部门：{e(_swap_company(company))}\n"
         f"{config.OPERATOR_LABEL}：{e(operator)}\n"
         f"外事号：{e(account_name)}\n"
         f"{config.PEER_ROLE_LABEL}：{e(peer_name)}\n"
@@ -50,7 +63,7 @@ def no_reply_alert_stage2(company, operator, account_name, peer_name,
     e = _html.escape
     base = (
         f"【信息未回复升级{config.COMPANY_DISPLAY}】\n\n"
-        f"中心/部门：{e(company)}\n"
+        f"中心/部门：{e(_swap_company(company))}\n"
         f"{config.OPERATOR_LABEL}：{e(operator)}\n"
         f"外事号：{e(account_name)}\n"
         f"{config.PEER_ROLE_LABEL}：{e(peer_name)}\n"
@@ -74,7 +87,7 @@ def delete_alert(company, operator, account_name, peer_name, message_text="",
         e = _html.escape
         text = (
             f"【信息删除预警{config.COMPANY_DISPLAY}】\n\n"
-            f"中心/部门：{e(company)}\n"
+            f"中心/部门：{e(_swap_company(company))}\n"
             f"{config.OPERATOR_LABEL}：{e(operator)}\n"
             f"外事号：{e(account_name)}\n"
             f"{config.PEER_ROLE_LABEL}：{e(peer_name)}"
@@ -87,7 +100,7 @@ def delete_alert(company, operator, account_name, peer_name, message_text="",
     # 老路径 — 保持完全不变,兼容没配 owner_tg_id 的账号
     text = (
         f"【信息删除预警{config.COMPANY_DISPLAY}】\n\n"
-        f"中心/部门：{company}\n"
+        f"中心/部门：{_swap_company(company)}\n"
         f"{config.OPERATOR_LABEL}：{operator}\n"
         f"外事号：{account_name}\n"
         f"{config.PEER_ROLE_LABEL}：{peer_name}"
@@ -100,7 +113,7 @@ def delete_alert(company, operator, account_name, peer_name, message_text="",
 def keyword_alert(company, operator, account_name, peer_name, keyword, message_text):
     return (
         f"【关键词监听{config.COMPANY_DISPLAY}】\n\n"
-        f"中心/部门：{company}\n"
+        f"中心/部门：{_swap_company(company)}\n"
         f"{config.OPERATOR_LABEL}：{operator}\n"
         f"外事号：{account_name}\n"
         f"{config.PEER_ROLE_LABEL}：{peer_name}\n"

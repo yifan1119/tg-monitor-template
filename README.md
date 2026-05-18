@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1.6(2026-05-18)
+## 📌 当前版本:v3.1.7(2026-05-18)
 
-🎯 **v3.1.6:删除消息预警 @ 监察员(inspector_tg_id)** — 客户反馈:删除消息让审查员处理,不打扰商务/负责人。`bot.py` 3 处改:`_route_callback` / `on_stage2_action` expected_actor 反查按 alert.type 分支(deleted → inspector / stage2 → owner / 其他 → business);`send_delete_alert` 把 `owner_tg_id` 改 `inspector_tg_id`,fallback_name `负责人` → `审查员`。`templates/index.html` 监察员字段 label 文案补「+ 删除消息预警」。inspector 未配账号 → 走 v3.0.5 老「通过/拒绝」按钮路径(向后兼容,老客户升级零行为变更)。详见 [PR #41](https://github.com/yifan1119/tg-monitor-template/pull/41)。
+🎯 **v3.1.7:预警文案/Sheet B3 改「中心/部门」顺序 + 修 Sheet→DB 反向覆盖** — 客户反馈文案字段顺序对不上(标签「中心/部门」+ 值「公司-中心」),Sheet B3 同样反;web 改归属后 60s 被反向同步覆盖回老值。`templates.py` 加 `_swap_company` helper + 6 处文案模板包一层;`tasks.py _sync_account_business_to_sheet` 写 Sheet B3 前转「中心/公司」格式(`/` 分隔对齐人填);`sheets.py _sync_one_account_headers` 改成「DB 完全空才回写」(防 DB→Sheet 转格式后被 Sheet→DB 读回覆盖)。0 数据迁移,Sheet B3 下一轮 patrol 自动迁移。详见 [ADR-0050](docs/adr/0050-v3.1.7-company-display-format-and-prevent-reverse-overwrite.md)。
+
+<details><summary>v3.1.6(2026-05-18) — 删除消息预警 @ 监察员(inspector_tg_id)</summary>
+
+客户反馈:删除消息让审查员处理,不打扰商务/负责人。`bot.py` 3 处改:`_route_callback` / `on_stage2_action` expected_actor 反查按 alert.type 分支(deleted → inspector / stage2 → owner / 其他 → business);`send_delete_alert` 把 `owner_tg_id` 改 `inspector_tg_id`,fallback_name `负责人` → `审查员`。`templates/index.html` 监察员字段 label 文案补「+ 删除消息预警」。inspector 未配账号 → 走 v3.0.5 老「通过/拒绝」按钮路径(向后兼容,老客户升级零行为变更)。详见 [PR #41](https://github.com/yifan1119/tg-monitor-template/pull/41)。
+
+</details>
 
 <details><summary>v3.1.5.1(2026-05-18) — WEB_UPSTREAM 透传 caddy + caddy 自动接所有 dept network 治根</summary>
 
