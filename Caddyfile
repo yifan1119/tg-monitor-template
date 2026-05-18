@@ -29,3 +29,9 @@
     # Caddy 默认会自动 enable Let's Encrypt;失败的话日志会说原因
     encode gzip
 }
+
+# v3.1.5 (2026-05-18): 同 VPS 多 dept 共用 Caddy 模式 — 其他 dept 的 site block
+# 写在 conf.d/<COMPANY>.caddy 各自独立文件(.gitignored,update.sh git reset 不冲)。
+# enable_https.sh 自动写到这里,而非 append 主 Caddyfile(踩过 5+ 次的坑根治)。
+# 详见 ADR-0049。
+import conf.d/*.caddy

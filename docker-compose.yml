@@ -71,6 +71,8 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # v3.1.5: 共用 Caddy 多 dept 的 site block 写 conf.d/*.caddy(目录 mount,无 inode 断裂)
+      - ./conf.d:/etc/caddy/conf.d:ro
       - caddy_data:/data
       - caddy_config:/config
     environment:

@@ -152,6 +152,11 @@ if [ -n "$EXTERNAL_CADDY" ]; then
         --format '{{range .Mounts}}{{if eq .Destination "/etc/caddy/Caddyfile"}}{{.Source}}{{end}}{{end}}' \
         2>/dev/null || echo "")
 
+    # v3.1.5 (2026-05-18): 找外部 Caddy 的 conf.d/ 目录(v3.1.5+ 客户)
+    EXT_CONFD=$(docker inspect "$EXTERNAL_CADDY" \
+        --format '{{range .Mounts}}{{if eq .Destination "/etc/caddy/conf.d"}}{{.Source}}{{end}}{{end}}' \
+        2>/dev/null || echo "")
+
     # 4d. 生成 site block
     SITE_BLOCK=$(cat <<EOF
 
@@ -178,18 +183,32 @@ EOF
         exit 1
     fi
 
-    # 4e. 去重 + 追加 site block(in-place append,同 inode)
-    if grep -q "TG Monitor (${COMPANY})" "$EXT_CADDYFILE"; then
-        echo "  ✓ $EXT_CADDYFILE 已包含本部门站点配置,跳过追加"
-    else
-        echo "  追加 site block 到 $EXT_CADDYFILE"
-        # 用 printf + >> 保证 append 不改 inode(避免 docker file bind mount 脱节)
-        printf '%s\n' "$SITE_BLOCK" >> "$EXT_CADDYFILE"
-
-        # 校验: 追加后 host 文件确实含新 block
-        if ! grep -q "TG Monitor (${COMPANY})" "$EXT_CADDYFILE"; then
-            echo "  ✗ 追加后校验失败,host 文件里没看到 ${COMPANY} 的 site block"
+    # 4e. v3.1.5 治根:写到外部 Caddy 的 conf.d/<COMPANY>.caddy(.gitignored 不被 git reset 冲)
+    # 主 Caddyfile 末尾 import conf.d/*.caddy 自动加载,update.sh 升级不再冲掉 site block。
+    # 老主 Caddyfile 没 import conf.d(v3.1.5 以前的客户)→ 退回老 append 模式 + warn。
+    if [ -n "$EXT_CONFD" ] && [ -d "$EXT_CONFD" ]; then
+        SITE_FILE="${EXT_CONFD}/${COMPANY}.caddy"
+        echo "  v3.1.5: 写 site block 到 $SITE_FILE(.gitignored,update.sh 不冲)"
+        # 用 cat > 重定向(同 inode);文件是新建可以直接覆盖
+        printf '%s\n' "$SITE_BLOCK" > "$SITE_FILE"
+        if [ ! -s "$SITE_FILE" ]; then
+            echo "  ✗ 写 conf.d 失败"
             exit 1
+        fi
+    else
+        # 老客户没 conf.d/ 目录(v3.1.5 前升级 / 主仓 docker-compose 没 mount)
+        # 退回老 append 主 Caddyfile 模式(已知有 git reset 冲掉风险,但保证 HTTPS 立刻能通)
+        echo "  ⚠ 外部 Caddy 没 mount conf.d/(v3.1.5 前部署),退回 append 主 Caddyfile 模式"
+        echo "    长期请让对方 dept 升 v3.1.5+ 让 conf.d 机制生效"
+        if grep -q "TG Monitor (${COMPANY})" "$EXT_CADDYFILE"; then
+            echo "  ✓ $EXT_CADDYFILE 已包含本部门站点配置,跳过追加"
+        else
+            echo "  追加 site block 到 $EXT_CADDYFILE"
+            printf '%s\n' "$SITE_BLOCK" >> "$EXT_CADDYFILE"
+            if ! grep -q "TG Monitor (${COMPANY})" "$EXT_CADDYFILE"; then
+                echo "  ✗ 追加后校验失败,host 文件里没看到 ${COMPANY} 的 site block"
+                exit 1
+            fi
         fi
     fi
 

@@ -2,7 +2,21 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1.4(2026-05-18)
+## 📌 当前版本:v3.1.5(2026-05-18)
+
+🔴 **v3.1.5:共用 Caddy 多 dept site block 治根 + 防 Sheet 时间错乱** — 一次修两个累积痛点:
+
+**① HTTPS site block 不再被 update.sh 冲掉(治根)**:同 VPS 多 dept 共用 Caddy 模式,enable_https.sh 历史是 append 主 Caddyfile(git tracked)→ update.sh git reset 冲掉 → HTTPS 挂。这模式已踩 5+ 次,CLAUDE.md 硬规定 #12 写了正确做法但代码未落地。v3.1.5:主 Caddyfile 加 `import conf.d/*.caddy`,docker-compose mount `./conf.d/`,enable_https.sh 写 `conf.d/<COMPANY>.caddy` 独立文件(.gitignored)→ update.sh git reset 不冲。**目录 mount 无 inode 断裂问题**(比单文件 mount 更稳)。详见 [ADR-0049](docs/adr/0049-v3.1.5-caddyfile-confd-import-root-fix.md)。
+
+**② SHEET_RESYNC_ENABLED 默认 true → false(防新消息塞中间)**:客户反馈悦达-渠道 Sheet 时间错乱(2026-05 跟 2026-02 混杂)。根因:v3.1 ADR-0027 的 `_sheet_position_resync_loop` 找首空行让 update 命中 next_row,客户删 Sheet 中间行后新消息回填空位。默认改 false,新消息永远 append 末尾保时间顺序;想要回填功能的客户 .env 显式 true。
+
+**老客户升级注意**:append 在主 Caddyfile 的 site block 不会自动迁移到 conf.d/(防误判,update.sh 不动)。陈家碧 187.127.114.68 单独手术挪过来。后续客户撞到再手动一次性迁移。
+
+<details><summary>v3.1.4(2026-05-18) — Service Account 替代 OAuth</summary>
+
+OAuth 50 refresh_token 上限 + 7 天 testing 过期 + 风控反复 revoke 不可持续。SA 模式做主力,OAuth 降级 fallback。sheets.py 检测 data/service_account.json 有则 SA 优先;tasks.py _resolve_inspector_display 加 HYPERLINK + 过滤换行;setup 页加「所属中心」下拉 + 拉取 SA + 共享指引;web.py /api/setup/fetch-sa 调中央台拉 SA JSON(METRICS_TOKEN 鉴权,atomic write + chmod 600 + 自动备份)。Codex round1 P0:URL 推导 rstrip + SA JSON 校验 + HYPERLINK label 过滤。
+
+</details>
 
 🚀 **v3.1.4:Service Account 替代 OAuth — 一次性配好永不失效** — OAuth refresh_token 50 上限 + 7 天 testing 模式过期 + 风控 revoke 反复救火,生产不可持续。本版引入 SA 模式作为主力,OAuth 降级 fallback。
 
