@@ -43,6 +43,67 @@ def set_archive_bot(bot):
     _archive_bot = bot
 
 
+# v3.1.8 (2026-05-19): 档案群 chat_id 走中央台路由 — 按 account.company lookup
+# 配套中央台 v0.40+ /api/v1/archive_route?company=<>
+# - 中央台返路由的 archive_chat_id → 用这个
+# - 中央台未配 / 网络挂 / 没匹配公司 → fallback 本地 .env MEDIA_ARCHIVE_GROUP_ID
+# - dept 本地 archive_bot forward(中央台 bot 不在 dept 私聊读不到媒体,
+#   只提供 chat_id 路由,执行仍在本地)
+# - 60s TTL cache 避免每条媒体打中央台
+_ARCHIVE_ROUTE_CACHE = {}  # company → (chat_id_str, expires_at_ts)
+_ARCHIVE_ROUTE_CACHE_TTL = 60  # 秒
+
+
+async def _lookup_central_archive_chat_id(company: str) -> str:
+    """v3.1.8: 调中央台 GET /api/v1/archive_route?company=<> 拿 archive_chat_id。
+    成功返 chat_id 字符串(可能 ""=中央台没配该公司,调用方 fallback 本地);
+    网络挂 / 中央台未配 CENTRAL_PUSH_URL → 返 None(让调用方 fallback)。"""
+    import time as _time
+    import urllib.request as _ureq
+    import urllib.error
+    import json as _json
+
+    company = (company or "").strip()
+    if not company:
+        return None
+    # cache lookup
+    now = _time.time()
+    cached = _ARCHIVE_ROUTE_CACHE.get(company)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    central_url = (os.environ.get("CENTRAL_PUSH_URL", "") or "").strip()
+    token = (os.environ.get("METRICS_TOKEN", "") or "").strip()
+    if not central_url or not token:
+        return None
+    # 推导 base: .../api/v1/push_alert → .../api/v1
+    base = central_url.rstrip("/").rsplit("/", 1)[0]
+    import urllib.parse as _uparse
+    url = f"{base}/archive_route?company={_uparse.quote(company)}"
+    try:
+        req = _ureq.Request(url, method="GET", headers={"Authorization": f"Bearer {token}"})
+        # 用 asyncio.to_thread 包 blocking urllib
+        import asyncio as _asyncio
+        def _get():
+            with _ureq.urlopen(req, timeout=5) as r:
+                if r.status != 200:
+                    return None
+                return _json.loads(r.read().decode("utf-8"))
+        data = await _asyncio.to_thread(_get)
+        if not data or not data.get("ok"):
+            return None
+        chat_id = (data.get("archive_chat_id") or "").strip()
+        # cache 即使空字符串(中央台路由没配),避免每条媒体反复打
+        _ARCHIVE_ROUTE_CACHE[company] = (chat_id, now + _ARCHIVE_ROUTE_CACHE_TTL)
+        return chat_id
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError) as e:
+        logger.debug("[archive_route] lookup 失败 company=%s: %s", company, e)
+        return None
+    except Exception as e:
+        logger.warning("[archive_route] 异常 company=%s: %s", company, e)
+        return None
+
+
 _TG_ARCHIVE_WARNED_BAD_GID = False
 
 
@@ -84,13 +145,19 @@ def is_tg_archive_enabled():
     return True
 
 
-def _archive_deep_link(archive_msg_id):
-    """v2.10.25:把 MEDIA_ARCHIVE_GROUP_ID + 消息 ID 转成 t.me/c 深链。
+def _archive_deep_link(archive_msg_id, chat_id=None):
+    """v2.10.25:把 chat_id + 消息 ID 转成 t.me/c 深链。
+    v3.1.8: chat_id 可显式传入(中央台路由可能给跟本地 .env 不同的 chat_id),
+            没传则 fallback 老路径读 config.MEDIA_ARCHIVE_GROUP_ID(兼容)。
 
     - supergroup ID 通常是 -100xxxxxxxx,链接要去掉 -100 前缀 → t.me/c/xxxxxxxx/{msg_id}
     - 正常群(不含 -100 前缀)直接用绝对值
     """
-    gid = int(getattr(config, "MEDIA_ARCHIVE_GROUP_ID", 0) or 0)
+    gid = chat_id if chat_id else int(getattr(config, "MEDIA_ARCHIVE_GROUP_ID", 0) or 0)
+    try:
+        gid = int(gid)
+    except (ValueError, TypeError):
+        return ""
     if gid == 0:
         return ""
     s = str(abs(gid))
@@ -416,7 +483,21 @@ async def forward_to_tg_archive(message, media_type, account_row, peer_name, med
 
         # 转发到档案群
         input_file = BufferedInputFile(data, filename=filename)
-        chat_id = config.MEDIA_ARCHIVE_GROUP_ID
+        # v3.1.8: 优先中央台路由(按 account.company),失败 fallback 本地 .env
+        chat_id = None
+        try:
+            company = (account_row["company"] or "").strip() if account_row else ""
+            if company:
+                central_chat = await _lookup_central_archive_chat_id(company)
+                if central_chat:
+                    try:
+                        chat_id = int(central_chat)
+                    except (ValueError, TypeError):
+                        logger.warning("[archive_route] 中央台返非整数 chat_id=%r, fallback 本地", central_chat)
+        except Exception as e:
+            logger.warning("[archive_route] lookup 异常,fallback 本地: %s", e)
+        if not chat_id:
+            chat_id = config.MEDIA_ARCHIVE_GROUP_ID
         sent = None
         if media_type == "photo" and (size == 0 or size <= _BOT_PHOTO_LIMIT_BYTES):
             # 走 send_photo — TG 会生成缩图,档案群里直接预览
@@ -445,7 +526,8 @@ async def forward_to_tg_archive(message, media_type, account_row, peer_name, med
             return "", 0
 
         archive_msg_id = int(sent.message_id)
-        link = _archive_deep_link(archive_msg_id)
+        # v3.1.8: 用本次实际写入的 chat_id 生成深链(可能是中央台路由的,不是本地 .env)
+        link = _archive_deep_link(archive_msg_id, chat_id=chat_id)
         label_map = {"photo": "图片", "file": "文件", "voice": "语音"}
         label_prefix = label_map.get(media_type, "媒体")
         label = f"{label_prefix} #{media_seq}"

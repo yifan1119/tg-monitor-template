@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1.7(2026-05-18)
+## 📌 当前版本:v3.1.8(2026-05-19)
 
-🎯 **v3.1.7:预警文案/Sheet B3 改「中心/部门」顺序 + 修 Sheet→DB 反向覆盖** — 客户反馈文案字段顺序对不上(标签「中心/部门」+ 值「公司-中心」),Sheet B3 同样反;web 改归属后 60s 被反向同步覆盖回老值。`templates.py` 加 `_swap_company` helper + 6 处文案模板包一层;`tasks.py _sync_account_business_to_sheet` 写 Sheet B3 前转「中心/公司」格式(`/` 分隔对齐人填);`sheets.py _sync_one_account_headers` 改成「DB 完全空才回写」(防 DB→Sheet 转格式后被 Sheet→DB 读回覆盖)。0 数据迁移,Sheet B3 下一轮 patrol 自动迁移。详见 [ADR-0050](docs/adr/0050-v3.1.7-company-display-format-and-prevent-reverse-overwrite.md)。
+🎯 **v3.1.8:档案群按 account.company 统一中央台路由(配置中心化,执行仍本地)** — 客户拍板:档案群跟预警一样按公司维度路由,不再 dept 本地 `.env MEDIA_ARCHIVE_GROUP_ID` 写死。`media_uploader.py` 加 `_lookup_central_archive_chat_id(company)` helper + 60s TTL cache + `forward_to_tg_archive` 优先中央台 / fallback 本地 + `_archive_deep_link(chat_id=None)` 加参数(深链按实际写入 chat_id 生成);中央台 v0.40 新增 `GET /api/v1/archive_route?company=<>` endpoint(Bearer metrics_token 鉴权,查 `alert_routes.archive_chat_id`)。中央台 down → fallback 本地 .env(向后兼容)。**运维要求**:dept archive bot 必须加进对应公司 archive 群(一次性步骤,跟之前 .env 配错群同款症状)。详见 [ADR-0054](docs/adr/0054-v3.1.8-archive-group-central-routing.md)。
+
+<details><summary>v3.1.7(2026-05-18) — 预警文案/Sheet B3 改「中心/部门」顺序 + 修 Sheet→DB 反向覆盖</summary>
+
+客户反馈文案字段顺序对不上(标签「中心/部门」+ 值「公司-中心」),Sheet B3 同样反;web 改归属后 60s 被反向同步覆盖回老值。`templates.py` 加 `_swap_company` helper + 6 处文案模板包一层;`tasks.py _sync_account_business_to_sheet` 写 Sheet B3 前转「中心/公司」格式(`/` 分隔对齐人填);`sheets.py _sync_one_account_headers` 改成「DB 完全空才回写」。0 数据迁移。详见 [ADR-0050](docs/adr/0050-v3.1.7-company-display-format-and-prevent-reverse-overwrite.md)。
+
+</details>
 
 <details><summary>v3.1.6(2026-05-18) — 删除消息预警 @ 监察员(inspector_tg_id)</summary>
 
