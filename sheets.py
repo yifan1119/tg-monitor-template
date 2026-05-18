@@ -1068,18 +1068,28 @@ class SheetsWriter:
             # v3.1.3.5(Codex P1):.strip() 处理 — 客户在 Sheet B2 填空格 " " 不能被当真值
             operator = (header_data[0][1] if len(header_data) > 0 and len(header_data[0]) > 1 else "").strip()
             company  = (header_data[1][1] if len(header_data) > 1 and len(header_data[1]) > 1 else "").strip()
-            # v3.1.3.5: Sheet 空 + DB 有值 → 跳过(防双向 race 清 DB);Sheet 真有内容才回写 DB
+            # v3.1.3.5: Sheet 空 + DB 有值 → 跳过(防双向 race 清 DB)
+            # v3.1.7: DB 有值 → 完全不反向覆盖(防 DB→Sheet 转格式后被 Sheet→DB 读回覆盖)
+            # Codex P1 fix(v3.1.7): 「两个字段都空」才回写(and 而非 or),防 web 清 operator
+            #   但 company 还在时被 Sheet 灌回老 operator
+            # Codex P1 fix(v3.1.7): 首次回写 normalize 新格式「中心/公司」→ DB canonical「公司-中心」
+            #   让 web 双下拉能正确回显;老格式「公司-中心」原样兼容
             db_op = (account["operator"] or "").strip()
             db_co = (account["company"] or "").strip()
-            new_op = operator if operator else db_op
-            new_co = company if company else db_co
-            if new_op != db_op or new_co != db_co:
+            company_canonical = company
+            if company and "/" in company and "-" not in company:
+                parts = company.rsplit("/", 1)
+                if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                    company_canonical = f"{parts[1].strip()}-{parts[0].strip()}"
+            new_op = db_op if db_op else operator
+            new_co = db_co if db_co else company_canonical
+            if (new_op != db_op or new_co != db_co) and (not db_op and not db_co):
                 db.get_conn().execute(
                     "UPDATE accounts SET operator=?, company=? WHERE id=?",
                     (new_op, new_co, account["id"])
                 )
                 db.get_conn().commit()
-                logger.info("从 Sheets 同步: 操作人员=%s, 所属公司=%s", new_op, new_co)
+                logger.info("Sheet→DB 首次回写(DB 两字段都空): 操作人员=%s, 所属公司=%s", new_op, new_co)
             # v2.6.4: 同步 A2 label(操作人员标签)
             if a2_label and a2_label != config.OPERATOR_LABEL:
                 try:

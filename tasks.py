@@ -260,7 +260,14 @@ class TaskScheduler:
                 sheet_b4 = _cell(2, 1)
 
                 db_operator = (account["operator"] or "").strip() if "operator" in account.keys() else ""
-                db_company = (account["company"] or "").strip() if "company" in account.keys() else ""
+                db_company_raw = (account["company"] or "").strip() if "company" in account.keys() else ""
+                # v3.1.6: account.company 存「公司-中心」(下拉拼),写 Sheet 转「中心/部门」(分隔符 "/")
+                # 例「鼎丰公司-商务中心」→ Sheet B3「商务中心/鼎丰公司」
+                db_company = db_company_raw
+                if db_company_raw and "-" in db_company_raw:
+                    parts = db_company_raw.rsplit("-", 1)
+                    if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                        db_company = f"{parts[1].strip()}/{parts[0].strip()}"
                 db_inspector_raw = (account["inspector_tg_id"] or "").strip() if "inspector_tg_id" in account.keys() else ""
                 # v3.0.15: B4 写「真名 (@username/numeric)」而非 raw ID
                 # cache 由 _refresh_inspector_cache 预热;miss → 用 raw 兜底
