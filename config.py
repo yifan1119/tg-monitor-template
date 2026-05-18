@@ -143,6 +143,13 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 _group_id = os.environ.get("ALERT_GROUP_ID", "0").strip()
 ALERT_GROUP_ID = int(_group_id) if _group_id else 0
 
+# v3.1.9: 关掉本地 bot polling(callback 按钮由中央台 callback_listener 接管)
+# 用法:多 dept 共用同一 BOT_TOKEN 时,只让中央台 polling 一次,
+# dept 本地全部 BOT_POLLING_DISABLED=true,避免 409 Conflict spam。
+# bot 实例仍创建(sendMessage / editMessage 不需要 polling)。
+# 默认 false 向后兼容,老 dept 升级零感知。
+BOT_POLLING_DISABLED = os.environ.get("BOT_POLLING_DISABLED", "false").lower() == "true"
+
 # 预警推送总开关(v2.6.2+)
 # true = 关键词/未回复/删除 三类预警都往 TG 群推(默认,旧部署升级后保持原行为)
 # false = 三类预警全部静音,但:

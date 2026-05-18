@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1.8(2026-05-19)
+## 📌 当前版本:v3.1.9(2026-05-19)
 
-🎯 **v3.1.8:档案群按 account.company 统一中央台路由(配置中心化,执行仍本地)** — 客户拍板:档案群跟预警一样按公司维度路由,不再 dept 本地 `.env MEDIA_ARCHIVE_GROUP_ID` 写死。`media_uploader.py` 加 `_lookup_central_archive_chat_id(company)` helper + 60s TTL cache + `forward_to_tg_archive` 优先中央台 / fallback 本地 + `_archive_deep_link(chat_id=None)` 加参数(深链按实际写入 chat_id 生成);中央台 v0.40 新增 `GET /api/v1/archive_route?company=<>` endpoint(Bearer metrics_token 鉴权,查 `alert_routes.archive_chat_id`)。中央台 down → fallback 本地 .env(向后兼容)。**运维要求**:dept archive bot 必须加进对应公司 archive 群(一次性步骤,跟之前 .env 配错群同款症状)。详见 [ADR-0054](docs/adr/0054-v3.1.8-archive-group-central-routing.md)。
+🎯 **v3.1.9:加 `BOT_POLLING_DISABLED` flag — 完成 v3.0.22 callback bridge 治根,多 dept 共用 BOT_TOKEN 不再 409 Conflict** — v3.0.22(ADR-0037)设计了中央台 callback_listener 接管按钮点击,但因为 dept 本地 polling 没法关导致双重 polling 撞 409,所以这套链路从来没启用。v3.1.9 在 `bot.py:start()` 加 `BOT_POLLING_DISABLED` 检查,默认 false 向后兼容。共用 BOT_TOKEN 的客户 dept 配 `BOT_POLLING_DISABLED=true` + 中央台 AWS 开 `CALLBACK_LISTENER_ENABLED=true`,callback 全部由中央台 polling 接管 + POST 回 dept `/api/v1/callback`(已有 endpoint)。bot 实例仍存活,sendMessage / editMessage 主动调用照常(预警推送 fallback 路径不影响)。详见 [ADR-0055](docs/adr/0055-v3.1.9-bot-polling-disable-flag.md)。
+
+<details><summary>v3.1.8(2026-05-19) — 档案群按 account.company 统一中央台路由</summary>
+
+档案群跟预警一样按公司维度路由,不再 dept 本地 `.env MEDIA_ARCHIVE_GROUP_ID` 写死。`media_uploader.py` 加 `_lookup_central_archive_chat_id(company)` helper + 60s TTL cache + `forward_to_tg_archive` 优先中央台 / fallback 本地 + `_archive_deep_link(chat_id=None)` 加参数(深链按实际写入 chat_id 生成);中央台 v0.40 新增 `GET /api/v1/archive_route?company=<>` endpoint。详见 [ADR-0054](docs/adr/0054-v3.1.8-archive-group-central-routing.md)。
+
+</details>
 
 <details><summary>v3.1.7(2026-05-18) — 预警文案/Sheet B3 改「中心/部门」顺序 + 修 Sheet→DB 反向覆盖</summary>
 

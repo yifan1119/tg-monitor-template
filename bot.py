@@ -369,6 +369,14 @@ class AlertBot:
                     pass
 
     def _make_keyboard(self, alert_id):
+        # v3.1.9(Codex P0/P1):BOT_POLLING_DISABLED=true 时本地 polling 关掉,
+        # 「approve/reject」按钮没人接 → 返 None 不附按钮,避免「看得到点不动」
+        # 的静默降级。调用方拿到 None 自动发纯文本预警。
+        # 共用 BOT_TOKEN 的客户必须通过中央台路由 + 中央台 callback_listener 处理
+        # 按钮(中央台用 cb:<pending_id>:<action> 格式,跟 dept 这套 approve:/reject:
+        # 是两套独立的 callback bridge)。
+        if getattr(config, "BOT_POLLING_DISABLED", False):
+            return None
         return InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="通过", callback_data=f"approve:{alert_id}"),
@@ -673,7 +681,14 @@ class AlertBot:
         return f'<a href="tg://user?id={val}">{safe_name}</a>'
 
     def _make_keyboard_stage2(self, alert_id):
-        """stage2 带「登记违规 / 取消」两按钮。"""
+        """stage2 带「登记违规 / 取消」两按钮。
+
+        v3.1.9(Codex P1):BOT_POLLING_DISABLED=true 时本地 polling 关掉,
+        violation/cancel 按钮没人接 → 返 None。中央台 fallback 失败的预警
+        会发成纯文本,避免「看得到点不动」的静默降级。
+        """
+        if getattr(config, "BOT_POLLING_DISABLED", False):
+            return None
         return InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="登记违规", callback_data=f"violation:{alert_id}"),
@@ -1180,6 +1195,12 @@ class AlertBot:
     async def start(self):
         """启动 Bot 轮询"""
         if not self.dp:
+            return
+        # v3.1.9: BOT_POLLING_DISABLED=true 时不 polling,callback 由中央台 callback_listener 接管
+        # bot 实例仍存活,sendMessage / editMessage 等主动调用照常(预警推送仍正常)。
+        # 用法:多 dept 共用同一 BOT_TOKEN 时,只让中央台 polling 一次,dept 全关 polling 避免 409。
+        if getattr(config, "BOT_POLLING_DISABLED", False):
+            logger.info("Bot polling 已禁用 (BOT_POLLING_DISABLED=true) — callback 由中央台接管")
             return
         logger.info("Bot 启动...")
         await self.dp.start_polling(self.bot)
