@@ -2,9 +2,17 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1.5(2026-05-18)
+## 📌 当前版本:v3.1.6(2026-05-18)
 
-🔴 **v3.1.5:共用 Caddy 多 dept site block 治根 + 防 Sheet 时间错乱** — 一次修两个累积痛点:
+🎯 **v3.1.6:删除消息预警 @ 监察员(inspector_tg_id)** — 客户反馈:删除消息让审查员处理,不打扰商务/负责人。`bot.py` 3 处改:`_route_callback` / `on_stage2_action` expected_actor 反查按 alert.type 分支(deleted → inspector / stage2 → owner / 其他 → business);`send_delete_alert` 把 `owner_tg_id` 改 `inspector_tg_id`,fallback_name `负责人` → `审查员`。`templates/index.html` 监察员字段 label 文案补「+ 删除消息预警」。inspector 未配账号 → 走 v3.0.5 老「通过/拒绝」按钮路径(向后兼容,老客户升级零行为变更)。详见 [PR #41](https://github.com/yifan1119/tg-monitor-template/pull/41)。
+
+<details><summary>v3.1.5.1(2026-05-18) — WEB_UPSTREAM 透传 caddy + caddy 自动接所有 dept network 治根</summary>
+
+2 处治根:① `docker-compose.yml` caddy environment 加 `WEB_UPSTREAM` 透传(`.env WEB_UPSTREAM=` 才能真覆盖 Caddyfile 默认上游,修 docker compose project sanitize 砍 `--https` 后缀致 502 问题);② `update.sh` 加 5c 自动扫 `Caddyfile + conf.d/*.caddy` 所有 reverse_proxy upstream 容器名,挨个接进本 caddy network。`enable_https.sh` 加 sanitize 容器名检测自动写 `.env WEB_UPSTREAM`。陈家碧 2 台 VPS 撞这个 502 历史问题彻底治根。
+
+</details>
+
+<details><summary>v3.1.5(2026-05-18) — 共用 Caddy 多 dept site block 治根 + 防 Sheet 时间错乱</summary>
 
 **① HTTPS site block 不再被 update.sh 冲掉(治根)**:同 VPS 多 dept 共用 Caddy 模式,enable_https.sh 历史是 append 主 Caddyfile(git tracked)→ update.sh git reset 冲掉 → HTTPS 挂。这模式已踩 5+ 次,CLAUDE.md 硬规定 #12 写了正确做法但代码未落地。v3.1.5:主 Caddyfile 加 `import conf.d/*.caddy`,docker-compose mount `./conf.d/`,enable_https.sh 写 `conf.d/<COMPANY>.caddy` 独立文件(.gitignored)→ update.sh git reset 不冲。**目录 mount 无 inode 断裂问题**(比单文件 mount 更稳)。详见 [ADR-0049](docs/adr/0049-v3.1.5-caddyfile-confd-import-root-fix.md)。
 
