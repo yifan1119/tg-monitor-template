@@ -26,7 +26,7 @@
 set -e
 
 INSTALL_DIR="$(pwd)"
-TARGET_TAG="v3.1.8.1"
+TARGET_TAG="${TARGET_TAG:-v3.1.9}"
 TARGET_FILE="media_uploader.py"
 SERVICE_NAME="tg-monitor"
 HEALTH_TIMEOUT=60

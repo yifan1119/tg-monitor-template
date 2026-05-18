@@ -1181,5 +1181,11 @@ class AlertBot:
         """启动 Bot 轮询"""
         if not self.dp:
             return
+        # v3.1.9: BOT_POLLING_DISABLED=true 时不 polling,callback 由中央台 callback_listener 接管
+        # bot 实例仍存活,sendMessage / editMessage 等主动调用照常(预警推送仍正常)。
+        # 用法:多 dept 共用同一 BOT_TOKEN 时,只让中央台 polling 一次,dept 全关 polling 避免 409。
+        if getattr(config, "BOT_POLLING_DISABLED", False):
+            logger.info("Bot polling 已禁用 (BOT_POLLING_DISABLED=true) — callback 由中央台接管")
+            return
         logger.info("Bot 启动...")
         await self.dp.start_polling(self.bot)
