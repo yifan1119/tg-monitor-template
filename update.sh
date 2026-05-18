@@ -679,9 +679,23 @@ fi
 #       enable_https.sh 之前加的 docker network connect 会随旧容器一起丢。
 #       新 web 容器跟 shared Caddy 不在同一 network → Caddy DNS 解析容器名失败 → 502。
 # 自愈: 检测后自动 docker network connect + caddy reload。
+#
+# v3.1.5.1: 扩到「本机 caddy 作为多 dept 共用 caddy 时,自动接所有 dept network」
+# 历史踩坑(2026-05-18 陈家碧 187.127.114.68 / 82.112.236.78):caddy 反代别的
+# dept 但只接了自己 default network,别 dept web 容器 DNS 解析失败 → 502。
+# 修法:扫 host 上所有 /root/tg-monitor-*/conf.d/*.caddy 找 reverse_proxy 容器名,
+# 把对应 dept network 接进本 caddy,幂等。
 if [ -n "$MY_CADDY" ] && [ "$MY_CADDY" != "tg-caddy-${COMPANY_NAME}" ]; then
     # 仅 shared 外部 Caddy 模式才需要(自建 Caddy 走 docker compose default network 不会断)
+    # v3.1.5.1: WEB_CONTAINER 检测 sanitize 后的真实名
     WEB_CONTAINER="tg-web-${COMPANY_NAME}"
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$WEB_CONTAINER"; then
+        # 老 docker compose project sanitize 砍掉 --https 之类后缀
+        WEB_CONTAINER_FALLBACK="tg-web-${COMPANY_NAME%--https}"
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$WEB_CONTAINER_FALLBACK"; then
+            WEB_CONTAINER="$WEB_CONTAINER_FALLBACK"
+        fi
+    fi
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$WEB_CONTAINER"; then
         CADDY_NETS=$(docker inspect "$MY_CADDY" \
             --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null)
@@ -709,6 +723,49 @@ if [ -n "$MY_CADDY" ] && [ "$MY_CADDY" != "tg-caddy-${COMPANY_NAME}" ]; then
                     | grep -iE 'error|fail' || echo "   ✅ Caddy 已 reload"
             fi
         fi
+    fi
+fi
+
+# ===== 5c. v3.1.5.1: 本机 caddy 若反代别的 dept(主仓 Caddyfile + conf.d/*.caddy)→ =====
+# 自动把 caddy 接入所有 reverse_proxy upstream 容器对应的 docker network。
+# 检测:扫 /root/tg-monitor-*/conf.d/*.caddy 找 reverse_proxy 容器名 + 本部门主 Caddyfile,
+# 用 docker inspect 容器拿它的 network,把 caddy 没接的 network 加进来。幂等。
+# 治根 2026-05-18 陈家碧 187.127.114.68 / 82.112.236.78 同款问题。
+MY_CADDY_FOR_5C="tg-caddy-${COMPANY_NAME}"
+if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$MY_CADDY_FOR_5C"; then
+    MY_CADDY_FOR_5C="tg-caddy-${COMPANY_NAME%--https}"
+fi
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$MY_CADDY_FOR_5C"; then
+    # 收集所有 reverse_proxy 提到的容器名(主 Caddyfile + conf.d)
+    UPSTREAMS=$( { grep -hE '^\s*reverse_proxy' "${INSTALL_DIR}/Caddyfile" 2>/dev/null;
+                   grep -hE '^\s*reverse_proxy' ${INSTALL_DIR}/conf.d/*.caddy 2>/dev/null || true; } \
+                | sed -E 's/.*reverse_proxy\s+\{?\$WEB_UPSTREAM:([^}]*)\}?.*/\1/;
+                         s/.*reverse_proxy\s+([^ {]+).*/\1/' \
+                | awk -F: '{print $1}' | sort -u | grep -v '^$' || true )
+    JOINED_COUNT=0
+    CADDY_NETS_NOW=$(docker inspect "$MY_CADDY_FOR_5C" \
+        --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null)
+    for up in $UPSTREAMS; do
+        # 跳过非容器名的(localhost / IP / host.docker.internal)
+        case "$up" in
+            localhost|host.docker.internal|127.0.0.1|10.*|172.*|192.168.*) continue ;;
+        esac
+        UP_NETS=$(docker inspect "$up" --format \
+            '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null || true)
+        for net in $UP_NETS; do
+            [ "$net" = "bridge" ] && continue
+            if ! echo " $CADDY_NETS_NOW " | grep -q " $net "; then
+                docker network connect "$net" "$MY_CADDY_FOR_5C" 2>&1 \
+                    | grep -v "already exists" | grep -v "^$" || true
+                CADDY_NETS_NOW="$CADDY_NETS_NOW $net"
+                JOINED_COUNT=$((JOINED_COUNT + 1))
+            fi
+        done
+    done
+    if [ $JOINED_COUNT -gt 0 ]; then
+        echo "🔧 ${MY_CADDY_FOR_5C} 已自动接入 $JOINED_COUNT 个 dept network(共用 Caddy 治根 v3.1.5.1)"
+        docker exec "$MY_CADDY_FOR_5C" caddy reload --config /etc/caddy/Caddyfile 2>&1 \
+            | grep -iE 'error|fail' || echo "   ✅ Caddy 已 reload"
     fi
 fi
 

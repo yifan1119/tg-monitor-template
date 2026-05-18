@@ -79,6 +79,12 @@ services:
       - TZ=Asia/Shanghai
       - PUBLIC_DOMAIN=${PUBLIC_DOMAIN:-}
       - WEB_PORT=${WEB_PORT:-5001}
+      # v3.1.5.1 (2026-05-18): 透传 WEB_UPSTREAM 让 .env 能覆盖 Caddyfile 默认上游名
+      # 历史踩坑:dept 目录名含 `--https` 后缀,docker compose project 自动 sanitize
+      # 砍掉后缀(`tg-web-A--https` → `tg-web-A`)→ Caddyfile 默认 `tg-web-${COMPANY_NAME}:5001`
+      # 解析失败 → 502。客户在 .env 加 `WEB_UPSTREAM=<真实容器名>:5001` 才能覆盖,
+      # 但 docker-compose 没透传这个 env 到 caddy 容器 → 之前白加。本版透传后生效。
+      - WEB_UPSTREAM=${WEB_UPSTREAM:-}
 
 volumes:
   caddy_data:

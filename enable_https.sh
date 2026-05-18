@@ -24,6 +24,24 @@ WEB_PORT=$(grep "^WEB_PORT=" .env 2>/dev/null | cut -d= -f2 | head -1)
 WEB_PORT="${WEB_PORT:-5001}"
 WEB_CONTAINER="tg-web-${COMPANY}"
 
+# v3.1.5.1: docker compose project name sanitize 处理 — COMPANY_NAME 含 `--https`
+# 后缀或别的非法字符时,docker 自动砍掉 → 实际容器名跟 .env 不一致 → Caddyfile
+# 默认 `tg-web-${COMPANY_NAME}:5001` 解析失败 → 502。这里检测真实容器名,
+# 不一致就写 .env WEB_UPSTREAM 覆盖 Caddyfile 默认,主仓 docker-compose v3.1.5.1
+# 已把 WEB_UPSTREAM 透传给 caddy 容器,二者配合根治。
+WEB_CONTAINER_ACTUAL=$(docker ps -a --format '{{.Names}}' 2>/dev/null \
+    | grep -E "^tg-web-${COMPANY}$|^tg-web-${COMPANY%--https}$" | head -1)
+if [ -n "$WEB_CONTAINER_ACTUAL" ] && [ "$WEB_CONTAINER_ACTUAL" != "$WEB_CONTAINER" ]; then
+    echo "▸ 检测到容器名被 docker compose sanitize:"
+    echo "  .env 期望: $WEB_CONTAINER"
+    echo "  实际容器: $WEB_CONTAINER_ACTUAL"
+    echo "  写 .env WEB_UPSTREAM=${WEB_CONTAINER_ACTUAL}:${WEB_PORT} 覆盖 Caddyfile 默认上游"
+    sed -i.bak "/^WEB_UPSTREAM=/d" .env 2>/dev/null || true
+    echo "WEB_UPSTREAM=${WEB_CONTAINER_ACTUAL}:${WEB_PORT}" >> .env
+    rm -f .env.bak
+    WEB_CONTAINER="$WEB_CONTAINER_ACTUAL"
+fi
+
 # 1. 决定域名
 # v2.10.13: 支持同 VPS 多部门 HTTPS 共存 — 新部门用 <company>.<IP>.nip.io 子域
 #   向后兼容: .env 已有 PUBLIC_DOMAIN 的老部门继续沿用,不破坏 OAuth redirect URI
