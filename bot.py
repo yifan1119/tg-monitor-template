@@ -258,14 +258,19 @@ class AlertBot:
                 try:
                     actor = f"bot:{callback.from_user.id}" if callback.from_user else "bot:unknown"
                     actor_name = callback.from_user.full_name if callback.from_user else ""
-                    # 反查 alert 应处理人:stage2/删除 → owner_tg_id;stage1/关键词 → business_tg_id
+                    # 反查 alert 应处理人:
+                    #   v3.1.6: 删除消息 → inspector_tg_id(审查员)
+                    #   stage2/未回复 → owner_tg_id(负责人)
+                    #   stage1/关键词 → business_tg_id(商务)
                     expected_actor = ""
                     try:
                         account = db.get_account_by_id(alert["account_id"]) if alert and "account_id" in alert.keys() else None
                         if account:
                             atype = alert["type"] if "type" in alert.keys() else ""
                             astage = alert["stage"] if "stage" in alert.keys() else 0
-                            if atype == "deleted" or (atype == "no_reply" and astage == 2):
+                            if atype == "deleted":
+                                expected_actor = (account["inspector_tg_id"] if "inspector_tg_id" in account.keys() else "") or ""
+                            elif atype == "no_reply" and astage == 2:
                                 expected_actor = account["owner_tg_id"] or ""
                             else:
                                 expected_actor = account["business_tg_id"] or ""
@@ -335,12 +340,17 @@ class AlertBot:
                 try:
                     actor_id = f"bot:{callback.from_user.id}" if callback.from_user else "bot:unknown"
                     actor_name = callback.from_user.full_name if callback.from_user else ""
-                    # 反查 alert 应处理人(stage2/删除 → owner_tg_id)
+                    # 反查 alert 应处理人:v3.1.6 删除 → inspector_tg_id(审查员);stage2 → owner_tg_id
                     expected_actor = ""
                     try:
                         account = db.get_account_by_id(alert["account_id"]) if alert and "account_id" in alert.keys() else None
                         if account:
-                            expected_actor = (account["owner_tg_id"] or "").lstrip("@")
+                            atype = alert["type"] if "type" in alert.keys() else ""
+                            if atype == "deleted":
+                                expected_actor = (account["inspector_tg_id"] if "inspector_tg_id" in account.keys() else "") or ""
+                            else:
+                                expected_actor = account["owner_tg_id"] or ""
+                            expected_actor = (expected_actor or "").lstrip("@")
                     except Exception:
                         pass
                     db.audit_log(event_type="bot_callback",
@@ -462,7 +472,11 @@ class AlertBot:
                 # v3.0.17: 优先中央台路由(关键词预警没 button,可直接换 bot 推)
                 routed = await _try_central_route(account, "keyword", msg)
                 if not routed:
-                    await self.bot.send_message(config.ALERT_GROUP_ID, msg)
+                    if config.ENFORCE_CENTRAL_ROUTE:
+                        logger.error("[central_route_fail] keyword account=%s company=%s 中台路由失败,丢弃不推老群(ENFORCE_CENTRAL_ROUTE=true)",
+                                     account.get('name','?'), account.get('company',''))
+                    else:
+                        await self.bot.send_message(config.ALERT_GROUP_ID, msg)
             else:
                 logger.info("[ALERT_KEYWORD_DISABLED] 跳过关键词推送 peer=%s keyword=%s (Sheet 仍写入)", peer["id"], keyword)
         except Exception as e:
@@ -738,6 +752,10 @@ class AlertBot:
             # 中央台推成功 → 用伪 message_id 占位(没 bot_message_id 也算「真送达」)
             db.update_alert_bot_msg(alert_id, -1)  # -1 = 中央台推,本地无 message_id
             return
+        if config.ENFORCE_CENTRAL_ROUTE:
+            logger.error("[central_route_fail] no_reply account=%s company=%s 中台路由失败,丢弃不推老群",
+                         account.get('name','?'), account.get('company',''))
+            return
         try:
             sent = await self.bot.send_message(
                 target_group, msg,
@@ -808,6 +826,10 @@ class AlertBot:
             if routed:
                 db.update_alert_bot_msg(alert_id, -1)  # -1 = 中央台推
                 return
+        if config.ENFORCE_CENTRAL_ROUTE:
+            logger.error("[central_route_fail] stage2_no_reply account=%s company=%s 中台路由失败,丢弃",
+                         account.get('name','?'), account.get('company',''))
+            return
         # fallback:中央台未配 / fetch 失败 / 没 metrics_token → 本地 bot 推(老路径)
         try:
             sent = await self.bot.send_message(
@@ -832,11 +854,13 @@ class AlertBot:
     # ===================== v3.0.0 两段式结束 =====================
 
     async def send_delete_alert(self, account_id, peer, message_text, msg_id):
-        """发送删除预警（每个广告主每天只推一次)
+        """发送删除预警(每个广告主每天只推一次)
 
         v2.10.23:同 send_no_reply_alert 的逻辑 — 静默走 silenced,失败留 pending 下次重试。
-        v3.0.5 客户反馈: 跟 stage2 一致的 @负责人 + 登记违规/取消 格式 (数据驱动):
-          - 账号配了 owner_tg_id → @负责人 + 登记违规/取消 (HTML mode)
+        v3.0.5 客户反馈: 跟 stage2 一致的 @负责人 + 登记违规/取消 格式 (数据驱动)。
+        v3.1.6 客户反馈: 删除预警从 @负责人(owner_tg_id) 改成 @审查员(inspector_tg_id)
+          — 删除消息只让审查员处理,不打扰商务/负责人。
+          - 账号配了 inspector_tg_id → @审查员 + 登记违规/取消 (HTML mode)
           - 账号没配 → 走老通过/拒绝 按钮路径,完全向后兼容
         """
         if not self.bot or not config.ALERT_GROUP_ID:
@@ -870,10 +894,13 @@ class AlertBot:
             message_text=message_text,
         )
 
-        # v3.0.5: 有配 owner_tg_id 走 @负责人 + 登记违规/取消 (跟 stage2 一致)
-        owner_tg = account["owner_tg_id"] if "owner_tg_id" in account.keys() else ""
+        # v3.1.6: 删除消息预警 @ 审查员(inspector_tg_id),不再 @ 负责人(owner_tg_id)
+        # 客户反馈:删除消息让审查员处理,不打扰商务/负责人。
+        # 老 owner_tg_id 字段保留给 stage2 未回复预警链路,不动。
+        # 模板 owner_mention 变量名沿用(只是传入 inspector 的 mention,模板渲染不变)。
+        inspector_tg = account["inspector_tg_id"] if "inspector_tg_id" in account.keys() else ""
         owner_mention = (
-            await self._build_tg_mention(owner_tg, fallback_name="负责人") if owner_tg else ""
+            await self._build_tg_mention(inspector_tg, fallback_name="审查员") if inspector_tg else ""
         )
         custom_text = getattr(config, "REMIND_DELETE_TEXT", "") or ""
 
@@ -903,6 +930,10 @@ class AlertBot:
             if routed:
                 db.update_alert_bot_msg(alert_id, -1)  # -1 = 中央台推
                 return
+        if config.ENFORCE_CENTRAL_ROUTE:
+            logger.error("[central_route_fail] deleted account=%s company=%s 中台路由失败,丢弃",
+                         account.get('name','?'), account.get('company',''))
+            return
         # fallback:本地 bot 推
         try:
             if owner_mention:
@@ -1056,6 +1087,12 @@ class AlertBot:
             if routed:
                 logger.info("[session_%s] 已经中央台路由 phone=%s", kind, phone)
                 return
+            # v3.1.4: ENFORCE_CENTRAL_ROUTE=true 时不 fallback 老群
+            # 但 session 告警是系统性故障 — 即使强制中台也至少推到 ALERT_GROUP_ID 保证客户知道
+            # (业务告警 keyword/no_reply/deleted 拔了 fallback,session 留底)
+            if config.ENFORCE_CENTRAL_ROUTE:
+                logger.error("[central_route_fail] session_%s account=%s 中台路由失败,仍走老群兜底(系统性告警必送)",
+                             kind, account.get('name','?') if account else '?')
             # v2.10.5: 运维告警,永远推 — 不受 ALERTS_ENABLED 影响
             # (ALERTS_ENABLED 只管业务告警:关键词/未回复/删除。session 吊销是系统性故障,必须让客户知道)
             # parse_mode="HTML" 是关键:渲染 numeric tg_id 的 inline mention 必须 HTML
