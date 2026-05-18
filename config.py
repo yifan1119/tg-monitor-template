@@ -159,6 +159,11 @@ ALERT_KEYWORD_ENABLED = _resolve_subswitch("ALERT_KEYWORD_ENABLED", ALERTS_ENABL
 ALERT_NO_REPLY_ENABLED = _resolve_subswitch("ALERT_NO_REPLY_ENABLED", ALERTS_ENABLED)
 ALERT_DELETE_ENABLED = _resolve_subswitch("ALERT_DELETE_ENABLED", ALERTS_ENABLED)
 
+# v3.1.4: 强制中央台路由 — true 时,中台 404/不通 不再 fallback 本地 ALERT_GROUP_ID 老群
+# 避免 silent failure(客户改归属错 → fallback 老群 → 无感)
+# 默认 false 维持老 fallback 行为(向后兼容)
+ENFORCE_CENTRAL_ROUTE = os.environ.get("ENFORCE_CENTRAL_ROUTE", "false").strip().lower() == "true"
+
 # 日报推送开关。留空 = 跟随 ALERTS_ENABLED;显式 true/false 则独立
 _daily_env = os.environ.get("DAILY_REPORT_ENABLED", "").strip().lower()
 if _daily_env in ("true", "false"):
@@ -447,7 +452,10 @@ SHEETS_RATE_LIMIT_PER_MIN = int(os.environ.get("SHEETS_RATE_LIMIT_PER_MIN", "50"
 SHEET_RESYNC_INTERVAL_MINUTES = int(os.environ.get("SHEET_RESYNC_INTERVAL_MINUTES", "15"))
 
 # v3.1: 关掉退回 v3.0.9 纯 append 行为(适合不希望 update 写入的客户)
-SHEET_RESYNC_ENABLED = os.environ.get("SHEET_RESYNC_ENABLED", "true").lower() == "true"
+# v3.1.5 (2026-05-18) 默认改 false: 客户反馈新消息塞中间(next_sheet_row 回填空位)
+#   导致 Sheet 时间错乱(2026-05 跟 2026-02 混杂)。保时间顺序优先于「客户删旧消息自动补」。
+#   想要回填功能的客户可以 .env 显式 SHEET_RESYNC_ENABLED=true 开回去。
+SHEET_RESYNC_ENABLED = os.environ.get("SHEET_RESYNC_ENABLED", "false").lower() == "true"
 
 # v3.1 (Codex P0-1 修): 写前校验 — 每条消息 update 前读 1 个 cell 验证那行真空(quota +1 read/peer)
 # **默认 ON** 防止 race window 内客户在 next_row 处贴内容被覆盖。
