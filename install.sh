@@ -210,6 +210,9 @@ HISTORY_DAYS=2
 SHEETS_FLUSH_INTERVAL=5
 PATROL_INTERVAL=60
 
+# v3.1.7: 日报推送默认关(运维 / 中央台统一推日报,dept 不再单独推 ALERT_GROUP_ID)
+DAILY_REPORT_ENABLED=false
+
 # 完成标志（设置精灵填完会改成 true）
 SETUP_COMPLETE=false
 EOF
