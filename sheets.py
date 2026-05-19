@@ -193,6 +193,10 @@ class SheetsWriter:
         # v3.1 (ADR-0027): 后台 resync 状态(给 dashboard 看)
         self._last_resync_ts = None        # 'YYYY-MM-DD HH:MM:SS' or None
         self._last_resync_stats = None     # {'worksheets_scanned': N, 'peers_updated': N, 'errors': [], 'duration_sec': X}
+        # v3.3.2: 降级模式时 spreadsheet=None,跳过 startup 阶段所有 Sheet 调用
+        if self.spreadsheet is None:
+            logger.warning("[sheets_degraded] 跳过启动期 ensure_alert_tabs / ensure_account_tabs / backfill_alert_history")
+            return
         logger.info("Spreadsheet 已打开: %s", self.spreadsheet.title)
         self.ensure_alert_tabs()
         self.ensure_account_tabs()  # v2.10.10: 启动时给 DB 里每个账号补缺失的分页
@@ -249,6 +253,7 @@ class SheetsWriter:
         """v2.10.10: 扫 DB 所有账号,分页不存在就建一个(对齐登录时 _create_sheet_tab 的承诺)。
         解决升级前登录的账号没有对应分页的历史遗留问题。
 
+        v3.3.2: 降级模式 early return。
         v2.10.16: 改用 create_account_tab_full 建完整模板(青头 + 对话槽 + 冻结
         + 斑马纹),跟登录时 web._create_sheet_tab 产出一致,不再是 3 行阉割版。
 
@@ -258,6 +263,8 @@ class SheetsWriter:
         v3.0.14: 启动 + 60s patrol 第一步先调 dedupe_assign_sheet_tabs 自动给历史重名账号
         分配独立 sheet_tab(老分页留给同名第一个,后续加 phone 后 4 位后缀新建)。
         升级后客户无需任何 SQL 干预,所有同名分页自动 fix。"""
+        if self.spreadsheet is None:   # v3.3.2: 降级模式
+            return
         try:
             # v3.0.14: 先 dedupe — 给历史重名账号分配独立 sheet_tab
             dedupe_assign_sheet_tabs(db.get_conn())
@@ -695,6 +702,8 @@ class SheetsWriter:
 
     def ensure_alert_tabs(self):
         """自动建立/修正预警分页（信息未回复预警、关键词监听、信息删除预警）"""
+        if self.spreadsheet is None:   # v3.3.2: 降级模式
+            return
         suffix = config.COMPANY_DISPLAY
         needed = [
             (f"信息未回复预警{suffix}", "信息未回复预警"),
@@ -737,6 +746,8 @@ class SheetsWriter:
         """v2.10.24.2(ADR-0009): 扫三个预警分页,把空的 A(所属公司)/ B(商务人员)栏
         用 DB accounts 里的 company/operator 回填。
 
+        v3.3.2: 降级模式 early return。
+
         背景:v2.10.24.1 之前 sync_headers 被 429 / sed 止血卡住时,新登录外事号在
         分页 B2/B3 填的值同步不到 DB,后续预警写入三张分页时 A/B 栏为空(见 bot.py:142/147/190)。
         历史行不会自动回填,这个方法负责一次性扫三个分页把能补的空栏用 DB 值填上。
@@ -745,6 +756,8 @@ class SheetsWriter:
         配额:~7 次 API 调用(1 次 worksheets + 3 次 get_all_values + 3 次 batch_update)。
         返回:(filled_rows, skipped_rows_db_empty) — 填了几行 / DB 里也空没法补的几行。
         """
+        if self.spreadsheet is None:   # v3.3.2: 降级模式
+            return 0, 0
         suffix = config.COMPANY_DISPLAY
         alert_tabs = [
             f"信息未回复预警{suffix}",
@@ -1469,6 +1482,8 @@ class SheetsWriter:
         - 个 worksheet 失败不影响整轮(try/except 隔离, 记 errors list)
         - 整轮异常上抛由 tasks._sheet_position_resync_loop 兜底 log + 下轮重试
         """
+        if self.spreadsheet is None:   # v3.3.2: 降级模式
+            return {"worksheets_scanned": 0, "peers_updated": 0, "errors": ["sheets_degraded"], "duration_sec": 0}
         started = time.time()
         accounts = db.get_all_accounts()
         accounts_by_id = {a["id"]: a for a in accounts}
