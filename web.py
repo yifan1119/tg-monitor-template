@@ -190,6 +190,16 @@ def _client_ip():
 DEFAULT_API_ID = ""
 DEFAULT_API_HASH = ""
 DEFAULT_KEYWORDS = "到期,续费,暂停,下架,上架,地址,打款,欠费,返点,返利,回扣"
+
+
+def _safe_int_range(raw, default, lo, hi):
+    """v3.3.2 Codex P1 helper: 把 form 字符串安全转 [lo, hi] 区间整数,失败回 default。
+    返回 str(给 .env 写入)。非数字 / 越界 / None / "" 一律回 default。"""
+    try:
+        n = int((raw or "").strip())
+    except (ValueError, TypeError):
+        return str(default)
+    return str(max(lo, min(hi, n)))
 DEFAULT_WEB_PASSWORD = "tg@monitor2026"
 DEFAULT_NO_REPLY_MINUTES = "30"
 DEFAULT_PATROL_DAYS = "7"
@@ -271,6 +281,7 @@ def write_env(updates):
         "KEYWORDS", "NO_REPLY_MINUTES",
         # v3.0.21: COMPANY_OPTIONS / CENTER_OPTIONS 删 — 账号配置下拉改为中央台 /api/v1/options 实时拉
         "SKIP_NO_REPLY_TEXTS", "SKIP_NO_REPLY_MIN_LEN", "SKIP_NO_REPLY_PURE_EMOJI",  # v3.0.19: 闲聊词白名单 web 配
+        "CLOSE_PHRASE_TEXTS", "CLOSE_PHRASE_LOOKBACK",  # v3.3.2: 对话告一段落跳过
         "WORK_HOUR_START", "WORK_HOUR_END",
         "PATROL_DAYS", "HISTORY_DAYS",
         "SHEETS_FLUSH_INTERVAL", "SHEETS_RATE_LIMIT_PER_MIN", "PATROL_INTERVAL",
@@ -999,6 +1010,9 @@ def setup_page():
         "skip_no_reply_texts": env.get("SKIP_NO_REPLY_TEXTS", ""),
         "skip_no_reply_min_len": env.get("SKIP_NO_REPLY_MIN_LEN", "1"),
         "skip_no_reply_pure_emoji": env.get("SKIP_NO_REPLY_PURE_EMOJI", "true"),
+        # v3.3.2: 对话告一段落跳过
+        "close_phrase_texts": env.get("CLOSE_PHRASE_TEXTS", ""),
+        "close_phrase_lookback": env.get("CLOSE_PHRASE_LOOKBACK", "3"),
         # v3.1.5: 所属中心下拉选项(用于自动拉 SA)
         "center_slug_choices": CENTER_SLUG_CHOICES,
         "center_slug": env.get("CENTER_SLUG", ""),
@@ -1055,6 +1069,9 @@ def settings_page():
         "skip_no_reply_texts": env.get("SKIP_NO_REPLY_TEXTS", ""),
         "skip_no_reply_min_len": env.get("SKIP_NO_REPLY_MIN_LEN", "1"),
         "skip_no_reply_pure_emoji": env.get("SKIP_NO_REPLY_PURE_EMOJI", "true"),
+        # v3.3.2: 对话告一段落跳过
+        "close_phrase_texts": env.get("CLOSE_PHRASE_TEXTS", ""),
+        "close_phrase_lookback": env.get("CLOSE_PHRASE_LOOKBACK", "3"),
         # v2.6.2: 预警 / 日报开关(settings 页可改,dashboard 也能切换预警)
         # v2.6.6: 三个独立子开关 — 留空跟随 ALERTS_ENABLED 总开关
         "alerts_enabled": env.get("ALERTS_ENABLED", "true").lower() != "false",
@@ -1836,6 +1853,10 @@ def _save_settings(is_first):
         "SKIP_NO_REPLY_TEXTS": ",".join(dict.fromkeys(s.strip() for s in form.get("skip_no_reply_texts", "").replace("\n", ",").split(",") if s.strip())),
         "SKIP_NO_REPLY_MIN_LEN": (form.get("skip_no_reply_min_len", "1") or "1").strip(),
         "SKIP_NO_REPLY_PURE_EMOJI": "true" if form.get("skip_no_reply_pure_emoji") in ("true", "on", "1") else "false",
+        # v3.3.2: 对话告一段落跳过
+        "CLOSE_PHRASE_TEXTS": ",".join(dict.fromkeys(s.strip() for s in form.get("close_phrase_texts", "").replace("\n", ",").split(",") if s.strip())),
+        # v3.3.2 Codex P1 fix: int + 范围校验 (1-50),非法值回退默认 3,防 .env 写脏导致下次 load 炸
+        "CLOSE_PHRASE_LOOKBACK": _safe_int_range(form.get("close_phrase_lookback", "3"), default=3, lo=1, hi=50),
         "API_ID": form.get("api_id", DEFAULT_API_ID),
         "API_HASH": form.get("api_hash", DEFAULT_API_HASH),
         "SETUP_COMPLETE": "true",

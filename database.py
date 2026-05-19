@@ -1085,6 +1085,22 @@ def has_outbound_since(peer_id, since_ts):
     return row is not None
 
 
+def recent_outbound_texts(peer_id, limit=3):
+    """v3.3.2: 拿 peer 最近 N 条 A 方向(我方)消息文本,给 _no_reply_loop 检测我方
+    有没有说过结束语(等通知/拜拜/就这样)用。tasks.py 调 + config.CLOSE_PHRASE_TEXTS
+    子串匹配。
+
+    返回 list[str](最近 N 条 text,空 / None 过滤)。limit 默认 3 跟
+    config.CLOSE_PHRASE_LOOKBACK 一致。
+    """
+    rows = get_conn().execute(
+        "SELECT text FROM messages WHERE peer_id=? AND direction='A' AND deleted=0 "
+        "ORDER BY timestamp DESC, msg_id DESC LIMIT ?",
+        (peer_id, max(1, int(limit)))
+    ).fetchall()
+    return [r["text"] for r in rows if r["text"]]
+
+
 def stage1_resolved_by_reply(peer_id, alert_msg_id):
     """v3.3.1:stage1 alert 是否已被回复 — 精准版,取代 has_outbound_since 给 stage2 loop 兜底用。
 

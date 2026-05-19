@@ -34,6 +34,8 @@ def reload_if_env_changed():
     global TG_DEVICE_MODEL, TG_SYSTEM_VERSION, TG_APP_VERSION, TG_LANG_CODE, TG_SYSTEM_LANG
     # v3.0.10:无意义未回复消息过滤 — 客户改 .env 立刻生效不用重启容器
     global SKIP_NO_REPLY_MIN_LEN, SKIP_NO_REPLY_TEXTS, SKIP_NO_REPLY_PURE_EMOJI
+    # v3.3.2:对话告一段落跳过
+    global CLOSE_PHRASE_TEXTS, CLOSE_PHRASE_LOOKBACK
     try:
         m = _ENV_PATH.stat().st_mtime
     except OSError:
@@ -102,15 +104,19 @@ def reload_if_env_changed():
     if _skip_user_new:
         SKIP_NO_REPLY_TEXTS = set(_skip_user_new)
     else:
-        # 留空 = 用内置默认
-        SKIP_NO_REPLY_TEXTS = set([
-            "你好", "您好", "嗨", "hi", "hello", "Hi", "Hello", "HELLO",
-            "在", "在?", "在?", "在吗", "在嘛", "在么", "在不在", "在不",
-            "1", "?", "?", "??", "??", "嗯", "嗯嗯", "哦", "哦哦",
-            "好", "好的", "好滴", "ok", "OK", "okay", "Okay",
-            "哈", "哈哈", "嘿", "嘿嘿",
-        ])
+        # v3.3.2: reload 段跟模块底部 _skip_default 同来源,改一处生效
+        SKIP_NO_REPLY_TEXTS = set(_default_skip_texts())
     SKIP_NO_REPLY_PURE_EMOJI = os.environ.get("SKIP_NO_REPLY_PURE_EMOJI", "true").lower() == "true"
+    # v3.3.2: 对话告一段落跳过(hot reload)
+    _close_user_new = [t.strip() for t in os.environ.get("CLOSE_PHRASE_TEXTS", "").split(",") if t.strip()]
+    if _close_user_new:
+        CLOSE_PHRASE_TEXTS = set(_close_user_new)
+    else:
+        CLOSE_PHRASE_TEXTS = set(_default_close_phrases())
+    try:
+        CLOSE_PHRASE_LOOKBACK = max(1, min(50, int(os.environ.get("CLOSE_PHRASE_LOOKBACK", "3"))))
+    except (ValueError, TypeError):
+        pass
     # v3.0.0:TG 设备身份也支持热 reload(虽然 TG server 缓存会有延迟,但至少本进程能立刻读新值)
     TG_DEVICE_MODEL   = os.environ.get("TG_DEVICE_MODEL",   "shencha")
     TG_SYSTEM_VERSION = os.environ.get("TG_SYSTEM_VERSION", "1.0")
@@ -190,25 +196,126 @@ NO_REPLY_MINUTES = int(os.environ.get("NO_REPLY_MINUTES", "30"))
 # 客户发「你好 / 表情包 / 1 / ?」这种问候性消息,业务员看见也没必要立刻回 → 不应触发未回复预警。
 # 三层过滤:
 #   1. text 长度 <= SKIP_NO_REPLY_MIN_LEN(默认 1):略过(含纯标点 "?" "!" 这种)
-#   2. text strip 后命中 SKIP_NO_REPLY_TEXTS 列表(逗号分隔):略过
+#   2. text strip 后命中 SKIP_NO_REPLY_TEXTS 列表(逗号分隔):略过 / **v3.3.2 改子串包含**
 #   3. text 是纯 emoji / 表情符号(unicode 范围检测):略过
 # 任意一条命中就 skip,不进 _no_reply_loop。三规则全空 → 行为完全 = v3.0.9.1(向后兼容)。
 SKIP_NO_REPLY_MIN_LEN = int(os.environ.get("SKIP_NO_REPLY_MIN_LEN", "1"))
+
+
+def _default_skip_texts():
+    """v3.3.2:SKIP_NO_REPLY_TEXTS 默认词单 — 客户 .env 留空时用这套(reload + module-level 共用)。
+
+    双层匹配(配合 SKIP_CONTAIN_MIN_LEN):
+    - 短词(< 5 字)精确匹配 — 短业务词不会子串误吞业务问句(如「上架」不吞「什么时候上架?」)
+    - 长结束语(≥ 5 字)子串匹配 — 吃标点变体(「好的辛苦了。」匹配)
+
+    v3.3.2 趁机清理 v3.0.10 残留的「业务短词」(支付/通道/费率/进群了/打款/地址/上架 等)
+    — 它们跟 KEYWORDS 默认列表重叠,精确匹配下单字「打款」会跳未回复预警,业务上不合理。
+    """
+    return [
+        # 问候(短词,精确)
+        "你好", "您好", "嗨", "hi", "hello", "Hi", "Hello", "HELLO",
+        "在", "在?", "在?", "在吗", "在嘛", "在么", "在不在", "在不",
+        # 应答(短词,精确)
+        "1", "?", "?", "??", "??", "嗯", "嗯嗯", "哦", "哦哦",
+        "好", "好的", "好滴", "好嘛", "好哒", "好吧", "好了", "好的哥",
+        "ok", "OK", "okay", "Okay", "OK的", "Ok的",
+        "哈", "哈哈", "哈哈哈", "嘿", "嘿嘿",
+        # 客套(短词,精确)
+        "谢谢", "感谢", "辛苦了", "客气了", "麻烦了",
+        "你先忙", "晚点看下", "晚点看", "早点休息", "再等等",
+        "我问问", "我看看", "好的，我看看", "还可以",
+        "到时候联系",
+        # v3.3.2: 告一段落短词(< 5 字精确匹配)
+        "再联系", "再聊", "下次聊", "下回聊", "改天聊", "回头聊",
+        "拜拜", "再见", "晚安", "88", "8484", "byebye",
+        "了解", "明白", "明白了", "知道了", "没问题", "好嘞", "嗯好", "那行",
+        "OK收到", "搞定了", "完事了",
+        # v3.3.2: 告一段落整句(≥ 5 字子串匹配 — 吃标点变体)
+        "好的辛苦了", "好的谢谢", "谢谢了", "谢谢辛苦了", "好的麻烦了",
+        "好的收到", "收到啦", "收到了哈", "已经收到",
+        "就这样吧", "先这样", "行就这样", "先聊到这", "先这样吧",
+        "好的没问题", "那我先忙", "好的那先这样", "好的就这样",
+        "等通知就好", "等消息就好",
+    ]
+
+
 _skip_user = [t.strip() for t in os.environ.get("SKIP_NO_REPLY_TEXTS", "").split(",") if t.strip()]
-_skip_default = [
-    "你好", "您好", "嗨", "hi", "hello", "Hi", "Hello", "HELLO",
-    "在", "在?", "在?", "在吗", "在嘛", "在么", "在不在", "在不",
-    "1", "?", "?", "??", "??", "嗯", "嗯嗯", "哦", "哦哦",
-    "好", "好的", "好滴", "ok", "OK", "okay", "Okay",
-    "哈", "哈哈", "嘿", "嘿嘿",
-]
-SKIP_NO_REPLY_TEXTS = set(_skip_user) if _skip_user else set(_skip_default)
+SKIP_NO_REPLY_TEXTS = set(_skip_user) if _skip_user else set(_default_skip_texts())
 SKIP_NO_REPLY_PURE_EMOJI = os.environ.get("SKIP_NO_REPLY_PURE_EMOJI", "true").lower() == "true"
 
 
+def _default_close_phrases():
+    """v3.3.2: 我方 outbound 结束语境检测词(B 路径 — 我方主动说了结束语,对方应答后不再 @)。
+    单独列(跟 SKIP_NO_REPLY_TEXTS 不同维度):SKIP 看对方说啥,这个看我方说啥。
+
+    v3.3.2 Codex P0 fix: 删高频短子串 — 子串匹配下「88」吃「报价88元」、「请联系」吃
+    「请联系财务确认打款」、「对接」吃「需要对接谁」、「找他」吃「找他报价」 — 这些都是
+    真业务消息,会被误抑制告警。删完留下的全是 ≥ 3 字、子串落业务消息几率极低的整句。
+    """
+    return [
+        # 主动结束(3+ 字)
+        "等通知", "等消息", "等回复", "等我消息", "等我通知",
+        "再联系", "再聊", "下次聊", "下回聊", "改天聊", "改天再聊", "下次再聊",
+        # 道别(精确语境结束,业务消息几乎不会子串包含)
+        "拜拜", "再见", "晚安", "早点休息", "byebye", "bye-bye",
+        # ⚠ 删:88 / 8484 (会吃「88节」「报价88元」)
+        # 推开
+        "先这样", "就这样", "就这样吧", "行就这样", "先聊到这", "暂时这样", "好的就这样",
+        # 转介绍 / 路由(常见 TG Business 自动回话术 — 用完整长短语,不用裸「请联系」)
+        "商务合作请联系", "商务联系", "商务对接", "请联系商务",
+        # ⚠ 删:请联系 / 私聊 / 找他 / 找她 / 对接 / 归他负责 (单独高频会吃业务)
+        # 推迟
+        "晚点回复", "稍后回复", "晚点联系", "稍后联系", "晚点看下",
+        # ⚠ 删:晚点看 (会吃「晚点看下」「晚点看一下」业务消息)
+        # 我方完结(整句,业务消息几乎不会出现)
+        "搞定了", "完事了", "处理好了", "已经发了", "已经处理", "已经搞定",
+    ]
+
+
+# v3.3.2 Codex P0 fix: 模块加载也读 .env(原版冷启动总用默认,客户改 .env 不生效)
+_close_user = [t.strip() for t in os.environ.get("CLOSE_PHRASE_TEXTS", "").split(",") if t.strip()]
+CLOSE_PHRASE_TEXTS = set(_close_user) if _close_user else set(_default_close_phrases())
+# 我方最近 N 条 outbound 里有结束语 → 整个对话视为告一段落
+# v3.3.2 Codex P1 fix: int + clamp [1, 50],非数字 → 默认 3。
+# clamp 跟 web._safe_int_range 同语义(越界夹边界,不静默 reset 默认)。
+try:
+    CLOSE_PHRASE_LOOKBACK = max(1, min(50, int(os.environ.get("CLOSE_PHRASE_LOOKBACK", "3"))))
+except (ValueError, TypeError):
+    CLOSE_PHRASE_LOOKBACK = 3
+
+
+def _contains_any(text: str, phrases) -> bool:
+    """v3.3.2 helper: text 子串包含任一 phrase 返 True。
+    供 CLOSE_PHRASE_TEXTS 用(我方 outbound 检测,phrase 全是 ≥ 3 字长结束语,不引入短词误判)。"""
+    if not text:
+        return False
+    for p in phrases:
+        if p and p in text:
+            return True
+    return False
+
+
+# v3.3.2: SKIP 词单分两类匹配 — 短词(< SKIP_CONTAIN_MIN_LEN)走精确匹配防业务问句误判,
+# 长结束语(≥ SKIP_CONTAIN_MIN_LEN)走子串匹配吃标点变体。
+# 阈值 4 字(v3.3.2 Codex P1 fix:原 5 字让「好的收到」「OK收到」「先这样吧」4 字短句精确匹配
+# miss 标点变体「好的收到。」继续误报。降到 4 让 4 字短句走子串吃标点):
+#   - 「拜拜」(2字)/「再联系」(3字)等 < 4 字短词 → 精确匹配(变体「拜拜~~」「再联系吧」miss 接受)
+#   - 「OK收到」(4字)/「好的收到」(4字)/「好的辛苦了」(5字)等 ≥ 4 字告一段落短句 → 子串
+#     匹配吃标点变体「OK收到!」「好的收到。」
+# 阈值 4 安全性核对:词单里 4 字短句全是告一段落整句(已经从词单删了「业务短词」段);
+# KEYWORDS 默认表「到期/续费/上架/打款」全 ≤ 2 字,不会撞 4 字业务术语;业务问句一般 5+ 字
+# 含完整动宾结构,4 字短句不会整段命中业务问句(「OK收到」「好的收到」不会出现在业务问句中间)。
+SKIP_CONTAIN_MIN_LEN = 4
+
+
 def is_trivial_no_reply(text) -> bool:
-    """v3.0.10: 判断该客户消息是不是「无意义问候 / 表情」,是 → 略过未回复告警。
-    text 为空或非字符串 → 保守视为不 trivial(可能是图 / 视频 / 文件,有业务含义)。"""
+    """v3.0.10: 判断该客户消息是不是「无意义问候 / 表情 / 告一段落整句」,是 → 略过未回复告警。
+    text 为空或非字符串 → 保守视为不 trivial(可能是图 / 视频 / 文件,有业务含义)。
+
+    v3.3.2:扩词单加告一段落整句 + 双层匹配 — 短词(< 5 字)精确匹配,长结束语(≥ 5 字)
+    子串匹配。防短业务词(如「上架」「打款」「收到」)子串误吞业务问句(「什么时候上架?」)。
+    """
     if not text or not isinstance(text, str):
         return False
     s = text.strip()
@@ -217,9 +324,16 @@ def is_trivial_no_reply(text) -> bool:
     # 长度阈值
     if len(s) <= SKIP_NO_REPLY_MIN_LEN:
         return True
-    # 文本黑名单(命中即略)
-    if s in SKIP_NO_REPLY_TEXTS:
-        return True
+    # v3.3.2: 双层匹配
+    # 1. 短词(< 5 字)精确匹配 — 防业务短词误判
+    # 2. 长结束语(≥ 5 字)子串匹配 — 吃标点 / 符号变体
+    for phrase in SKIP_NO_REPLY_TEXTS:
+        if len(phrase) < SKIP_CONTAIN_MIN_LEN:
+            if s == phrase:
+                return True
+        else:
+            if phrase in s:
+                return True
     # 纯 emoji / 标点符号
     if SKIP_NO_REPLY_PURE_EMOJI:
         non_emoji = False

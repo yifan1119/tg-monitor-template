@@ -206,6 +206,11 @@ class Listener:
                 elif event.message.voice:
                     media_type = "voice"
                     text = "[语音]"
+                elif event.message.gif:
+                    # v3.3.2: GIF 单独标 — 跟 sticker 同列入未回复跳过(99% 是「滑稽脸/拜拜挥手」表情包)
+                    # 必须在 video 检查前(Telethon GIF 是 MP4 同时有 Animated+Video attr)
+                    media_type = "gif"
+                    text = "[GIF]"
                 elif event.message.video:
                     media_type = "video"
                     text = "[视频]"
@@ -306,6 +311,9 @@ class Listener:
                         media_type, text = "photo", "[图片]"
                     elif msg.voice:
                         media_type, text = "voice", "[语音]"
+                    elif msg.gif:
+                        # v3.3.2: GIF 必须在 video 前(Telethon GIF 同时有 Animated+Video attr)
+                        media_type, text = "gif", "[GIF]"
                     elif msg.video:
                         media_type, text = "video", "[视频]"
                     elif msg.sticker:
@@ -392,6 +400,9 @@ class Listener:
                         media_type, text = "photo", "[图片]"
                     elif msg.voice:
                         media_type, text = "voice", "[语音]"
+                    elif msg.gif:
+                        # v3.3.2: GIF 必须在 video 前(Telethon GIF 同时有 Animated+Video attr)
+                        media_type, text = "gif", "[GIF]"
                     elif msg.video:
                         media_type, text = "video", "[视频]"
                     elif msg.sticker:

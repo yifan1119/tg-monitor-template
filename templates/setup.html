@@ -1223,6 +1223,20 @@
         </div>
       </div>
 
+      <!-- v3.3.2: 对话告一段落跳过(我方说了结束语,对方应答后不再推预警)-->
+      <div class="field" style="border-top:1px dashed rgba(126,201,255,0.2);padding-top:12px;margin-top:12px;">
+        <label style="color:#9ef0b8;">🔚 对话告一段落跳过 (我方主动结束语境后不再 @)</label>
+        <div class="hint" style="margin-bottom:8px;">检查我方最近几条消息,如果说过「等通知」「再联系」「拜拜」「商务合作请联系」等结束语 → 整个对话视为告一段落,即使对方又应答了一句也不推未回复预警。改完 60 秒内热加载生效。</div>
+
+        <label style="font-size:11px;color:var(--text-dim);margin-top:6px;">结束语列表 (逗号或换行分隔,子串匹配)</label>
+        <textarea name="close_phrase_texts" rows="3" style="width:100%;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-family:inherit;font-size:12px;box-sizing:border-box;" placeholder="等通知,再联系,就这样,拜拜,商务合作请联系,晚点回复,搞定了,...">{{ d.close_phrase_texts or "" }}</textarea>
+        <div class="hint">留空=用系统默认 40+ 词。我方最近 N 条 outbound 含其中之一(子串)就跳过。</div>
+
+        <label style="font-size:11px;color:var(--text-dim);margin-top:8px;">查最近几条 outbound</label>
+        <input type="number" name="close_phrase_lookback" value="{{ d.close_phrase_lookback or '3' }}" min="1" max="20" style="width:120px;padding:8px 10px;background:rgba(4,13,22,0.6);border:1px solid rgba(126,201,255,0.2);border-radius:6px;color:#cfe3f5;font-size:12px;box-sizing:border-box;">
+        <div class="hint">默认 3 = 看最近 3 条我方消息。设 1 = 只看最后 1 条。设大 = 更激进抑制(可能漏告警)。</div>
+      </div>
+
       {# v2.6.2: settings 模式下显示预警开关 + 日报开关(setup 模式还没配 bot,不显示)
          v2.6.6: 三类预警拆成独立开关,各自 hot-toggle #}
       {% if mode == 'settings' %}

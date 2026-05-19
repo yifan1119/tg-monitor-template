@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.3.1(2026-05-19)
+## 📌 当前版本:v3.3.2(2026-05-19)
 
-🎯 **v3.3.1:修客户同秒回复仍被误推「未回复预警」+ 升级 @ 负责人双重 bug** — 客户线上事故:广告主 14:39 发问题,外事号同秒回了(TG Business 自动回复),30 分钟后系统仍推「未回复预警」+ 升级 stage2 @ 负责人。SSH dump 实测两条消息都进 DB、都没删、timestamp 完全一致。根因双重:① `get_unanswered_candidates` SQL `ORDER BY timestamp DESC LIMIT 1` 同秒无 tiebreaker,SQLite 实测拿到 incoming → 触发 stage1;② `_no_reply_stage2_loop` 兜底 `has_outbound_since(peer, alert.created_at)` 用 alert.created_at 作时间起点,outbound 早于 alert(同秒 A+B race)→ 兜底失效 → 升 stage2。修法:① SQL 加 `ORDER BY timestamp DESC, msg_id DESC` tiebreaker(按 TG 服务器消息号,跟 TG 客户端对话顺序一致,不偏置 direction);② 新增 `stage1_resolved_by_reply(peer_id, alert_msg_id)` 取代 `has_outbound_since` — 用 alert.msg_id 反查 incoming timestamp + `>=` 同秒含。**0 schema 变 / 0 重登**。详见 [ADR-0059](docs/adr/0059-v3.3.1-no-reply-same-second-race-fix.md)。
+🎯 **v3.3.2:对话告一段落跳过 — 扩 SKIP 词单 + 双层匹配 + 新增 CLOSE_PHRASE outbound 检测** — 客户反馈外事号说「OK 等通知」「再联系」「拜拜」「商务合作请联系」结束语后,对方应答「好的辛苦了」「OK 收到」,30 分钟仍误推未回复预警。两路一起做:① `is_trivial_no_reply` 双层匹配 — 短词(< 5 字)精确匹配防业务问句误判(「上架」不吃「什么时候上架?」),长结束语(≥ 5 字)子串匹配吃标点变体(「好的辛苦了。」匹配「好的辛苦了」);扩 `SKIP_NO_REPLY_TEXTS` 默认 40+ 整句(好的辛苦了/OK收到/拜拜/再联系/谢谢辛苦了 等);清理 v3.0.10 残留「业务短词」(支付/通道/费率/进群了 — 跟 KEYWORDS 重叠);② 新增 `CLOSE_PHRASE_TEXTS` 默认 40+ 词 + `db.recent_outbound_texts(peer_id, limit=3)` helper,`_no_reply_loop` 看我方最近 3 条 outbound 含结束语 → 抑制预警;③ web 后台 setup.html 加可配字段;Codex review round 1 待跑。**0 schema 变 / 0 migration / 0 重登 / 0 配置变**。21/21 unit test pass。详见 [ADR-0060](docs/adr/0060-v3.3.2-conversation-closed-skip.md)。
+
+<details><summary>v3.3.1(2026-05-19) — 修同秒回复仍被误推未回复预警 + stage2 兜底失效双重修</summary>
+
+v3.3.1 客户线上事故:广告主 14:39 发问题,外事号同秒回了(TG Business 自动回复),30 分钟后系统仍推「未回复预警」+ 升级 stage2 @ 负责人。根因双重:① `get_unanswered_candidates` SQL `ORDER BY timestamp DESC LIMIT 1` 同秒无 tiebreaker;② `_no_reply_stage2_loop` 兜底用 alert.created_at 作时间起点,outbound 早于 alert → 兜底失效。修法:SQL 加 `msg_id DESC` tiebreaker + 新增 `stage1_resolved_by_reply` 用 alert.msg_id 反查 incoming timestamp + `>=` 含同秒。详见 [ADR-0059](docs/adr/0059-v3.3.1-no-reply-same-second-race-fix.md)。
+
+</details>
 
 <details><summary>v3.3.0(2026-05-19) — peers 加 first_seen_at + 中央台商务活跃榜新增「新增活跃对话」列</summary>
 

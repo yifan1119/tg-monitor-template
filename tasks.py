@@ -556,14 +556,25 @@ class TaskScheduler:
                     candidates = db.get_unanswered_candidates(account["id"])
                     for row in candidates:
                         # v3.0.10: 客户最新一条是「无意义问候 / 表情包」→ 略过告警
-                        # 文本规则:你好 / 在? / 1 / ?? / 纯 emoji
-                        # 媒体规则:sticker(表情包)无业务含义直接略,photo/video/file 仍触发(可能业务图)
+                        # 文本规则:你好 / 在? / 1 / ?? / 纯 emoji + v3.3.2 扩词单 + 子串匹配
+                        # 媒体规则:sticker / gif 无业务含义直接略,photo/voice/video/file 仍触发(可能业务)
                         last_text = row["last_text"] or ""
                         last_media = (row["last_media_type"] if "last_media_type" in row.keys() else "") or ""
-                        if last_media == "sticker":
+                        # v3.3.2: 加 gif 跳过 — 99% 是「滑稽脸 / 拜拜挥手」表情包性质,跟 sticker 同列
+                        if last_media in ("sticker", "gif"):
                             continue
                         if config.is_trivial_no_reply(last_text):
                             continue
+                        # v3.3.2: 对话告一段落检测 — 我方最近 N 条 outbound 含结束语(等通知/拜拜/
+                        # 就这样/再联系 等)→ 我方已主动结束对话,即使对方又应答了也不该再 @ 商务。
+                        # config.CLOSE_PHRASE_TEXTS 默认 30+ 词,客户可在设置页改 CLOSE_PHRASE_TEXTS
+                        # 覆盖(子串匹配)。NO_REPLY_LOOKBACK 默认 3 条。ADR-0060。
+                        if config.CLOSE_PHRASE_TEXTS:
+                            recent_a = db.recent_outbound_texts(
+                                row["id"], limit=config.CLOSE_PHRASE_LOOKBACK
+                            )
+                            if any(config._contains_any(t, config.CLOSE_PHRASE_TEXTS) for t in recent_a):
+                                continue
 
                         try:
                             last_dt = datetime.strptime(row["last_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ_BJ)
