@@ -44,6 +44,7 @@ async def main():
     logger.info("数据库就绪")
 
     # 2. 初始化 Sheets
+    # v3.3.1: SheetsWriter 内部自己 degrade,init 不会 raise(spreadsheet=None)
     logger.info("连接 Google Sheets...")
     sheets = SheetsWriter()
 
@@ -207,7 +208,7 @@ async def main():
             logger.error("[bg_pull_history] 背景任务异常退出: %s", exc, exc_info=exc)
     _pull_history_task.add_done_callback(_on_pull_done)
 
-    # 7. 同步表头（商务人员、所属公司等）
+    # 7. 同步表头(商务人员、所属公司等)
     logger.info("同步 Sheets 表头...")
     sheets.sync_headers()
 

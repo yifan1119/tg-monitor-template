@@ -128,38 +128,52 @@ def dedupe_assign_sheet_tabs(conn) -> int:
 
 class SheetsWriter:
     def __init__(self):
-        if not config.SHEET_ID:
-            raise RuntimeError(
-                "SHEET_ID 为空 — 请先在 setup 精灵完成 Google 授权并点「自动建表格」"
-            )
-        # v3.1.4 (2026-05-15): SA 优先,OAuth 兜底
-        # 检测到 data/service_account.json → 用 Service Account 模式(永不被 OAuth 风控 revoke)
-        # 否则 → 老 OAuth 路径(向后兼容)
-        sa_path = str(config.DATA_DIR / "service_account.json")
-        if os.path.exists(sa_path):
-            from google.oauth2 import service_account as gsa
-            sa_creds = gsa.Credentials.from_service_account_file(
-                sa_path,
-                scopes=[
-                    "https://www.googleapis.com/auth/spreadsheets",
-                    "https://www.googleapis.com/auth/drive.file",
-                ],
-            )
-            self.gc = gspread.authorize(sa_creds)
-            self.using_sa = True
-            self._sa_email = getattr(sa_creds, "service_account_email", "?")
-            logger.info("Google Sheets 连接成功 (Service Account): %s", self._sa_email)
-        else:
-            creds = oauth_helper.get_credentials()
-            if not creds:
-                raise RuntimeError(
-                    "OAuth 凭证不存在 — 请先在 setup 精灵完成 Google 授权"
-                )
-            self.gc = gspread.authorize(creds)
-            self.using_sa = False
-            self._sa_email = None
-            logger.info("Google Sheets 连接成功 (OAuth)")
-        self.spreadsheet = self.gc.open_by_key(config.SHEET_ID)
+        # v3.3.1: 进入「降级模式」可能在 SHEET_ID 空 / OAuth 失效 / SA 没权限 等情况发生。
+        # 之前 init 任一步失败会 raise → main.py 整个 crash → 容器死循环。现在改成
+        # 设 self.gc=None / self.spreadsheet=None → 所有写方法自检 None 提早返回,
+        # 业务循环(预警 / DB / Listener)照常跑;客户重新授权后 reload_credentials 自愈。
+        self.gc = None
+        self.spreadsheet = None
+        self.using_sa = False
+        self._sa_email = None
+        self._degraded_reason = ""
+        try:
+            if not config.SHEET_ID:
+                self._degraded_reason = "SHEET_ID 为空 — 请在 setup 精灵完成 Google 授权"
+                logger.warning("[sheets_degraded] %s", self._degraded_reason)
+            else:
+                # v3.1.4 (2026-05-15): SA 优先,OAuth 兜底
+                sa_path = str(config.DATA_DIR / "service_account.json")
+                if os.path.exists(sa_path):
+                    from google.oauth2 import service_account as gsa
+                    sa_creds = gsa.Credentials.from_service_account_file(
+                        sa_path,
+                        scopes=[
+                            "https://www.googleapis.com/auth/spreadsheets",
+                            "https://www.googleapis.com/auth/drive.file",
+                        ],
+                    )
+                    self.gc = gspread.authorize(sa_creds)
+                    self.using_sa = True
+                    self._sa_email = getattr(sa_creds, "service_account_email", "?")
+                    logger.info("Google Sheets 连接成功 (Service Account): %s", self._sa_email)
+                else:
+                    creds = oauth_helper.get_credentials()
+                    if not creds:
+                        self._degraded_reason = "OAuth 凭证不存在 — 请在 setup 精灵完成 Google 授权"
+                        logger.warning("[sheets_degraded] %s", self._degraded_reason)
+                    else:
+                        self.gc = gspread.authorize(creds)
+                        self.using_sa = False
+                        logger.info("Google Sheets 连接成功 (OAuth)")
+                if self.gc is not None:
+                    self.spreadsheet = self.gc.open_by_key(config.SHEET_ID)
+        except Exception as e:
+            self._degraded_reason = f"SheetsWriter init 失败: {type(e).__name__}: {e}"
+            logger.error("[sheets_degraded] %s — 进入降级模式,Sheet 写入暂停 / 其他业务正常",
+                         self._degraded_reason)
+            self.gc = None
+            self.spreadsheet = None
         self._last_api_call = 0
         self._min_interval = 1.5
         # v3.0.8: 全局令牌桶 — 60 秒滑动窗口内最多 N 次 Sheets API call
@@ -990,6 +1004,8 @@ class SheetsWriter:
         创建出来只填基础 A2/A3 表头(商务人员 label + 中心/部门 label),
         B2/B3 留空给商务自己填。第一条消息进来时对话槽列会自动填。
         """
+        if self.spreadsheet is None:   # v3.3.1: 降级模式
+            return None
         tab_name = account["sheet_tab"] or account["name"] or account["phone"]
         try:
             return self.spreadsheet.worksheet(tab_name)
@@ -1035,6 +1051,8 @@ class SheetsWriter:
         v2.10.23: 单账号 try/except 隔离 — 以前任一账号 API 错误会抛出整个中断,
         导致排在后面的账号永远不被同步。现在每个账号独立 try,失败只跳过该账号。
         """
+        if self.spreadsheet is None:   # v3.3.1: 降级模式
+            return
         accounts = db.get_conn().execute("SELECT * FROM accounts").fetchall()
         for account in accounts:
             try:
@@ -1398,6 +1416,8 @@ class SheetsWriter:
 
     def mark_deleted_in_sheet(self, ws, msg):
         """把被删除的消息标红+删除线"""
+        if ws is None or self.spreadsheet is None:   # v3.3.1: 降级模式
+            return
         if not msg["sheet_row"] or msg["sheet_row"] == 0:
             return
 
@@ -1524,6 +1544,8 @@ class SheetsWriter:
         - 单账号失败 try/except 隔离,不影响其他账号
         - 429 per-account 指数退避(5s → 10s → 20s → ... → 600s),不卡全局
         """
+        if self.spreadsheet is None:   # v3.3.1: 降级模式
+            return 0
         account_ids = db.get_accounts_with_unwritten()
         if not account_ids:
             return 0
