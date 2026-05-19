@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.1.9(2026-05-19)
+## 📌 当前版本:v3.2.0(2026-05-19)
 
-🎯 **v3.1.9:加 `BOT_POLLING_DISABLED` flag — 完成 v3.0.22 callback bridge 治根,多 dept 共用 BOT_TOKEN 不再 409 Conflict** — v3.0.22(ADR-0037)设计了中央台 callback_listener 接管按钮点击,但因为 dept 本地 polling 没法关导致双重 polling 撞 409,所以这套链路从来没启用。v3.1.9 在 `bot.py:start()` 加 `BOT_POLLING_DISABLED` 检查,默认 false 向后兼容。共用 BOT_TOKEN 的客户 dept 配 `BOT_POLLING_DISABLED=true` + 中央台 AWS 开 `CALLBACK_LISTENER_ENABLED=true`,callback 全部由中央台 polling 接管 + POST 回 dept `/api/v1/callback`(已有 endpoint)。bot 实例仍存活,sendMessage / editMessage 主动调用照常(预警推送 fallback 路径不影响)。详见 [ADR-0055](docs/adr/0055-v3.1.9-bot-polling-disable-flag.md)。
+🎯 **v3.2.0:预警标题用 account.company 跟正文一致(跨公司账号修正)** — 客户反馈预警标题「信息未回复预警渠道中心-恒睿公司」跟正文「中心/部门:伊甸维度-渠道中心」对不上(跨公司账号场景:账号物理在恒睿 dept 上跑但归属填到伊甸维度)。`templates.py` 加 `_alert_title_label(company)` helper,6 处预警标题(no_reply / stage1 / stage2 / delete / keyword)从 `config.COMPANY_DISPLAY`(dept 级)改成 `_swap_company(account.company)`(账号级),跟正文「中心/部门」用同一来源。account.company 空 → fallback dept config.COMPANY_DISPLAY(兼容老 dept 没配归属)。详见 [ADR-0056](docs/adr/0056-v3.2.0-alert-title-use-account-company.md)。
+
+<details><summary>v3.1.9(2026-05-19) — dept 加 BOT_POLLING_DISABLED flag 完成 callback bridge 治根</summary>
+
+v3.0.22(ADR-0037)设计了中央台 callback_listener 接管按钮点击,但因为 dept 本地 polling 没法关导致双重 polling 撞 409,所以这套链路从来没启用。v3.1.9 在 `bot.py:start()` 加 `BOT_POLLING_DISABLED` 检查,默认 false 向后兼容。共用 BOT_TOKEN 的客户 dept 配 `BOT_POLLING_DISABLED=true` + 中央台 AWS 开 `CALLBACK_LISTENER_ENABLED=true`,callback 全部由中央台 polling 接管。详见 [ADR-0055](docs/adr/0055-v3.1.9-bot-polling-disable-flag.md)。
+
+</details>
 
 <details><summary>v3.1.8(2026-05-19) — 档案群按 account.company 统一中央台路由</summary>
 
