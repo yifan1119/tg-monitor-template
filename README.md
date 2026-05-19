@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.3.10(2026-05-19)
+## 📌 当前版本:v3.3.11(2026-05-20)
 
-🎯 **v3.3.10:setup 未完成的 dept 也能被中央台远程管** — 客户某 dept(数字化效率部)agent endpoint 永远 502,排查发现 `SETUP_COMPLETE=false` 时 `web.py:_redirect_to_setup_if_needed` before_request 把所有路径重定向到 /setup,**包括 `/api/v1/admin/cmd`**(中央台 agent 通道)、`/api/v1/callback`(按钮 click bridge)、`/api/v1/metrics`(数据采集)。导致这些 dept 永远没法被 fleet fanout 升级、永远收不到 callback、永远不在 collector 视野。修法:before_request 加 `path.startswith("/api/v1/")` 白名单,这些 endpoint 都自带 Bearer + HMAC 强鉴权(4 层),不需要 setup gate 二次保护。`@login_required` 的子端点(/api/v1/metrics/access_log)仍保留 UI 登录强制。0 schema / 0 重登 / 0 业务行为变。
+🎯 **v3.3.11:Patrol freeze flag — 安全消化 Sheets backlog 防串号** — 客户全网 24/47 dept 出现 Sheets 写入积压(最严重 3634 条 4 天没写)。根因:4 个 SA 共享 42 dept,Google Sheets API per-user 60/min 配额硬顶(付费才能调),读 patrol 把 quota 挤光,写 backlog 持续无法消化。但直接关 patrol 大量消化又撞**串号 / 顺序错**风险:广告主串号(`messages.col_group=NULL` 孤儿跨 peer 列边界)+ 外事号串号(`dedupe_assign_sheet_tabs` 在 backlog 期间改 `sheet_tab` → 老消息写到新 tab)+ 顺序乱(`_sheet_position_resync_loop` 撞期)。修法:`config.py` 加 `SHEET_DEDUPE_PATROL_ENABLED`(默认 ON)+ `sheets.ensure_account_tabs` 检查 flag → 临时冻结 dedupe;配合已有 `PEER_NAME_CONSISTENCY_DISABLED` + `SHEET_RESYNC_ENABLED` 三个 flag 一起冻结即可安全消化。0 schema / 0 重登 / 0 业务行为变。详见 [ADR-0061](docs/adr/0061-v3.3.11-patrol-freeze-flags.md)。
+
+<details><summary>v3.3.10 — setup 未完成的 dept 也能被中央台远程管</summary>
+
+**v3.3.10:setup 未完成的 dept 也能被中央台远程管** — `web.py` before_request 加 `/api/v1/` 白名单,Bearer/HMAC 鉴权够强不需要 setup gate 二次保护。详见 [ADR-0060](docs/adr/0060-v3.3.8-restore-alert-buttons.md)。
+
+</details>
 
 <details><summary>v3.3.9 — agent set_env 白名单扩 3 个网络配置 key</summary>
 

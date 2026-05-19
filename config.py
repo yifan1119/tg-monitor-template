@@ -496,6 +496,14 @@ SYNC_HEADERS_DISABLED = os.environ.get("SYNC_HEADERS_DISABLED", "false").lower()
 PEER_NAME_CONSISTENCY_INTERVAL_SEC = int(os.environ.get("PEER_NAME_CONSISTENCY_INTERVAL_SEC", "600"))
 PEER_NAME_CONSISTENCY_DISABLED = os.environ.get("PEER_NAME_CONSISTENCY_DISABLED", "false").lower() == "true"
 
+# v3.3.11: dedupe_assign_sheet_tabs patrol 冻结开关
+# 背景:同名外事号自动加 phone 后 4 位后缀(ADR-0033)。但在 backlog 大量积压期间 dedupe 跑会改
+# accounts.sheet_tab,老 pending messages flush 时按当前 sheet_tab 写 → 可能写到刚分配出来的
+# 新 tab(那个 tab 可能是别的同名号正在用) → 串号风险。
+# 默认 ON(向后兼容,正常生产场景需要 dedupe)。
+# 临时冻结:.env 加 SHEET_DEDUPE_PATROL_ENABLED=false → 安全消化 backlog 后再设回 true。
+SHEET_DEDUPE_PATROL_ENABLED = os.environ.get("SHEET_DEDUPE_PATROL_ENABLED", "true").lower() == "true"
+
 # v2.10.24.2: 预警分页历史空白回填(ADR-0009)
 # 背景:v2.10.24.1 之前 sync_headers 被 429/sed 止血卡住时,客户在外事号分页 B2 填的
 # 商务人员 / B3 填的所属公司无法同步到 DB,后续关键词命中 / 未回复预警 / 删除预警写入

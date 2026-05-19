@@ -266,8 +266,14 @@ class SheetsWriter:
         if self.spreadsheet is None:   # v3.3.2: 降级模式
             return
         try:
-            # v3.0.14: 先 dedupe — 给历史重名账号分配独立 sheet_tab
-            dedupe_assign_sheet_tabs(db.get_conn())
+            # v3.3.11: dedupe 在 backlog 期间会改 sheet_tab → 老 pending messages 写到新 tab →
+            # 同名号串号风险。SHEET_DEDUPE_PATROL_ENABLED=false 时跳过 dedupe(冻结布局),
+            # 安全消化 backlog 后再开回去。默认 ON 不影响历史行为。
+            if getattr(config, "SHEET_DEDUPE_PATROL_ENABLED", True):
+                # v3.0.14: 先 dedupe — 给历史重名账号分配独立 sheet_tab
+                dedupe_assign_sheet_tabs(db.get_conn())
+            else:
+                logger.info("[sheet_dedupe] SHEET_DEDUPE_PATROL_ENABLED=false, 跳过 dedupe 保护 backlog")
             # v3.0.15: SELECT 多拉 inspector_tg_id 给 row 4 用
             accounts = db.get_conn().execute(
                 "SELECT id, phone, name, sheet_tab, operator, company, "
