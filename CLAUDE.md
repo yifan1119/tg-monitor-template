@@ -255,7 +255,10 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 
 ## 当前状态(2026-05-19)
 
-- **WIP v3.3.0** — peers 加 first_seen_at(广告主首次出现时间)+ 中央台商务活跃榜「新增活跃对话」列。`database.py` _migrate_to_9 + 一次性 backfill MIN(messages.timestamp) + idx;`upsert_peer` INSERT 写 NOW;`dashboard_api.operator_active` 加第二段 SQL 按 (operator, day) 聚合 first_seen_at → merge 输出 new_peers 字段。配套中央台 v0.42 UI 表格 7→8 列。ADR-0058。
+- **WIP v3.3.3** — 同秒回复误推预警 + stage2 兜底失效双重修。`database.py:get_unanswered_candidates` SQL 同秒加 `msg_id DESC` tiebreaker(走 TG 消息号严格递增);新增 `stage1_resolved_by_reply(peer, alert_msg_id)` 用 alert.msg_id 反查 incoming.timestamp 作起点 + `>=` 含同秒精准判定;`tasks._no_reply_stage2_loop` 切换调用。`has_outbound_since` 标 DEPRECATED 保留向后兼容。ADR-0059。
+- v3.3.2 ✅ 补 v3.3.1 漏的 5 处 None-guard。
+- v3.3.1 ✅ SheetsWriter 内部降级模式 — Sheet 权限失效不再 crash main。
+- v3.3.0 ✅ peers 加 first_seen_at + 商务活跃榜「新增活跃对话」列。ADR-0058。
 - **v3.2.1** ✅ 已发布 — modal JS load/save 跟 v3.1.7 后端「中心/公司」格式对齐,根治客户保存归属丢失 bug。ADR-0057。
 - v3.2.0 ✅ — 预警标题用 account.company(跨公司账号修正)。ADR-0056。
 - v3.1.9 ✅ — dept 加 BOT_POLLING_DISABLED flag,共用 BOT_TOKEN 客户中央台接管 callback。ADR-0055。
