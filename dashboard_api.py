@@ -1303,11 +1303,13 @@ def _validate_choice(val, choices, name, optional=True):
 def operator_active(from_date: str, to_date: str) -> list:
     """v3.0.12: 商务人员每日活跃广告主数 — 给中央台「商务活跃榜」用。
 
-    定义:某个商务负责的所有外事号(accounts.operator),当天跟多少个不同广告主
-    (peer_id)有过任意方向消息(收 OR 发都算)。
+    业务定义(v3.3.4 改):
+      - active_peers(活跃):该 peer 在【当日之前 3 天有消息】AND【当日有消息】
+        = 老客户保持沟通,不是今天才出现的(衡量「持续沟通」深度)
+      - new_peers(新增活跃):该 peer【当日消息条数 >= 4】(衡量当日深度互动)
 
-    v3.3.0: 加 new_peers — 该商务名下外事号当天第一次出现的广告主数
-            (peers.first_seen_at 在该 day),衡量拓客量。
+    两个字段互不互斥 — 一个 peer 可同时算 active(老客户) + new(今天 4 句以上),
+    跨区间按天分别累加。
 
     返回 list of dict:
       [{operator, day, active_peers, new_peers, account_count}, ...]
@@ -1325,6 +1327,12 @@ def operator_active(from_date: str, to_date: str) -> list:
     left_inc = d_from.strftime("%Y-%m-%d")
 
     conn = db.get_conn()
+    # v3.3.4: 业务定义改 —
+    #   活跃(active_peers):该 peer 在【当日之前 3 天有消息】AND【当日有消息】
+    #     = 老客户保持沟通(不是今天新冒出来的)
+    #   新增活跃(new_peers):该 peer【当日消息数 >= 4 句】
+    #     = 当日有效互动(达到深度对话门槛)
+    # 注:两个互不互斥,一个 peer 可同时是 active(老客户)+ new(今天≥4句)
     rows = conn.execute(
         """
         SELECT a.operator AS operator,
@@ -1334,22 +1342,33 @@ def operator_active(from_date: str, to_date: str) -> list:
         JOIN accounts a ON m.account_id = a.id
         WHERE m.timestamp >= ? AND m.timestamp < ?
           AND a.operator IS NOT NULL AND a.operator != ''
+          AND EXISTS (
+            SELECT 1 FROM messages m2
+            WHERE m2.peer_id = m.peer_id
+              AND m2.timestamp < substr(m.timestamp, 1, 10) || ' 00:00:00'
+              AND m2.timestamp >= datetime(substr(m.timestamp, 1, 10), '-3 days')
+          )
         GROUP BY a.operator, day
         ORDER BY day DESC, active_peers DESC
         """,
         (left_inc, right_open),
     ).fetchall()
-    # v3.3.0: 算同区间新增广告主(first_seen_at 落入)— key=(operator, day)
+    # 新增活跃 = 当日 messages 条数 >= 4 的 peer count
     new_rows = conn.execute(
         """
-        SELECT a.operator AS operator,
-               substr(p.first_seen_at, 1, 10) AS day,
-               COUNT(*) AS new_peers
-        FROM peers p
-        JOIN accounts a ON p.account_id = a.id
-        WHERE p.first_seen_at >= ? AND p.first_seen_at < ?
-          AND a.operator IS NOT NULL AND a.operator != ''
-        GROUP BY a.operator, day
+        SELECT operator, day, COUNT(*) AS new_peers FROM (
+          SELECT a.operator AS operator,
+                 substr(m.timestamp, 1, 10) AS day,
+                 m.peer_id AS pid,
+                 COUNT(*) AS msg_cnt
+          FROM messages m
+          JOIN accounts a ON m.account_id = a.id
+          WHERE m.timestamp >= ? AND m.timestamp < ?
+            AND a.operator IS NOT NULL AND a.operator != ''
+          GROUP BY a.operator, day, m.peer_id
+          HAVING msg_cnt >= 4
+        ) sub
+        GROUP BY operator, day
         """,
         (left_inc, right_open),
     ).fetchall()
