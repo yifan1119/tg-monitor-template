@@ -16,9 +16,18 @@ def _swap_company(c):
     return c
 
 
+def _alert_title_label(company):
+    """v3.2.0: 预警标题用 account.company(账号归属),让标题跟正文「中心/部门」一致。
+    跨公司账号(账号归属跟 dept .env COMPANY_DISPLAY 不同)预警标题也跟着账号归属变。
+    account.company 空 → fallback dept config.COMPANY_DISPLAY(兼容老 dept 没配归属)。
+    """
+    swapped = _swap_company(company)
+    return swapped or getattr(config, "COMPANY_DISPLAY", "") or ""
+
+
 def no_reply_alert(company, operator, account_name, peer_name, message_text):
     return (
-        f"【信息未回复预警{config.COMPANY_DISPLAY}】\n\n"
+        f"【信息未回复预警{_alert_title_label(company)}】\n\n"
         f"中心/部门：{_swap_company(company)}\n"
         f"{config.OPERATOR_LABEL}：{operator}\n"
         f"外事号：{account_name}\n"
@@ -40,7 +49,7 @@ def no_reply_alert_stage1(company, operator, account_name, peer_name,
     """
     e = _html.escape
     base = (
-        f"【信息未回复预警{config.COMPANY_DISPLAY}】\n\n"
+        f"【信息未回复预警{_alert_title_label(company)}】\n\n"
         f"中心/部门：{e(_swap_company(company))}\n"
         f"{config.OPERATOR_LABEL}：{e(operator)}\n"
         f"外事号：{e(account_name)}\n"
@@ -62,7 +71,7 @@ def no_reply_alert_stage2(company, operator, account_name, peer_name,
     """
     e = _html.escape
     base = (
-        f"【信息未回复升级{config.COMPANY_DISPLAY}】\n\n"
+        f"【信息未回复升级{_alert_title_label(company)}】\n\n"
         f"中心/部门：{e(_swap_company(company))}\n"
         f"{config.OPERATOR_LABEL}：{e(operator)}\n"
         f"外事号：{e(account_name)}\n"
@@ -86,7 +95,7 @@ def delete_alert(company, operator, account_name, peer_name, message_text="",
     if owner_mention:
         e = _html.escape
         text = (
-            f"【信息删除预警{config.COMPANY_DISPLAY}】\n\n"
+            f"【信息删除预警{_alert_title_label(company)}】\n\n"
             f"中心/部门：{e(_swap_company(company))}\n"
             f"{config.OPERATOR_LABEL}：{e(operator)}\n"
             f"外事号：{e(account_name)}\n"
@@ -99,7 +108,7 @@ def delete_alert(company, operator, account_name, peer_name, message_text="",
 
     # 老路径 — 保持完全不变,兼容没配 owner_tg_id 的账号
     text = (
-        f"【信息删除预警{config.COMPANY_DISPLAY}】\n\n"
+        f"【信息删除预警{_alert_title_label(company)}】\n\n"
         f"中心/部门：{_swap_company(company)}\n"
         f"{config.OPERATOR_LABEL}：{operator}\n"
         f"外事号：{account_name}\n"
@@ -112,7 +121,7 @@ def delete_alert(company, operator, account_name, peer_name, message_text="",
 
 def keyword_alert(company, operator, account_name, peer_name, keyword, message_text):
     return (
-        f"【关键词监听{config.COMPANY_DISPLAY}】\n\n"
+        f"【关键词监听{_alert_title_label(company)}】\n\n"
         f"中心/部门：{_swap_company(company)}\n"
         f"{config.OPERATOR_LABEL}：{operator}\n"
         f"外事号：{account_name}\n"
