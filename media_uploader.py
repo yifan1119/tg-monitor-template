@@ -246,7 +246,7 @@ async def upload_media(message, media_type, peer_name=""):
 
         # 文件名：优先 Telethon 给的；图片/语音类没有名 → 自己命名
         ts = datetime.now(TZ_BJ).strftime("%Y%m%d_%H%M%S")
-        ext_map = {"photo": ".jpg", "voice": ".ogg", "video": ".mp4", "sticker": ".webp"}
+        ext_map = {"photo": ".jpg", "voice": ".ogg", "video": ".mp4", "sticker": ".webp", "gif": ".mp4"}  # v3.3.2: GIF 在 TG 里是 MP4 格式
         original_name = ""
         try:
             original_name = getattr(message.file, "name", "") or ""
@@ -300,6 +300,7 @@ async def upload_media(message, media_type, peer_name=""):
             "voice": "🎙",
             "video": "🎬",
             "sticker": "🌟",
+            "gif": "🎞",  # v3.3.2
             "file": "📎",
         }.get(media_type, "📎")
         # 危险扩展名加 ⚠️ 前缀 — 客户一眼看出来别点下载
