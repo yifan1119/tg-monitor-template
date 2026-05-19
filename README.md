@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.3.8(2026-05-19)
+## 📌 当前版本:v3.3.9(2026-05-19)
 
-🎯 **v3.3.8:stage2 升级 + 删除预警按钮恢复** — 用户反馈 stage2(40 分钟未回复升级 @ 负责人)+ 删除消息预警在群里只有纯文本没按钮,监察员没法一键「登记违规 / 取消」。全网 fleet inspect 实测 **44/47 dept 缺 `VPS_PUBLIC_IP`** → `_callback_meta_for` 返 None → 跳过中央台路由 fallback 本地 → v3.1.9 的 `BOT_POLLING_DISABLED` 短路把按钮也删了 → 用户看到纯文本。修法:`bot.py` `_make_keyboard` + `_make_keyboard_stage2` 删 v3.1.9 短路,这两个 helper 影响的路径(stage2 升级、删除预警、未配 business_tg_id 的老单段预警)**永远附按钮**。⚠ 关键词预警 + stage1(30 分钟)本来设计就无按钮,不在本版范围。click 闭环要中央台路由配齐(`VPS_PUBLIC_IP` + 白名单覆盖,单独追);本版只保证按钮可见。0 schema / 0 重登 / 0 配置变。详见 [ADR-0060](docs/adr/0060-v3.3.8-restore-alert-buttons.md)。
+🎯 **v3.3.9:agent set_env 白名单扩 3 个网络配置 key** — 配套 v3.3.8 的 click 闭环工作。中央台 fleet 现在能批量补 `DEPT_PUBLIC_URL` / `PUBLIC_HOSTNAME` / `VPS_PUBLIC_IP` 给所有 dept,让 `_callback_meta_for()` 算出合法 cb_meta → 走中央台 bridge → 按钮 callback 能闭环。改动:`agent.py:action_set_env` ALLOWED_KEYS 加 3 个 key。0 schema / 0 重登 / 0 业务行为变。
+
+<details><summary>v3.3.8 — stage2 升级 + 删除预警按钮恢复</summary>
+
+**v3.3.8:stage2 升级 + 删除预警按钮恢复** — `bot.py` `_make_keyboard` + `_make_keyboard_stage2` 删 v3.1.9 `BOT_POLLING_DISABLED → None` 短路,stage2 升级 / 删除预警 / 老单段未回复**永远附按钮**。详见 [ADR-0060](docs/adr/0060-v3.3.8-restore-alert-buttons.md)。
+
+</details>
 
 <details><summary>v3.3.3 ~ v3.3.7(2026-05-19) — 同秒回复 race / 商务活跃榜术语 / SKIP_NO_REPLY 扩词 / operator_active breakdown / Reactions 当已回复</summary>
 

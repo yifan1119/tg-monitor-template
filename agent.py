@@ -418,6 +418,11 @@ def action_set_env(params: dict) -> tuple[bool, dict]:
         "ALERT_KEYWORD_ENABLED", "ALERT_NO_REPLY_ENABLED", "ALERT_DELETE_ENABLED",
         "SHEET_RESYNC_ENABLED", "BUSINESS_FIELD_SYNC_ENABLED",
         "REMIND_30MIN_TEXT", "REMIND_40MIN_TEXT", "REMIND_DELETE_TEXT",
+        # v3.3.9: 加 callback_meta 链路所需的网络配置 — _callback_meta_for()
+        # 拿 dept_url 用 DEPT_PUBLIC_URL / PUBLIC_HOSTNAME / VPS_PUBLIC_IP
+        # 三选一,缺一者→cb_meta=None→走本地 fallback→共用 bot 客户按钮死。
+        # 中央台 fleet 批量补这些可让共用 bot 客户 click 走中央台 bridge 闭环。
+        "DEPT_PUBLIC_URL", "PUBLIC_HOSTNAME", "VPS_PUBLIC_IP",
     }
     kvs = params.get("kvs") or {}
     if not kvs and params.get("key"):
