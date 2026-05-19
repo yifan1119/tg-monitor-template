@@ -1030,7 +1030,7 @@
             </div>
             <input type="hidden" id="nc_company">
             <div style="margin-top:4px;color:#7c8a9a;font-size:10px;line-height:1.5;">
-              💡 选公司 + 选中心 → 系统自动拼成「公司-中心」。<br>
+              💡 选公司 + 选中心 → 系统自动拼成「中心/公司」。<br>
               下拉数据从中央台「预警路由」实时同步,加新公司只在中央台一处加。
             </div>
           {% else %}
@@ -1127,27 +1127,42 @@ async function openNotifyConfig(accountId, accountName) {
       document.getElementById('nc_operator').value = j.operator || '';
       document.getElementById('nc_company').value = j.company || '';
       document.getElementById('nc_inspector_tg_id').value = j.inspector_tg_id || '';
-      // v3.0.15.1: 双下拉模式 — 把老数据 company 拆回公司 / 中心两 select
-      // 例: company="xxx-运营中心" → 公司=xxx, 中心=运营中心
-      // 例: company="运营中心"     → 公司=空,   中心=运营中心
-      // 例: company="xxx运营"     → 公司=xxx, 中心=运营中心(endswith 智能识别)
+      // v3.2.1: 兼容新「中心/公司」+ 老「公司-中心」两种格式
+      // 新格式(v3.1.7+): "运营中心/蝴蝶效应1" → 中心=运营中心, 公司=蝴蝶效应1
+      // 老格式: "xxx-运营中心" → 公司=xxx, 中心=运营中心
+      // 单字段: "运营中心" → 公司=空, 中心=运营中心
       const companySel = document.getElementById('nc_company_company');
       const centerSel = document.getElementById('nc_company_center');
       if (companySel || centerSel) {
         const raw = (j.company || '').trim();
         let matchedCompany = '', matchedCenter = '';
         if (centerSel) {
+          // v3.2.1: 先尝试新格式「中心/公司」(startsWith 中心 + 「/」 分隔)
           for (const opt of centerSel.options) {
             const v = opt.value;
             if (!v) continue;
             const keyword = v.endsWith('中心') ? v.slice(0, -2) : v;
-            if (raw === v || raw.endsWith(v) || raw.endsWith(keyword)) {
+            // 「中心/公司」格式:raw startsWith 中心 + "/"
+            if (raw.startsWith(v + '/') || raw.startsWith(keyword + '/')) {
               matchedCenter = v;
-              // 剩余前缀作为公司,去掉分隔符 - / 空格
-              let prefix = raw.slice(0, raw.length - (raw.endsWith(v) ? v.length : keyword.length));
-              prefix = prefix.replace(/[-\/\s]+$/, '').trim();
-              matchedCompany = prefix;
+              const prefixLen = raw.startsWith(v + '/') ? v.length + 1 : keyword.length + 1;
+              matchedCompany = raw.slice(prefixLen).trim();
               break;
+            }
+          }
+          // 没匹配新格式 → 试老格式「公司-中心」(endsWith 中心)
+          if (!matchedCenter) {
+            for (const opt of centerSel.options) {
+              const v = opt.value;
+              if (!v) continue;
+              const keyword = v.endsWith('中心') ? v.slice(0, -2) : v;
+              if (raw === v || raw.endsWith(v) || raw.endsWith(keyword)) {
+                matchedCenter = v;
+                let prefix = raw.slice(0, raw.length - (raw.endsWith(v) ? v.length : keyword.length));
+                prefix = prefix.replace(/[-\/\s]+$/, '').trim();
+                matchedCompany = prefix;
+                break;
+              }
             }
           }
         }
@@ -1183,13 +1198,16 @@ function closeNotifyConfig() {
 
 async function saveNotifyConfig() {
   if (!ncAccountId) return;
-  // v3.0.15.1: 双下拉模式 → 拼成 "公司-中心" 写到 hidden nc_company,后端逻辑不变
+  // v3.2.1: 保存用「中心/公司」标准格式(中心在前,「/」分隔)
+  // 跟 sheets.py / templates.py 预警文案 swap 后格式一致 → bus_sync 同步 Sheet B3 无需再转换
+  // 中央台 find_alert_route_by_company_field 兼容两种格式(v0.23 fuzzy match)
   const companySel = document.getElementById('nc_company_company');
   const centerSel = document.getElementById('nc_company_center');
   if (companySel || centerSel) {
     const c1 = (companySel && companySel.value || '').trim();
     const c2 = (centerSel && centerSel.value || '').trim();
-    const combined = c1 && c2 ? (c1 + '-' + c2) : (c2 || c1 || '');
+    // v3.2.1: 「中心/公司」(中心在前)而非老「公司-中心」
+    const combined = c1 && c2 ? (c2 + '/' + c1) : (c2 || c1 || '');
     document.getElementById('nc_company').value = combined;
   }
   const body = {

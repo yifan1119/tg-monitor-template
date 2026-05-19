@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.2.0(2026-05-19)
+## 📌 当前版本:v3.2.1(2026-05-19)
 
-🎯 **v3.2.0:预警标题用 account.company 跟正文一致(跨公司账号修正)** — 客户反馈预警标题「信息未回复预警渠道中心-恒睿公司」跟正文「中心/部门:伊甸维度-渠道中心」对不上(跨公司账号场景:账号物理在恒睿 dept 上跑但归属填到伊甸维度)。`templates.py` 加 `_alert_title_label(company)` helper,6 处预警标题(no_reply / stage1 / stage2 / delete / keyword)从 `config.COMPANY_DISPLAY`(dept 级)改成 `_swap_company(account.company)`(账号级),跟正文「中心/部门」用同一来源。account.company 空 → fallback dept config.COMPANY_DISPLAY(兼容老 dept 没配归属)。详见 [ADR-0056](docs/adr/0056-v3.2.0-alert-title-use-account-company.md)。
+🎯 **v3.2.1:web 后台「编辑账号」modal 修「公司+中心」下拉加载/保存格式跟 v3.1.7 后端对齐** — 客户反馈刚填好归属保存后过一会儿 modal 又显示「选公司/选中心」默认空,**根因 modal JS bug**:加载逻辑用老「公司-中心」格式 `endsWith` 匹配,但 v3.1.7 后 DB 用「中心/公司」格式 → match 不到 → 下拉显空 → 客户保存就写空清掉 DB。`templates/index.html` 改:① 加载兼容新「中心/公司」(startsWith)+ 老「公司-中心」(endsWith)两种格式 ② 保存改用「中心/公司」标准(中心在前,`/` 分隔)③ 提示文案改「中心/公司」。详见 [ADR-0057](docs/adr/0057-v3.2.1-modal-company-format-fix.md)。
+
+<details><summary>v3.2.0(2026-05-19) — 预警标题用 account.company 跟正文一致(跨公司账号修正)</summary>
+
+v3.2.0 改 `templates.py` 加 `_alert_title_label(company)` helper,6 处预警标题从 `config.COMPANY_DISPLAY`(dept 级)改成 `_swap_company(account.company)`(账号级),跟正文「中心/部门」用同一来源。详见 [ADR-0056](docs/adr/0056-v3.2.0-alert-title-use-account-company.md)。
+
+</details>
 
 <details><summary>v3.1.9(2026-05-19) — dept 加 BOT_POLLING_DISABLED flag 完成 callback bridge 治根</summary>
 
