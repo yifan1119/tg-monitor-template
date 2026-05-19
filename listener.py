@@ -206,12 +206,16 @@ class Listener:
                 elif event.message.voice:
                     media_type = "voice"
                     text = "[语音]"
-                elif event.message.video:
-                    media_type = "video"
-                    text = "[视频]"
                 elif event.message.sticker:
                     media_type = "sticker"
                     text = "[贴纸]"
+                elif event.message.gif:
+                    # v3.3.5: GIF/动图独立 media_type,跟 sticker 一同过滤未回复预警
+                    media_type = "gif"
+                    text = "[动图]"
+                elif event.message.video:
+                    media_type = "video"
+                    text = "[视频]"
                 elif event.message.document:
                     media_type = "file"
                     text = "[文件]"
@@ -306,10 +310,13 @@ class Listener:
                         media_type, text = "photo", "[图片]"
                     elif msg.voice:
                         media_type, text = "voice", "[语音]"
-                    elif msg.video:
-                        media_type, text = "video", "[视频]"
                     elif msg.sticker:
                         media_type, text = "sticker", "[贴纸]"
+                    elif msg.gif:
+                        # v3.3.5: GIF 独立 media_type
+                        media_type, text = "gif", "[动图]"
+                    elif msg.video:
+                        media_type, text = "video", "[视频]"
                     elif msg.document:
                         media_type, text = "file", "[文件]"
                     else:
@@ -392,10 +399,13 @@ class Listener:
                         media_type, text = "photo", "[图片]"
                     elif msg.voice:
                         media_type, text = "voice", "[语音]"
-                    elif msg.video:
-                        media_type, text = "video", "[视频]"
                     elif msg.sticker:
                         media_type, text = "sticker", "[贴纸]"
+                    elif msg.gif:
+                        # v3.3.5: GIF 独立 media_type
+                        media_type, text = "gif", "[动图]"
+                    elif msg.video:
+                        media_type, text = "video", "[视频]"
                     elif msg.document:
                         media_type, text = "file", "[文件]"
                     else:

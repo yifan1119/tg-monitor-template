@@ -196,11 +196,21 @@ NO_REPLY_MINUTES = int(os.environ.get("NO_REPLY_MINUTES", "30"))
 SKIP_NO_REPLY_MIN_LEN = int(os.environ.get("SKIP_NO_REPLY_MIN_LEN", "1"))
 _skip_user = [t.strip() for t in os.environ.get("SKIP_NO_REPLY_TEXTS", "").split(",") if t.strip()]
 _skip_default = [
+    # 问候
     "你好", "您好", "嗨", "hi", "hello", "Hi", "Hello", "HELLO",
     "在", "在?", "在?", "在吗", "在嘛", "在么", "在不在", "在不",
+    # 应答
     "1", "?", "?", "??", "??", "嗯", "嗯嗯", "哦", "哦哦",
-    "好", "好的", "好滴", "ok", "OK", "okay", "Okay",
-    "哈", "哈哈", "嘿", "嘿嘿",
+    "好", "好的", "好滴", "好嘛", "好哒", "好吧", "好了", "好的哥",
+    "ok", "OK", "okay", "Okay", "OK的", "Ok的",
+    "哈", "哈哈", "哈哈哈", "嘿", "嘿嘿",
+    # 客套
+    "谢谢", "感谢", "辛苦了", "客气了",
+    "你先忙", "晚点看下", "晚点看", "早点休息", "再等等",
+    "我问问", "我看看", "好的，我看看", "还可以",
+    "到时候联系",
+    # 业务短词(客户单字业务术语,无法即时回复)
+    "支付", "支付通道", "通道", "费率", "进群了",
 ]
 SKIP_NO_REPLY_TEXTS = set(_skip_user) if _skip_user else set(_skip_default)
 SKIP_NO_REPLY_PURE_EMOJI = os.environ.get("SKIP_NO_REPLY_PURE_EMOJI", "true").lower() == "true"
