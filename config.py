@@ -114,8 +114,8 @@ def reload_if_env_changed():
     else:
         CLOSE_PHRASE_TEXTS = set(_default_close_phrases())
     try:
-        CLOSE_PHRASE_LOOKBACK = int(os.environ.get("CLOSE_PHRASE_LOOKBACK", "3"))
-    except ValueError:
+        CLOSE_PHRASE_LOOKBACK = max(1, min(50, int(os.environ.get("CLOSE_PHRASE_LOOKBACK", "3"))))
+    except (ValueError, TypeError):
         pass
     # v3.0.0:TG 设备身份也支持热 reload(虽然 TG server 缓存会有延迟,但至少本进程能立刻读新值)
     TG_DEVICE_MODEL   = os.environ.get("TG_DEVICE_MODEL",   "shencha")
@@ -247,26 +247,42 @@ SKIP_NO_REPLY_PURE_EMOJI = os.environ.get("SKIP_NO_REPLY_PURE_EMOJI", "true").lo
 
 def _default_close_phrases():
     """v3.3.2: 我方 outbound 结束语境检测词(B 路径 — 我方主动说了结束语,对方应答后不再 @)。
-    单独列(跟 SKIP_NO_REPLY_TEXTS 不同维度):SKIP 看对方说啥,这个看我方说啥。"""
+    单独列(跟 SKIP_NO_REPLY_TEXTS 不同维度):SKIP 看对方说啥,这个看我方说啥。
+
+    v3.3.2 Codex P0 fix: 删高频短子串 — 子串匹配下「88」吃「报价88元」、「请联系」吃
+    「请联系财务确认打款」、「对接」吃「需要对接谁」、「找他」吃「找他报价」 — 这些都是
+    真业务消息,会被误抑制告警。删完留下的全是 ≥ 3 字、子串落业务消息几率极低的整句。
+    """
     return [
-        # 主动结束
-        "等通知", "等消息", "等回复", "等我消息",
-        "再联系", "再聊", "下次聊", "下回聊", "改天聊", "改天再聊",
-        "拜拜", "再见", "晚安", "早点休息", "88", "8484", "byebye", "bye",
+        # 主动结束(3+ 字)
+        "等通知", "等消息", "等回复", "等我消息", "等我通知",
+        "再联系", "再聊", "下次聊", "下回聊", "改天聊", "改天再聊", "下次再聊",
+        # 道别(精确语境结束,业务消息几乎不会子串包含)
+        "拜拜", "再见", "晚安", "早点休息", "byebye", "bye-bye",
+        # ⚠ 删:88 / 8484 (会吃「88节」「报价88元」)
         # 推开
-        "先这样", "就这样", "就这样吧", "行就这样", "先聊到这", "暂时这样",
-        # 转介绍 / 路由(常见 TG Business 自动回话术)
-        "商务合作请联系", "请联系", "私聊", "找他", "找她", "对接", "归他负责",
+        "先这样", "就这样", "就这样吧", "行就这样", "先聊到这", "暂时这样", "好的就这样",
+        # 转介绍 / 路由(常见 TG Business 自动回话术 — 用完整长短语,不用裸「请联系」)
+        "商务合作请联系", "商务联系", "商务对接", "请联系商务",
+        # ⚠ 删:请联系 / 私聊 / 找他 / 找她 / 对接 / 归他负责 (单独高频会吃业务)
         # 推迟
-        "晚点回复", "晚点看", "晚点联系", "稍后回复", "稍后联系",
-        # 我方完结
-        "搞定了", "完事了", "处理好了", "已经发了", "已经处理",
+        "晚点回复", "稍后回复", "晚点联系", "稍后联系", "晚点看下",
+        # ⚠ 删:晚点看 (会吃「晚点看下」「晚点看一下」业务消息)
+        # 我方完结(整句,业务消息几乎不会出现)
+        "搞定了", "完事了", "处理好了", "已经发了", "已经处理", "已经搞定",
     ]
 
 
-CLOSE_PHRASE_TEXTS = set(_default_close_phrases())
+# v3.3.2 Codex P0 fix: 模块加载也读 .env(原版冷启动总用默认,客户改 .env 不生效)
+_close_user = [t.strip() for t in os.environ.get("CLOSE_PHRASE_TEXTS", "").split(",") if t.strip()]
+CLOSE_PHRASE_TEXTS = set(_close_user) if _close_user else set(_default_close_phrases())
 # 我方最近 N 条 outbound 里有结束语 → 整个对话视为告一段落
-CLOSE_PHRASE_LOOKBACK = int(os.environ.get("CLOSE_PHRASE_LOOKBACK", "3"))
+# v3.3.2 Codex P1 fix: int + clamp [1, 50],非数字 → 默认 3。
+# clamp 跟 web._safe_int_range 同语义(越界夹边界,不静默 reset 默认)。
+try:
+    CLOSE_PHRASE_LOOKBACK = max(1, min(50, int(os.environ.get("CLOSE_PHRASE_LOOKBACK", "3"))))
+except (ValueError, TypeError):
+    CLOSE_PHRASE_LOOKBACK = 3
 
 
 def _contains_any(text: str, phrases) -> bool:
@@ -282,13 +298,15 @@ def _contains_any(text: str, phrases) -> bool:
 
 # v3.3.2: SKIP 词单分两类匹配 — 短词(< SKIP_CONTAIN_MIN_LEN)走精确匹配防业务问句误判,
 # 长结束语(≥ SKIP_CONTAIN_MIN_LEN)走子串匹配吃标点变体。
-# 阈值 5 字:
-#   - 「拜拜」(2字)/「再联系」(3字)/「OK收到」(4字)等告一段落短词 → 精确匹配,只命中整条 = 该词
-#     (变体「拜拜~~」「再联系吧」不命中 — 接受这点,业务上 ok 因为商务还是要回最后一次)
-#   - 「好的辛苦了」(5字)/「好的就这样」/「等通知就好」等长结束语 → 子串匹配吃标点变体
-# 阈值 5 是经验值:< 5 字短词如果走子串很容易吃到业务问句子串(「上架」吃「什么时候上架?」),
-# ≥ 5 字长句业务问句几乎不会整段碰上(「好的辛苦了」不会出现在业务问句中)。
-SKIP_CONTAIN_MIN_LEN = 5
+# 阈值 4 字(v3.3.2 Codex P1 fix:原 5 字让「好的收到」「OK收到」「先这样吧」4 字短句精确匹配
+# miss 标点变体「好的收到。」继续误报。降到 4 让 4 字短句走子串吃标点):
+#   - 「拜拜」(2字)/「再联系」(3字)等 < 4 字短词 → 精确匹配(变体「拜拜~~」「再联系吧」miss 接受)
+#   - 「OK收到」(4字)/「好的收到」(4字)/「好的辛苦了」(5字)等 ≥ 4 字告一段落短句 → 子串
+#     匹配吃标点变体「OK收到!」「好的收到。」
+# 阈值 4 安全性核对:词单里 4 字短句全是告一段落整句(已经从词单删了「业务短词」段);
+# KEYWORDS 默认表「到期/续费/上架/打款」全 ≤ 2 字,不会撞 4 字业务术语;业务问句一般 5+ 字
+# 含完整动宾结构,4 字短句不会整段命中业务问句(「OK收到」「好的收到」不会出现在业务问句中间)。
+SKIP_CONTAIN_MIN_LEN = 4
 
 
 def is_trivial_no_reply(text) -> bool:

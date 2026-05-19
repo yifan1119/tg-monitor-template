@@ -190,6 +190,16 @@ def _client_ip():
 DEFAULT_API_ID = ""
 DEFAULT_API_HASH = ""
 DEFAULT_KEYWORDS = "到期,续费,暂停,下架,上架,地址,打款,欠费,返点,返利,回扣"
+
+
+def _safe_int_range(raw, default, lo, hi):
+    """v3.3.2 Codex P1 helper: 把 form 字符串安全转 [lo, hi] 区间整数,失败回 default。
+    返回 str(给 .env 写入)。非数字 / 越界 / None / "" 一律回 default。"""
+    try:
+        n = int((raw or "").strip())
+    except (ValueError, TypeError):
+        return str(default)
+    return str(max(lo, min(hi, n)))
 DEFAULT_WEB_PASSWORD = "tg@monitor2026"
 DEFAULT_NO_REPLY_MINUTES = "30"
 DEFAULT_PATROL_DAYS = "7"
@@ -1845,7 +1855,8 @@ def _save_settings(is_first):
         "SKIP_NO_REPLY_PURE_EMOJI": "true" if form.get("skip_no_reply_pure_emoji") in ("true", "on", "1") else "false",
         # v3.3.2: 对话告一段落跳过
         "CLOSE_PHRASE_TEXTS": ",".join(dict.fromkeys(s.strip() for s in form.get("close_phrase_texts", "").replace("\n", ",").split(",") if s.strip())),
-        "CLOSE_PHRASE_LOOKBACK": (form.get("close_phrase_lookback", "3") or "3").strip(),
+        # v3.3.2 Codex P1 fix: int + 范围校验 (1-50),非法值回退默认 3,防 .env 写脏导致下次 load 炸
+        "CLOSE_PHRASE_LOOKBACK": _safe_int_range(form.get("close_phrase_lookback", "3"), default=3, lo=1, hi=50),
         "API_ID": form.get("api_id", DEFAULT_API_ID),
         "API_HASH": form.get("api_hash", DEFAULT_API_HASH),
         "SETUP_COMPLETE": "true",
