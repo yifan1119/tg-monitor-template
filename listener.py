@@ -70,6 +70,16 @@ class Listener:
             except Exception as e:
                 print(f"  ⚠️ [{_phone}] MessageDeleted handler 异常: {e}")
 
+        # v3.3.7: Reactions 当回复 — 外事号对客户消息点 ❤️/👍 等任意表情 = 已回复,
+        # 不再触发未回复预警 + 不升级 stage2 @ 老板
+        from telethon.tl.types import UpdateMessageReactions
+        @client.on(events.Raw(types=UpdateMessageReactions))
+        async def on_reaction_event(update, _aid=account_id, _self_tg_id=me.id, _phone=phone):
+            try:
+                await self._handle_reaction(update, _aid, _self_tg_id, _phone)
+            except Exception as e:
+                print(f"  ⚠️ [{_phone}] Reaction handler 异常: {e}")
+
         self.clients[phone] = client
         return account
 
@@ -143,6 +153,61 @@ class Listener:
             print(f"  🗑️ [{phone}] 实时侦测删除: {(row['text'] or '')[:30]}")
             if self.on_deleted:
                 await self.on_deleted(account_id, peer, dict(row))
+
+    async def _handle_reaction(self, update, account_id, self_tg_id, phone):
+        """v3.3.7: 处理 UpdateMessageReactions — 外事号对客户消息点表情 = 已回复。
+
+        Telethon Raw update payload:
+          UpdateMessageReactions(peer=PeerUser(user_id=<对方>), msg_id=<那条 msg>,
+                                  reactions=MessageReactions(...))
+
+        判断流程:
+        1. peer 必须是 PeerUser(私聊),不接群/频道
+        2. msg_id 在 DB 查到 → 必须是 direction='B'(客户发的消息,我们对客户消息点 reaction
+           才算回复;对自己发的消息点 reaction 不算)
+        3. reactions.recent_reactions 里要有 peer.user_id == self_tg_id(我们自己加的)
+        4. 命中 → 调 db.mark_stage1_handled_by_reply 抑制 stage1/stage2 升级
+        """
+        from telethon.tl.types import PeerUser, MessagePeerReaction
+        peer = getattr(update, "peer", None)
+        if not isinstance(peer, PeerUser):
+            return   # 非私聊忽略
+        peer_user_id = peer.user_id
+        msg_id = getattr(update, "msg_id", None)
+        reactions = getattr(update, "reactions", None)
+        if not msg_id or not reactions:
+            return
+
+        # 我们自己有没有 reaction?
+        recent = getattr(reactions, "recent_reactions", None) or []
+        self_added = False
+        for rr in recent:
+            rr_peer = getattr(rr, "peer_id", None) or getattr(rr, "peer", None)
+            rr_uid = getattr(rr_peer, "user_id", None) if rr_peer else None
+            if rr_uid == self_tg_id:
+                self_added = True
+                break
+        if not self_added:
+            return   # 是客户对我们消息点的,不算
+
+        # DB 查这条消息方向
+        msg_row = db.get_message(msg_id, account_id)
+        if not msg_row:
+            return
+        if msg_row["direction"] != "B":
+            return   # 我们点自己消息的 reaction 不算回复
+
+        # 找 peer 实体
+        peer_row = db.get_peer(peer_user_id, account_id)
+        if not peer_row:
+            return
+
+        # 标记 stage1 已处理(等同于「发了 outbound 消息」语义)
+        from database import now_bj
+        n = db.mark_stage1_handled_by_reply(peer_row["id"], now_bj())
+        if n > 0:
+            print(f"  ❤️ [{phone}] reaction 当回复:peer={peer_row['name'] or peer_row['username']}"
+                  f" msg_id={msg_id} 抑制 {n} 条 stage1")
 
     async def _handle_message(self, event, account_id, phone, direction):
         # v2.6.8: 进消息前先 reload .env,让 KEYWORDS / NO_REPLY_MINUTES 等设置改完
