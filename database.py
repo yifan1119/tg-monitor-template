@@ -150,6 +150,11 @@ def _run_migrations(conn):
         conn.execute("PRAGMA user_version=8")
         conn.commit()
 
+    if version < 9:
+        _migrate_to_9(conn)
+        conn.execute("PRAGMA user_version=9")
+        conn.commit()
+
 
 def _migrate_to_1(conn):
     """v2.10.23 → user_version=1:
@@ -285,6 +290,37 @@ def _migrate_to_8(conn):
     CREATE INDEX IF NOT EXISTS idx_audit_event_type  ON audit_logs(event_type);
     CREATE INDEX IF NOT EXISTS idx_audit_target      ON audit_logs(target_type, target_id);
     """)
+
+
+def _migrate_to_9(conn):
+    """v3.3.0 → user_version=9(中央台「新增活跃对话」榜单):
+    - peers 加 first_seen_at TEXT DEFAULT NULL
+        含义:这个广告主第一次被该外事号 ping 到的时间戳(ISO 北京时间)
+        用于商务活跃榜「新增活跃对话」列 — 统计某操作员 + 某外事号在区间内
+        第一次出现的广告主数(衡量拓客量,跟「总活跃广告主×天」拉开)
+    - messages 加 (peer_id, timestamp) 复合索引 — 让 backfill MIN(timestamp)
+      走 index-only scan,大表 (~50 万行 × 10K peer) 启动从 30s 缩到 < 5s
+    - 历史 peers 一次性 backfill:MIN(messages.timestamp) WHERE peer_id=peers.id
+      (没消息的 peer 保持 NULL,聚合时跳过)
+    - 新 peer 在 upsert_peer 写入时自动填 NOW(实时 listener 路径正确;
+      pull_history 路径写完单 peer 历史后调 sync_peer_first_seen_at_from_messages
+      校正成 MIN,见 ADR-0058 P0 fix)
+    全部 _safe_add_column 幂等 + CREATE INDEX IF NOT EXISTS 幂等 + UPDATE 只补
+    NULL 行幂等(_compat_repair 后重跑不重复 backfill)。
+    """
+    _safe_add_column(conn, "peers", "first_seen_at", "TEXT DEFAULT NULL")
+    # 复合索引先建,backfill 才能走 index-only
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_peer_ts ON messages(peer_id, timestamp)")
+    # 一次性 backfill:用 messages 表 MIN(timestamp) 推回 peer 第一次出现时间
+    # 仅补 first_seen_at IS NULL 的行,跑过的不会重复(幂等)
+    conn.execute("""
+        UPDATE peers
+        SET first_seen_at = (
+            SELECT MIN(timestamp) FROM messages WHERE messages.peer_id = peers.id
+        )
+        WHERE first_seen_at IS NULL
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_peers_first_seen_at ON peers(first_seen_at)")
 
 
 def _is_feature_v2_stage_db(conn):
@@ -433,12 +469,14 @@ def get_all_accounts():
 
 def upsert_peer(tg_id, account_id, name="", username=""):
     conn = get_conn()
+    # v3.3.0: 新 peer 写入 first_seen_at(BJ ISO);老 peer ON CONFLICT 不动 first_seen_at
+    now_bj = datetime.now(TZ_BJ).strftime("%Y-%m-%d %H:%M:%S")
     conn.execute("""
-        INSERT INTO peers (tg_id, account_id, name, username)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO peers (tg_id, account_id, name, username, first_seen_at)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(tg_id, account_id) DO UPDATE SET
             name=excluded.name, username=excluded.username
-    """, (tg_id, account_id, name, username))
+    """, (tg_id, account_id, name, username, now_bj))
     conn.commit()
     return conn.execute(
         "SELECT * FROM peers WHERE tg_id=? AND account_id=?", (tg_id, account_id)
@@ -469,6 +507,25 @@ def get_next_col_group(account_id):
         (account_id,)
     ).fetchone()
     return row["next_col"]
+
+
+def sync_peer_first_seen_at_from_messages(peer_id):
+    """v3.3.0: 校正 peer.first_seen_at = MIN(messages.timestamp) — pull_history
+    完成单 peer 全量历史拉取后调用。
+    修 ADR-0058 P0:upsert_peer 在 pull_history 路径写 NOW(实时 listener 路径正确),
+    但实际消息时间是 cutoff 区间内的历史时间,不纠正会让「新增活跃对话」升级首日虚高。
+    若该 peer 在 messages 中没记录(纯 dialog 没消息) → COALESCE 保持原值,不破坏。
+    """
+    conn = get_conn()
+    conn.execute("""
+        UPDATE peers
+        SET first_seen_at = COALESCE(
+            (SELECT MIN(timestamp) FROM messages WHERE peer_id = ?),
+            first_seen_at
+        )
+        WHERE id = ?
+    """, (peer_id, peer_id))
+    conn.commit()
 
 
 # ===== 消息 =====

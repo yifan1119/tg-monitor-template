@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.2.1(2026-05-19)
+## 📌 当前版本:v3.3.0(2026-05-19)
 
-🎯 **v3.2.1:web 后台「编辑账号」modal 修「公司+中心」下拉加载/保存格式跟 v3.1.7 后端对齐** — 客户反馈刚填好归属保存后过一会儿 modal 又显示「选公司/选中心」默认空,**根因 modal JS bug**:加载逻辑用老「公司-中心」格式 `endsWith` 匹配,但 v3.1.7 后 DB 用「中心/公司」格式 → match 不到 → 下拉显空 → 客户保存就写空清掉 DB。`templates/index.html` 改:① 加载兼容新「中心/公司」(startsWith)+ 老「公司-中心」(endsWith)两种格式 ② 保存改用「中心/公司」标准(中心在前,`/` 分隔)③ 提示文案改「中心/公司」。详见 [ADR-0057](docs/adr/0057-v3.2.1-modal-company-format-fix.md)。
+🎯 **v3.3.0:peers 加 first_seen_at 字段 + 中央台商务活跃榜新增「新增活跃对话」列** — 客户反馈商务活跃榜只显示「总活跃广告主×天」看不出拓客效率,需要区分「日常维护」vs「拉到新客」。`database.py` 加 _migrate_to_9(peers.first_seen_at + 一次性 backfill MIN(messages.timestamp) + 索引),upsert_peer 新 peer 写入 NOW。`dashboard_api.operator_active` 加第二段 SQL 按 (operator, day) GROUP BY first_seen_at,merge 返回 dict 加 new_peers 字段。配套中央台 v0.42 表格新增列。**升级时 200 账号 + 50 万 messages dept 约 5-15 秒一次性回填**。详见 [ADR-0058](docs/adr/0058-v3.3.0-new-peers-tracking.md)。
+
+<details><summary>v3.2.1(2026-05-19) — web 后台「编辑账号」modal 修「公司+中心」下拉格式</summary>
+
+v3.2.1 修 modal JS bug — 加载用老「公司-中心」endsWith 匹配,但 v3.1.7 后 DB 用「中心/公司」格式 → match 不到 → 下拉显空 → 客户保存清掉 DB。`templates/index.html` 加载兼容两种格式,保存统一新「中心/公司」。详见 [ADR-0057](docs/adr/0057-v3.2.1-modal-company-format-fix.md)。
+
+</details>
 
 <details><summary>v3.2.0(2026-05-19) — 预警标题用 account.company 跟正文一致(跨公司账号修正)</summary>
 

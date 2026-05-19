@@ -1306,8 +1306,11 @@ def operator_active(from_date: str, to_date: str) -> list:
     定义:某个商务负责的所有外事号(accounts.operator),当天跟多少个不同广告主
     (peer_id)有过任意方向消息(收 OR 发都算)。
 
+    v3.3.0: 加 new_peers — 该商务名下外事号当天第一次出现的广告主数
+            (peers.first_seen_at 在该 day),衡量拓客量。
+
     返回 list of dict:
-      [{operator, day, active_peers, account_count}, ...]
+      [{operator, day, active_peers, new_peers, account_count}, ...]
     其中 account_count 是该 operator 名下外事号数(给中央台算「平均/号」用)
     """
     from datetime import datetime, timedelta
@@ -1336,17 +1339,40 @@ def operator_active(from_date: str, to_date: str) -> list:
         """,
         (left_inc, right_open),
     ).fetchall()
+    # v3.3.0: 算同区间新增广告主(first_seen_at 落入)— key=(operator, day)
+    new_rows = conn.execute(
+        """
+        SELECT a.operator AS operator,
+               substr(p.first_seen_at, 1, 10) AS day,
+               COUNT(*) AS new_peers
+        FROM peers p
+        JOIN accounts a ON p.account_id = a.id
+        WHERE p.first_seen_at >= ? AND p.first_seen_at < ?
+          AND a.operator IS NOT NULL AND a.operator != ''
+        GROUP BY a.operator, day
+        """,
+        (left_inc, right_open),
+    ).fetchall()
+    new_map = {(r["operator"], r["day"]): r["new_peers"] for r in new_rows}
     # 算每个 operator 名下外事号数(给中央台算"平均/号"用)
     op_count = {r["operator"]: r["n"] for r in conn.execute(
         "SELECT operator, COUNT(*) AS n FROM accounts "
         "WHERE operator IS NOT NULL AND operator != '' GROUP BY operator"
     ).fetchall()}
-    return [{
-        "operator": r["operator"],
-        "day": r["day"],
-        "active_peers": r["active_peers"],
-        "account_count": op_count.get(r["operator"], 0),
-    } for r in rows]
+    # v3.3.0: union (operator, day) keyset 防漏 — 极少数情况某 (op, day) 有
+    # new_peer (peer 第一次出现) 但 messages 不在区间(time skew / 客户删消息),
+    # 单纯按 rows 迭代会丢这行。改用 active_map + 全 keyset 合并。
+    active_map = {(r["operator"], r["day"]): r["active_peers"] for r in rows}
+    all_keys = set(active_map.keys()) | set(new_map.keys())
+    items = [{
+        "operator": op,
+        "day": day,
+        "active_peers": active_map.get((op, day), 0),
+        "new_peers": new_map.get((op, day), 0),
+        "account_count": op_count.get(op, 0),
+    } for (op, day) in all_keys]
+    items.sort(key=lambda x: (x["day"], x["active_peers"]), reverse=True)
+    return items
 
 
 def violations(from_date=None, to_date=None, alert_type=None):

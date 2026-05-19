@@ -253,9 +253,17 @@ vim /root/tg-monitor-demo/Caddyfile    # :wq 会写临时文件再重命名
 **真实客户 / 部门列表 / 联系人 / VPS 地址** 放在 `.claude/private-notes.md`
 (gitignored,不进 GitHub)。需要时本地查。
 
-## 当前状态(2026-05-14)
+## 当前状态(2026-05-19)
 
-- **WIP v3.1.3.5** — 2026-05-14 全网巡检捞 2 个 P0:① `sheets._sync_one_account_headers` Sheet→DB 单向覆盖,Sheet 空时清掉客户在 web 后台填的 operator/inspector_tg_id(全网 18 dept 中招,跟 v3.0.15 ADR-0034 引入的 DB→Sheet 双向打架);② `main.py pull_history` 阻塞 TaskScheduler 启动,telegram flood wait 卡几小时(全网 42/62 dept 容器 Up healthy 但 patrol_loop 没起,4 大业务功能停摆)。修法:① `sheets.py` 加「Sheet 空 + DB 有值跳过」保护 8 行;② `main.py pull_history` 改 `asyncio.create_task` 异步 + `add_done_callback` 防异常吞;③ 加 `tasks._startup_health_loop` 5 分钟自检告警(patrol_loop 没起 → 推预警群)。ADR-0047。
+- **WIP v3.3.0** — peers 加 first_seen_at(广告主首次出现时间)+ 中央台商务活跃榜「新增活跃对话」列。`database.py` _migrate_to_9 + 一次性 backfill MIN(messages.timestamp) + idx;`upsert_peer` INSERT 写 NOW;`dashboard_api.operator_active` 加第二段 SQL 按 (operator, day) 聚合 first_seen_at → merge 输出 new_peers 字段。配套中央台 v0.42 UI 表格 7→8 列。ADR-0058。
+- **v3.2.1** ✅ 已发布 — modal JS load/save 跟 v3.1.7 后端「中心/公司」格式对齐,根治客户保存归属丢失 bug。ADR-0057。
+- v3.2.0 ✅ — 预警标题用 account.company(跨公司账号修正)。ADR-0056。
+- v3.1.9 ✅ — dept 加 BOT_POLLING_DISABLED flag,共用 BOT_TOKEN 客户中央台接管 callback。ADR-0055。
+- v3.1.8 ✅ — 档案群按 account.company 统一中央台路由。ADR-0054。
+
+## 历史状态(2026-05-14)
+
+- **v3.1.3.5** — 2026-05-14 全网巡检捞 2 个 P0:① `sheets._sync_one_account_headers` Sheet→DB 单向覆盖,Sheet 空时清掉客户在 web 后台填的 operator/inspector_tg_id(全网 18 dept 中招,跟 v3.0.15 ADR-0034 引入的 DB→Sheet 双向打架);② `main.py pull_history` 阻塞 TaskScheduler 启动,telegram flood wait 卡几小时(全网 42/62 dept 容器 Up healthy 但 patrol_loop 没起,4 大业务功能停摆)。修法:① `sheets.py` 加「Sheet 空 + DB 有值跳过」保护 8 行;② `main.py pull_history` 改 `asyncio.create_task` 异步 + `add_done_callback` 防异常吞;③ 加 `tasks._startup_health_loop` 5 分钟自检告警(patrol_loop 没起 → 推预警群)。ADR-0047。
 - **v3.1.3.4** ✅ 已发布 — 修两件事:① bash-cache bug — update.sh 顶部加 self-reload bootstrapper;② 升级通知拔掉(`update_checker` 默认 OFF)。同时 backport v3.1.3.3 的 5.5b 显式 reload Caddy。ADR-0046。
 - v3.1.3.3 已 revert(PR #37):dev 实测 5.5b reload 段静默不执行,Caddy 用字面 `__COMPANY_NAME__` 占位符当 hostname,web /login 502。bash 启动 update.sh 时 cache 整个文件,git reset 拉新版后 bash 仍按内存里老版跑,新加段不执行。修法见 v3.1.3.4 self-reload bootstrapper。
 - 配套中央台 v0.22(fleet fanout 按 IP 串行)已开 PR #19 待合,跟 v3.1.3.4 同时 ship。

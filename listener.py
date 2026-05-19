@@ -432,6 +432,11 @@ class Listener:
                                     await self.on_keyword(account_id, peer, kw, text)
                                     break
 
+            # v3.3.0: pull_history 写完该 peer 所有历史消息后,纠正 first_seen_at
+            # = MIN(messages.timestamp) — 否则 upsert_peer 写的 NOW 会让升级首日
+            # 大批历史 peer 被算成「当日新增」,商务活跃榜虚高(ADR-0058 P0)
+            db.sync_peer_first_seen_at_from_messages(peer["id"])
+
         print(f"  📜 [{phone}] 历史拉取完成，共 {count} 条新消息")
         return count
 

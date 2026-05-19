@@ -3300,7 +3300,8 @@ def api_v1_operator_active():
       to   (YYYY-MM-DD, 必填)  含
 
     返回:
-      {ok, items: [{operator, day, active_peers, account_count}, ...]}
+      {ok, items: [{operator, day, active_peers, new_peers, account_count}, ...]}
+      (v3.3.0+:加 new_peers — 该 operator 名下外事号当天首次出现的广告主数)
 
     错误码:401 / 400 / 500
     """
