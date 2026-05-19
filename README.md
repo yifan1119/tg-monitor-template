@@ -2,9 +2,19 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.3.3(2026-05-19)
+## 📌 当前版本:v3.3.8(2026-05-19)
 
-🎯 **v3.3.3:同秒回复误推「未回复预警」+ stage2 兜底失效双重修** — 客户线上事故,SSH 排查 DB 确认外事号同秒回了客户问题,30 分钟后系统仍推预警并升级 @ 负责人。双根因:① `database.get_unanswered_candidates` SQL `ORDER BY timestamp DESC LIMIT 1` 同秒无 tiebreaker → 偶尔挑 incoming 触发 stage1;② `tasks._no_reply_stage2_loop` 兜底用 `alert.created_at` 作起点,outbound 早于 alert → `timestamp > since_ts` 永远 false → 升级 stage2。修法:① SQL 同秒加 `msg_id DESC` tiebreaker(TG 服务器消息号严格递增);② 新增 `stage1_resolved_by_reply(peer, alert_msg_id)` 反查 incoming.timestamp 作起点 + `>=` 含同秒。0 schema 变 / 0 重登 / 0 配置变。详见 [ADR-0059](docs/adr/0059-v3.3.3-no-reply-same-second-race-fix.md)。
+🎯 **v3.3.8:stage2 升级 + 删除预警按钮恢复** — 用户反馈 stage2(40 分钟未回复升级 @ 负责人)+ 删除消息预警在群里只有纯文本没按钮,监察员没法一键「登记违规 / 取消」。全网 fleet inspect 实测 **44/47 dept 缺 `VPS_PUBLIC_IP`** → `_callback_meta_for` 返 None → 跳过中央台路由 fallback 本地 → v3.1.9 的 `BOT_POLLING_DISABLED` 短路把按钮也删了 → 用户看到纯文本。修法:`bot.py` `_make_keyboard` + `_make_keyboard_stage2` 删 v3.1.9 短路,这两个 helper 影响的路径(stage2 升级、删除预警、未配 business_tg_id 的老单段预警)**永远附按钮**。⚠ 关键词预警 + stage1(30 分钟)本来设计就无按钮,不在本版范围。click 闭环要中央台路由配齐(`VPS_PUBLIC_IP` + 白名单覆盖,单独追);本版只保证按钮可见。0 schema / 0 重登 / 0 配置变。详见 [ADR-0060](docs/adr/0060-v3.3.8-restore-alert-buttons.md)。
+
+<details><summary>v3.3.3 ~ v3.3.7(2026-05-19) — 同秒回复 race / 商务活跃榜术语 / SKIP_NO_REPLY 扩词 / operator_active breakdown / Reactions 当已回复</summary>
+
+- **v3.3.7** Telegram Reactions(❤️ / 👍 等)当作已回复 — 商务点表情抑制 stage1 预警,不再误推 + 升级 @ 负责人
+- **v3.3.6** `operator_active` 加 per-operator alerts breakdown(给中央台商务活跃榜用)
+- **v3.3.5** 扩 SKIP_NO_REPLY 默认词 + GIF/动图也过滤未回复预警
+- **v3.3.4** 商务活跃榜业务术语重定义
+- **v3.3.3** 同秒回复误推预警 + stage2 兜底失效双重修([ADR-0059](docs/adr/0059-v3.3.3-no-reply-same-second-race-fix.md))
+
+</details>
 
 <details><summary>v3.3.0 / v3.3.1 / v3.3.2(2026-05-19) — peers 加 first_seen_at + SheetsWriter 降级模式</summary>
 
