@@ -1373,6 +1373,27 @@ def operator_active(from_date: str, to_date: str) -> list:
         (left_inc, right_open),
     ).fetchall()
     new_map = {(r["operator"], r["day"]): r["new_peers"] for r in new_rows}
+    # v3.3.6: per-operator alerts breakdown(未回复 / 删除 / 关键词 / 登记违规)
+    alert_rows = conn.execute(
+        """
+        SELECT a.operator AS operator,
+               substr(al.created_at, 1, 10) AS day,
+               SUM(CASE WHEN al.type='no_reply' AND al.status NOT IN ('handled_by_reply','approved_strict','rejected','silenced','cancelled') THEN 1 ELSE 0 END) AS no_reply,
+               SUM(CASE WHEN al.type='deleted'  AND al.status NOT IN ('approved_strict','rejected','silenced','cancelled') THEN 1 ELSE 0 END) AS deleted,
+               SUM(CASE WHEN al.type='keyword'  AND al.status NOT IN ('approved_strict','rejected','silenced','cancelled') THEN 1 ELSE 0 END) AS keyword,
+               SUM(CASE WHEN al.status='violation_logged' THEN 1 ELSE 0 END) AS violations
+        FROM alerts al
+        JOIN accounts a ON al.account_id = a.id
+        WHERE al.created_at >= ? AND al.created_at < ?
+          AND a.operator IS NOT NULL AND a.operator != ''
+        GROUP BY a.operator, day
+        """,
+        (left_inc, right_open),
+    ).fetchall()
+    alert_map = {(r["operator"], r["day"]): {
+        "no_reply": r["no_reply"], "deleted": r["deleted"],
+        "keyword": r["keyword"], "violations": r["violations"],
+    } for r in alert_rows}
     # 算每个 operator 名下外事号数(给中央台算"平均/号"用)
     op_count = {r["operator"]: r["n"] for r in conn.execute(
         "SELECT operator, COUNT(*) AS n FROM accounts "
@@ -1382,14 +1403,21 @@ def operator_active(from_date: str, to_date: str) -> list:
     # new_peer (peer 第一次出现) 但 messages 不在区间(time skew / 客户删消息),
     # 单纯按 rows 迭代会丢这行。改用 active_map + 全 keyset 合并。
     active_map = {(r["operator"], r["day"]): r["active_peers"] for r in rows}
-    all_keys = set(active_map.keys()) | set(new_map.keys())
-    items = [{
-        "operator": op,
-        "day": day,
-        "active_peers": active_map.get((op, day), 0),
-        "new_peers": new_map.get((op, day), 0),
-        "account_count": op_count.get(op, 0),
-    } for (op, day) in all_keys]
+    all_keys = set(active_map.keys()) | set(new_map.keys()) | set(alert_map.keys())
+    items = []
+    for (op, day) in all_keys:
+        a = alert_map.get((op, day)) or {}
+        items.append({
+            "operator": op,
+            "day": day,
+            "active_peers": active_map.get((op, day), 0),
+            "new_peers": new_map.get((op, day), 0),
+            "account_count": op_count.get(op, 0),
+            "no_reply": a.get("no_reply", 0),    # v3.3.6
+            "deleted": a.get("deleted", 0),
+            "keyword": a.get("keyword", 0),
+            "violations": a.get("violations", 0),
+        })
     items.sort(key=lambda x: (x["day"], x["active_peers"]), reverse=True)
     return items
 
