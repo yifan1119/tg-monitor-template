@@ -557,10 +557,11 @@ class TaskScheduler:
                     for row in candidates:
                         # v3.0.10: 客户最新一条是「无意义问候 / 表情包」→ 略过告警
                         # 文本规则:你好 / 在? / 1 / ?? / 纯 emoji + v3.3.2 扩词单 + 子串匹配
-                        # 媒体规则:sticker(表情包)无业务含义直接略,photo/video/file 仍触发(可能业务图)
+                        # 媒体规则:sticker / gif 无业务含义直接略,photo/voice/video/file 仍触发(可能业务)
                         last_text = row["last_text"] or ""
                         last_media = (row["last_media_type"] if "last_media_type" in row.keys() else "") or ""
-                        if last_media == "sticker":
+                        # v3.3.2: 加 gif 跳过 — 99% 是「滑稽脸 / 拜拜挥手」表情包性质,跟 sticker 同列
+                        if last_media in ("sticker", "gif"):
                             continue
                         if config.is_trivial_no_reply(last_text):
                             continue
