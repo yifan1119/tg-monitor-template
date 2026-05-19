@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.3.9(2026-05-19)
+## 📌 当前版本:v3.3.10(2026-05-19)
+
+🎯 **v3.3.10:setup 未完成的 dept 也能被中央台远程管** — 客户某 dept(数字化效率部)agent endpoint 永远 502,排查发现 `SETUP_COMPLETE=false` 时 `web.py:_redirect_to_setup_if_needed` before_request 把所有路径重定向到 /setup,**包括 `/api/v1/admin/cmd`**(中央台 agent 通道)、`/api/v1/callback`(按钮 click bridge)、`/api/v1/metrics`(数据采集)。导致这些 dept 永远没法被 fleet fanout 升级、永远收不到 callback、永远不在 collector 视野。修法:before_request 加 `path.startswith("/api/v1/")` 白名单,这些 endpoint 都自带 Bearer + HMAC 强鉴权(4 层),不需要 setup gate 二次保护。`@login_required` 的子端点(/api/v1/metrics/access_log)仍保留 UI 登录强制。0 schema / 0 重登 / 0 业务行为变。
+
+<details><summary>v3.3.9 — agent set_env 白名单扩 3 个网络配置 key</summary>
 
 🎯 **v3.3.9:agent set_env 白名单扩 3 个网络配置 key** — 配套 v3.3.8 的 click 闭环工作。中央台 fleet 现在能批量补 `DEPT_PUBLIC_URL` / `PUBLIC_HOSTNAME` / `VPS_PUBLIC_IP` 给所有 dept,让 `_callback_meta_for()` 算出合法 cb_meta → 走中央台 bridge → 按钮 callback 能闭环。改动:`agent.py:action_set_env` ALLOWED_KEYS 加 3 个 key。0 schema / 0 重登 / 0 业务行为变。
+
+</details>
 
 <details><summary>v3.3.8 — stage2 升级 + 删除预警按钮恢复</summary>
 

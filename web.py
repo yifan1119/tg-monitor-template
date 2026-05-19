@@ -930,6 +930,16 @@ def _redirect_to_setup_if_needed():
     # /api/oauth/callback 更是必须放行,否则 Google 回调回来直接被重定向丢 code
     if path.startswith("/api/oauth/"):
         return None
+    # v3.3.10:中央台运维 / 数据 / callback bridge endpoints 永远放行,
+    # 不被 setup gate 拦。这些 endpoint 自带强鉴权:
+    # - /api/v1/admin/cmd: Bearer + HMAC + 5min ts + nonce + rate limit (agent.py 4 层)
+    # - /api/v1/callback: Bearer METRICS_TOKEN(中央台 callback bridge POST 回 dept)
+    # - /api/v1/metrics + /api/v1/violations|alerts|peers|messages: Bearer METRICS_TOKEN
+    # 没有 setup gate 二次保护的必要,且这些 endpoint 是 setup 未完成时也必须工作的
+    # 远程运维通道 — 否则数字化效率部那种部分配置完成的 dept 永远没法被中央台 fanout 升级。
+    # @login_required 的 endpoint(/api/v1/metrics/access_log)仍保留 UI 登录强制。
+    if path.startswith("/api/v1/"):
+        return None
     # /api/sheets/* 和 /api/drive/* 都是 setup 流程的一环(自动建表格 / 自动建文件夹)
     # setup 未完成时放行,完成后需登录
     if path.startswith("/api/sheets/") or path.startswith("/api/drive/") or path.startswith("/api/setup/"):
