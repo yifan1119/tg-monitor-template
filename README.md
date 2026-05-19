@@ -2,9 +2,15 @@
 
 **Telegram 私聊监控系统**,专为业务审查/合规场景设计:监听外事号私聊、关键词预警、未回复提醒、删除消息溯源,全量落盘到 Google Sheets。一条命令装完 Docker + HTTPS + 后台,非技术同事也能部。
 
-## 📌 当前版本:v3.3.0(2026-05-19)
+## 📌 当前版本:v3.3.1(2026-05-19)
 
-🎯 **v3.3.0:peers 加 first_seen_at 字段 + 中央台商务活跃榜新增「新增活跃对话」列** — 客户反馈商务活跃榜只显示「总活跃广告主×天」看不出拓客效率,需要区分「日常维护」vs「拉到新客」。`database.py` 加 _migrate_to_9(peers.first_seen_at + 一次性 backfill MIN(messages.timestamp) + 索引),upsert_peer 新 peer 写入 NOW。`dashboard_api.operator_active` 加第二段 SQL 按 (operator, day) GROUP BY first_seen_at,merge 返回 dict 加 new_peers 字段。配套中央台 v0.42 表格新增列。**升级时 200 账号 + 50 万 messages dept 约 5-15 秒一次性回填**。详见 [ADR-0058](docs/adr/0058-v3.3.0-new-peers-tracking.md)。
+🎯 **v3.3.1:修客户同秒回复仍被误推「未回复预警」+ 升级 @ 负责人双重 bug** — 客户线上事故:广告主 14:39 发问题,外事号同秒回了(TG Business 自动回复),30 分钟后系统仍推「未回复预警」+ 升级 stage2 @ 负责人。SSH dump 实测两条消息都进 DB、都没删、timestamp 完全一致。根因双重:① `get_unanswered_candidates` SQL `ORDER BY timestamp DESC LIMIT 1` 同秒无 tiebreaker,SQLite 实测拿到 incoming → 触发 stage1;② `_no_reply_stage2_loop` 兜底 `has_outbound_since(peer, alert.created_at)` 用 alert.created_at 作时间起点,outbound 早于 alert(同秒 A+B race)→ 兜底失效 → 升 stage2。修法:① SQL 加 `ORDER BY timestamp DESC, msg_id DESC` tiebreaker(按 TG 服务器消息号,跟 TG 客户端对话顺序一致,不偏置 direction);② 新增 `stage1_resolved_by_reply(peer_id, alert_msg_id)` 取代 `has_outbound_since` — 用 alert.msg_id 反查 incoming timestamp + `>=` 同秒含。**0 schema 变 / 0 重登**。详见 [ADR-0059](docs/adr/0059-v3.3.1-no-reply-same-second-race-fix.md)。
+
+<details><summary>v3.3.0(2026-05-19) — peers 加 first_seen_at + 中央台商务活跃榜新增「新增活跃对话」列</summary>
+
+v3.3.0 客户反馈商务活跃榜只显示「总活跃广告主×天」看不出拓客效率,需要区分「日常维护」vs「拉到新客」。`database.py` 加 _migrate_to_9(peers.first_seen_at + 一次性 backfill MIN(messages.timestamp) + 索引),upsert_peer 新 peer 写入 NOW。`dashboard_api.operator_active` 加第二段 SQL 按 (operator, day) GROUP BY first_seen_at,merge 返回 dict 加 new_peers 字段。配套中央台 v0.42 表格新增列。**升级时 200 账号 + 50 万 messages dept 约 5-15 秒一次性回填**。详见 [ADR-0058](docs/adr/0058-v3.3.0-new-peers-tracking.md)。
+
+</details>
 
 <details><summary>v3.2.1(2026-05-19) — web 后台「编辑账号」modal 修「公司+中心」下拉格式</summary>
 

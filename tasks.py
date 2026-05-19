@@ -627,8 +627,14 @@ class TaskScheduler:
                 )
                 for row in rows:
                     try:
-                        # 兜底:事件驱动钩子没捕获到的 outbound,这里 poll 补一次
-                        if db.has_outbound_since(row["peer_id"], row["created_at"]):
+                        # 兜底:事件驱动钩子没捕获到的 outbound,这里 poll 补一次。
+                        # v3.3.1: 改用 stage1_resolved_by_reply(peer, alert.msg_id) 替代
+                        # has_outbound_since(peer, alert.created_at) — 原逻辑用 alert.created_at
+                        # 当时间起点,outbound 早于 alert(同秒 A+B race 误推 stage1)时永远 false,
+                        # 兜底失效升 stage2。新法从 alert.msg_id 反查 incoming timestamp,看那
+                        # 时刻之后(含同秒)有没有 A — 不依赖 alert.created_at,且精准只看本 alert
+                        # 对应那条 incoming 之后,不会被「老 alert 等待时来新 B」误判。ADR-0059。
+                        if db.stage1_resolved_by_reply(row["peer_id"], row["msg_id"]):
                             n = db.mark_stage1_handled_by_reply(row["peer_id"], row["created_at"])
                             if n > 0:
                                 logger.info("stage2 loop 兜底:peer_id=%s 已回复,抑制 %d 条 stage1",

@@ -304,7 +304,7 @@ def _migrate_to_9(conn):
       (没消息的 peer 保持 NULL,聚合时跳过)
     - 新 peer 在 upsert_peer 写入时自动填 NOW(实时 listener 路径正确;
       pull_history 路径写完单 peer 历史后调 sync_peer_first_seen_at_from_messages
-      校正成 MIN,见 ADR-0058 P0 fix)
+      校正成 MIN,见 ADR-0059 P0 fix)
     全部 _safe_add_column 幂等 + CREATE INDEX IF NOT EXISTS 幂等 + UPDATE 只补
     NULL 行幂等(_compat_repair 后重跑不重复 backfill)。
     """
@@ -512,7 +512,7 @@ def get_next_col_group(account_id):
 def sync_peer_first_seen_at_from_messages(peer_id):
     """v3.3.0: 校正 peer.first_seen_at = MIN(messages.timestamp) — pull_history
     完成单 peer 全量历史拉取后调用。
-    修 ADR-0058 P0:upsert_peer 在 pull_history 路径写 NOW(实时 listener 路径正确),
+    修 ADR-0059 P0:upsert_peer 在 pull_history 路径写 NOW(实时 listener 路径正确),
     但实际消息时间是 cutoff 区间内的历史时间,不纠正会让「新增活跃对话」升级首日虚高。
     若该 peer 在 messages 中没记录(纯 dialog 没消息) → COALESCE 保持原值,不破坏。
     """
@@ -726,14 +726,27 @@ def get_unanswered_peers(account_id, minutes=30):
 def get_unanswered_candidates(account_id):
     """找出 "最后一条是 B 发、且尚未推过 no_reply 预警" 的所有对话。
     不做时间过滤,由调用方按工作时段累计计算是否超时。
-    v3.0.10: 多 SELECT m.media_type — 调用方用来略过 sticker / 表情包 等无业务含义类型。"""
+    v3.0.10: 多 SELECT m.media_type — 调用方用来略过 sticker / 表情包 等无业务含义类型。
+
+    v3.3.1: subquery `ORDER BY timestamp DESC LIMIT 1` 加 tiebreaker — 客户跟商务
+    同一秒一来一回(timestamp 秒级精度撞了),原 SQL 同 timestamp 时 SQLite 不保证
+    选 A 或 B,实测会随机挑到 incoming 那条触发 stage1 误推预警。
+
+    修法:同 timestamp 时按 `msg_id DESC` 走 TG 服务器消息号(同对话内严格递增,
+    schema UNIQUE(msg_id, account_id))— 不偏置 direction、不依赖 listener 插入顺序、
+    跟 TG 客户端看到的对话顺序一致。
+
+    (设计选择:Codex round 1 建议过 `direction ASC` 让 A 优先,会偏置「同秒 A→B 我方
+    先回客户秒追」场景误判已回复。改 msg_id 拿对话真正的最后一条,语义最稳。)ADR-0059。
+    """
     return get_conn().execute("""
         SELECT p.*, m.text as last_text, m.timestamp as last_time, m.msg_id as last_msg_id,
                m.media_type as last_media_type
         FROM peers p
         JOIN messages m ON m.peer_id = p.id
         WHERE p.account_id = ?
-          AND m.id = (SELECT id FROM messages WHERE peer_id = p.id AND deleted=0 ORDER BY timestamp DESC LIMIT 1)
+          AND m.id = (SELECT id FROM messages WHERE peer_id = p.id AND deleted=0
+                      ORDER BY timestamp DESC, msg_id DESC LIMIT 1)
           AND m.direction = 'B'
           AND NOT EXISTS (
               SELECT 1 FROM alerts
@@ -1058,12 +1071,53 @@ def get_pending_stage1_alerts(after_minutes=10):
 
 def has_outbound_since(peer_id, since_ts):
     """v3.0.0:查 peer 在 since_ts 之后有没有商务 outbound(A 方向)消息。
-    事件驱动:listener 收到 outbound 直接 mark_stage1_handled,这个函数只做 stage2 loop 的 poll 兜底。"""
+    事件驱动:listener 收到 outbound 直接 mark_stage1_handled,这个函数只做 stage2 loop 的 poll 兜底。
+
+    ⚠ v3.3.1 DEPRECATED:tasks._no_reply_stage2_loop 原用本函数 + alert.created_at 作时间
+    起点,但 outbound 可能早于 alert(同秒 A+B + get_unanswered_candidates SQL race 误推
+    stage1),这时 timestamp > created_at 永远 false → 兜底失效 → 误升级 stage2。
+    新调用方一律改用 stage1_resolved_by_reply()。本函数保留向后兼容,无新 caller。
+    """
     row = get_conn().execute(
         "SELECT 1 FROM messages WHERE peer_id=? AND direction='A' AND timestamp > ? LIMIT 1",
         (peer_id, since_ts)
     ).fetchone()
     return row is not None
+
+
+def stage1_resolved_by_reply(peer_id, alert_msg_id):
+    """v3.3.1:stage1 alert 是否已被回复 — 精准版,取代 has_outbound_since 给 stage2 loop 兜底用。
+
+    定位 alert.msg_id 对应那条 incoming 的 timestamp,看那 timestamp 之后(**含同秒**)
+    peer 有没有 A 方向消息。返回 True 表示已回复,兜底应抑制 stage2 升级。
+
+    跟原 has_outbound_since 的两处关键差异:
+    1. 时间起点用 incoming.timestamp 不用 alert.created_at — 修客户线上事故 root cause:
+       同秒 A+B 触发误 stage1(get_unanswered_candidates SQL race),outbound 在 alert
+       创建前就有了,原 SQL `timestamp > alert.created_at` 永远 false 兜底失效。
+    2. 比较用 `>=` 不用 `>` — 同秒 A 算回复(对齐 get_unanswered_candidates 新 SQL
+       同秒 msg_id DESC 拿到 A 的语义)。
+
+    跟 Codex round 1 建议的 peer_last_direction_is_a 区别:本函数只看 alert 对应那条
+    incoming 之后有没有 A,不会被「老 alert 等待时又来新 B」误判已升级。
+
+    incoming 找不到(msg 被删或 schema 错位)返回 False — 安全 default 不抑制,
+    让 stage2 loop 走老路径 send_no_reply_alert_stage2 内部还会 re-check status='pending'。
+
+    ADR-0059 (v3.3.1)。
+    """
+    in_row = get_conn().execute(
+        "SELECT timestamp FROM messages WHERE peer_id=? AND msg_id=? LIMIT 1",
+        (peer_id, alert_msg_id)
+    ).fetchone()
+    if not in_row:
+        return False
+    out = get_conn().execute(
+        "SELECT 1 FROM messages WHERE peer_id=? AND direction='A' AND deleted=0 "
+        "AND timestamp >= ? LIMIT 1",
+        (peer_id, in_row["timestamp"])
+    ).fetchone()
+    return out is not None
 
 
 def mark_stage1_handled_by_reply(peer_id, since_ts):
